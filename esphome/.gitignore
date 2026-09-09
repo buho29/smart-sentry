@@ -4,11 +4,10 @@
 /.esphome/
 /secrets.yaml
 
-# Ignorar todos los YAML/headers menos huerta* y esp32-s3-cam
-/proxy.yaml
-/proxylora.yaml
-/s3proxy.yaml
-/s3proxy2.yaml
+# Ignorar todos los YAML de la raíz menos huerta* y esp32-s3-cam
+/*.yaml
+!/huerta*.yaml
+!/esp32-s3-cam.yaml
 
 # Código viejo / descartado
 old/

@@ -61,11 +61,7 @@ esphome logs huerta.yaml --device COM10    # logs por USB (puerto serie)
 | Fichero | Placa | Qué es |
 | --- | --- | --- |
 | `huerta.yaml` | ESP32-S3-DevKitC-1 + cámara + PIR | **Config principal.** Nodo exterior a baterías: deep sleep permanente, despierta por PIR. |
-| `esp32-s3-cam.yaml` | ESP32-S3-DevKitC-1 + cámara | Cámara-proxy siempre encendida, sirve stream/snapshot de forma continua para Frigate/YOLO. |
-| `huerta_light_sleep.yaml` | ESP32-S3 + cámara | Variante experimental "always-on + light sleep". **No llegó a funcionar** con cámara + servidor web; se conserva solo como referencia. |
-| `proxy.yaml` | ESP32 (`esp32dev`) | Bluetooth proxy / BLE tracker (ajustes tipo Bermuda). |
-| `proxylora.yaml` | Heltec WiFi LoRa 32 V2 | Bluetooth proxy sobre placa LoRa. |
-| `s3proxy.yaml`, `s3proxy2.yaml` | ESP32-S3-DevKitC-1 16 MB + PSRAM octal | Bluetooth proxy con arranque de escaneo BLE controlado por eventos de la API. |
+| `esp32-s3-cam.yaml` | ESP32-S3-DevKitC-1 + cámara | Cámara-proxy siempre encendida, sirve stream/snapshot de forma continua para Frigate/YOLO.
 
 > Solo `huerta*.yaml` y `esp32-s3-cam.yaml` se versionan. Los `proxy*` / `s3proxy*`
 > están en `.gitignore` y viven solo en local.
