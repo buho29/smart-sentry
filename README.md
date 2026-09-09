@@ -5,6 +5,15 @@ Vigilancia con visión artificial para un nodo de cámara a baterías: una placa
 hace la detección una sola vez y la reparte a Home Assistant, el navegador o
 VLC.
 
+![Ejemplo de inferencia YOLO sobre un frame del stream](detect/docs/photo_2026-09-02_22-18-581.jpg)
+
+Home assistant con los controles de la camara de esphome
+![Ejemplo de ha](detect/docs/ha.jpg)
+
+
+Swagger y stream 
+![Ejemplo de ha](detect/docs/docs.jpg)
+
 El repositorio tiene **dos mitades independientes** que se comunican por red:
 
 | Carpeta | Qué es | Lenguaje |
@@ -41,6 +50,62 @@ API nativa    :6053  ──estado on/off──►  EsphomeController → start/s
         └──────────  POST /cameras/huerta/esphome/awake  (al obtener IP)
 ```
 
+### Arranque rápido tras despertar (el webhook `esphome/awake`)
+
+La placa duerme casi todo el tiempo, así que cada vez que el PIR la despierta
+hay que reconectar la API nativa desde cero. Si se deja que `aioesphomeapi`
+lo resuelva "solo" (descubrimiento mDNS + su lógica de reconexión con backoff),
+pasan **6-60s** desde que la placa tiene IP hasta que el servicio está
+plenamente operativo y recibe el `estado`. En una ventana de vigilia de pocos
+segundos, eso es medio evento perdido.
+
+Para acelerarlo, la placa **avisa activamente** en cuanto tiene red:
+
+1. En `wifi.on_connect`, el ESP32 hace un `POST` a
+   `http://<host-del-servicio>:8080/cameras/huerta/esphome/awake` — antes
+   incluso de que el servicio se haya enterado de que la placa existe.
+2. Ese endpoint llama a `EsphomeController.notify_awake()`, que marca un
+   `_wake_event` de forma *thread-safe* (`call_soon_threadsafe`).
+3. El bucle de reconexión no hace polling: espera en paralelo a
+   `_try_connect_once()` **y** a `_wake_event`, y toma lo primero que termine.
+   El aviso salta la espera pasiva de seguridad (`safety_retry_sec`, 30 s).
+4. Si justo había un intento de conexión "en vuelo" contra la placa aún
+   dormida, `_wake_event` lo **cancela** en vez de esperar a que agote su
+   timeout (por eso cada intento está acotado a `connect_attempt_timeout_sec`,
+   1 s, en lugar de los ~10 s por defecto de la librería) y reintenta ya.
+
+Resultado: de "placa con IP" a "API nativa suscrita y `estado` fluyendo" en
+**4-6s**, sin depender de mDNS ni del backoff interno de la librería.
+
+```
+[21:24:02.960][D][main:538]: WiFi connected
+[21:24:02.989][D][http_request.idf:044]: Received response header, name: content-length, value: 11
+[21:24:03.058][D][api.connection:2461]: aioesphomeapi (192.168.1.171): connected
+[21:24:52.977][D][api.connection:2461]: Home Assistant 2026.6.4 (192.168.1.42): connected
+```
+
+---
+
+## Estado y hoja de ruta
+
+**Ahora mismo** el servicio solo *ve*: corre YOLO sobre cada frame y dibuja las
+cajas de detección (con clase, confianza y `track_id`) sobre el stream que
+sirve a los clientes. No actúa sobre el mundo físico.
+
+**Siguiente paso — mover servos.** La API nativa de ESPHome no es solo para
+leer estado: `EsphomeController.move_servo(pan, tilt)` ya llama al servicio
+`set_servo_position` del YAML si la placa lo expone. La idea es cerrar el bucle:
+el hilo de proceso calcula el centro del objetivo detectado y, si todo va bien,
+manda al ESP32 la corrección de pan/tilt para que la **cámara persiga** a lo
+que se mueve por la huerta.
+
+**Meta final — el espantapájaros definitivo.(water-tower-defense)** Un nodo exterior autónomo:
+batería + placa solar, montado sobre los servos de pan/tilt y equipado con una
+**pistola de agua eléctrica**. Cuando YOLO detecta un pájaro (o lo que sea)
+sobre las plantas, apunta y dispara un chorro de agua para invitarlo
+educadamente a dejar de comerse la huerta.
+
+![Se van a cagar!](detect/docs/photo_2026-09-03_15-56-20.jpg)
 ---
 
 ## Puesta en marcha
