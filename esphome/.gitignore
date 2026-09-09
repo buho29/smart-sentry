@@ -3,3 +3,11 @@
 # You can modify this file to suit your needs.
 /.esphome/
 /secrets.yaml
+
+# Ignorar todos los YAML/headers menos huerta* y esp32-s3-cam
+/proxy.yaml
+/proxylora.yaml
+/s3proxy.yaml
+/s3proxy2.yaml
+/test_light_sleep.yaml
+/esp_pm_local.h

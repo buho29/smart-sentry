@@ -14,6 +14,9 @@ __pycache__/
 gpu_log*.csv
 *.log
 
+# Código viejo / descartado
+old/
+
 # Configuración con secretos (contiene noise_psk e IPs de la LAN)
 cameras_config.json
 cameras_config*.json
