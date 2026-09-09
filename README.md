@@ -53,17 +53,27 @@ API nativa    :6053  ──estado on/off──►  EsphomeController → start/s
 ### Arranque rápido tras despertar (el webhook `esphome/awake`)
 
 La placa duerme casi todo el tiempo, así que cada vez que el PIR la despierta
-hay que reconectar la API nativa desde cero. Si se deja que `aioesphomeapi`
-lo resuelva "solo" (descubrimiento mDNS + su lógica de reconexión con backoff),
-pasan **6-60s** desde que la placa tiene IP hasta que el servicio está
-plenamente operativo y recibe el `estado`. En una ventana de vigilia de pocos
-segundos, eso es medio evento perdido.
+tiene que rehacer toda la pila de red desde cero. El primer coste es fijo e
+inevitable: **reasociar el WiFi y coger IP cuesta unos 3-4 s**. A eso hay que
+sumarle el tiempo que tarde el servicio de `detect/` en reconectar su API
+nativa y volver a suscribirse al `estado`.
 
-Para acelerarlo, la placa **avisa activamente** en cuanto tiene red:
+Ese segundo tramo es el que se puede recortar. Si se deja que `aioesphomeapi`
+lo resuelva "solo" —descubrimiento mDNS de la placa más su reconexión con
+backoff exponencial—, va de **un 1s a 60s**: el servicio no
+sabe que la placa ha vuelto y solo lo descubre en su siguiente reintento
+programado. En una ventana de vigilia de pocos segundos, eso es perder el
+evento entero.
 
-1. En `wifi.on_connect`, el ESP32 hace un `POST` a
-   `http://<host-del-servicio>:8080/cameras/huerta/esphome/awake` — antes
+Para eliminar ese tramo, la placa **avisa activamente** en cuanto tiene red:
+
+1. En `wifi.on_connect`, el ESP32 hace un `POST` a la URL configurada en
+   `server_awake_url` (p. ej.
+   `http://<host-del-servicio>:8080/cameras/huerta/esphome/awake`), antes
    incluso de que el servicio se haya enterado de que la placa existe.
+    
+   nota: Si `server_awake_url` se deja **vacío**, ESPHome no hace la llamada y se
+   vuelve al descubrimiento pasivo de arriba.
 2. Ese endpoint llama a `EsphomeController.notify_awake()`, que marca un
    `_wake_event` de forma *thread-safe* (`call_soon_threadsafe`).
 3. El bucle de reconexión no hace polling: espera en paralelo a
@@ -74,8 +84,10 @@ Para acelerarlo, la placa **avisa activamente** en cuanto tiene red:
    timeout (por eso cada intento está acotado a `connect_attempt_timeout_sec`,
    1 s, en lugar de los ~10 s por defecto de la librería) y reintenta ya.
 
-Resultado: de "placa con IP" a "API nativa suscrita y `estado` fluyendo" en
-**4-6s**, sin depender de mDNS ni del backoff interno de la librería.
+Resultado: la API nativa queda suscrita y con el `estado` fluyendo **~0,1 s
+después de que la placa tenga IP**, sin depender de mDNS ni del backoff interno
+de la librería. El tiempo total "PIR dispara → sistema operativo" lo domina
+entonces la reconexión del WiFi (esos 3-4 s), no el software.
 
 ```
 [21:24:02.960][D][main:538]: WiFi connected
