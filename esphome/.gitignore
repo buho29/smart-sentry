@@ -9,5 +9,6 @@
 /proxylora.yaml
 /s3proxy.yaml
 /s3proxy2.yaml
-/test_light_sleep.yaml
-/esp_pm_local.h
+
+# Código viejo / descartado
+old/

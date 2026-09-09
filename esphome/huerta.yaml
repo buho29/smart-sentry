@@ -173,11 +173,16 @@ wifi:
 
   on_connect:
     - logger.log: "WiFi connected"
-    - http_request.post:
-        # La URL se lee en runtime del text `server_awake_url`, editable desde Home Assistant.
-        url: !lambda "return id(server_awake_url).state;"
-        on_error:
-          - logger.log: "No se pudo avisar al servidor Python (no pasa nada, seguirá reintentando solo)"
+    # Solo avisa al servidor Python si `server_awake_url` no está en blanco.
+    - if:
+        condition:
+          lambda: "return !id(server_awake_url).state.empty();"
+        then:
+          - http_request.post:
+              # La URL se lee en runtime del text `server_awake_url`, editable desde Home Assistant.
+              url: !lambda "return id(server_awake_url).state;"
+              on_error:
+                - logger.log: "No se pudo avisar al servidor Python (no pasa nada, seguirá reintentando solo)"
   on_disconnect:
     - logger.log: "WiFi disconnected"
 

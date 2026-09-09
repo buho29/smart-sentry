@@ -1,109 +1,7 @@
 """
-Servicio YOLO multi-cámara para Home Assistant / ESPHome.
-
-INSTALACIÓN
-------------
-    python -m venv yolo-env
-    yolo-env\\Scripts\\activate          (Windows)
-    pip install fastapi uvicorn pydantic ultralytics opencv-python numpy requests torch aioesphomeapi
-
-    Para GPU NVIDIA, instala la versión de torch con soporte CUDA en vez de
-    la genérica (ajusta cu124 a tu versión de CUDA):
-    pip install torch --index-url https://download.pytorch.org/whl/cu124
-
-    Descarga el modelo YOLO que vayas a usar (p.ej. yolo11m.pt) y déjalo en
-    el mismo directorio que este script, o dale la ruta completa en
-    "model_name" al registrar la cámara.
-
-ARRANQUE
---------
-    uvicorn main2:app --host 0.0.0.0 --port 8080 --workers 1 --timeout-graceful-shutdown 5
-
-    El flag --timeout-graceful-shutdown 5 es OBLIGATORIO (ver más abajo en
-    "historial de depuración" por qué). Sin --workers 1 no uses más de un
-    worker: el estado de las cámaras vive en memoria de un solo proceso.
-
-    Documentación interactiva una vez arrancado: http://localhost:8080/docs
-
-REGISTRAR UNA CÁMARA
----------------------
-    curl -X POST http://localhost:8080/cameras -H "Content-Type: application/json" -d '{
-      "camera_id": "huerta",
-      "stream_url": "http://192.168.1.50:8080/",
-      "model_name": "yolo26m",
-      "device": "cuda",
-      "confidence": 0.5,
-      "classes": [0],
-      "noise_psk": "<api.encryption.key del YAML de la placa>"
-    }'
-
-    también se puede registrar desde Swagger (http://localhost:8080/docs) con el mismo JSON.
-
-    Se guarda automáticamente en cameras_config.json (mismo directorio) y
-    se recarga sola en el siguiente arranque -- no hace falta re-registrarla
-    cada vez.
-
-USO
----
-    Ver stream anotado:   http://localhost:8080/cameras/{camera_id}/stream
-    Ver stream crudo:     http://localhost:8080/cameras/{camera_id}/stream?infer=false
-    Snapshot suelto:      http://localhost:8080/cameras/{camera_id}/snapshot
-    Estado/diagnóstico:   http://localhost:8080/cameras/{camera_id}/status
-    Arrancar/parar a mano: POST /cameras/{camera_id}/start | /stop
-
-    Con "noise_psk" configurado, la cámara arranca/para sola siguiendo el
-    estado real del PIR de la placa (huerta_estado on/off) -- no hace falta
-    llamar a /start manualmente en el uso normal.
+Servicio de detección de objetos en tiempo real con YOLO y ESPHome.
 
 
-Arquitectura por cámara (CameraSession):
-- 1 hilo lector (_read_loop): habla con el ESP32-S3-CAM y solo se queda con
-  el frame más reciente. El ESP32 (esp32_camera_web_server) solo admite UN
-  consumidor de stream a la vez, así que este es el único proceso que abre
-  conexión contra él.
-- 1 hilo de proceso (_process_loop): saca el frame más reciente, corre YOLO
-  SOLO si hay algún cliente pidiendo el stream anotado, y publica el
-  resultado (crudo y/o anotado) para que lo consuman N clientes a la vez
-  mediante una threading.Condition. Así varios clientes (HA, navegador...)
-  pueden mirar el mismo stream sin abrir varias conexiones al ESP32 ni
-  duplicar la inferencia.
-- Arranque/parada: cada sesión tiene un flag `explicit_start`. Si se activa
-  por API (/start), la sesión se mantiene viva aunque no haya clientes. Si
-  no, arranca sola con el primer cliente y se para sola cuando se va el
-  último (evita insistir en conectar a una cámara que el PIR ha dormido).
-
-uso de las librerías:
-
-fastapi — el framework web en sí. Define los endpoints (/cameras, /stream, etc.), valida los datos de entrada/salida y genera automáticamente la documentación interactiva de /docs.
-uvicorn — el servidor que realmente ejecuta tu app FastAPI y escucha en el puerto 8080. FastAPI define qué hacer con cada petición; uvicorn es el que abre el socket, acepta conexiones y se las pasa a FastAPI.
-pydantic — valida y estructura los datos. Es lo que hace que CameraConfig/InferenceConfig/etc. sean clases con tipos comprobados en vez de diccionarios sueltos: si mandas un confidence que no es un número, Pydantic rechaza la petición antes de que llegue a tu código.
-ultralytics — la librería del modelo YOLO en sí (YOLO(...), model.predict()). Es la que carga los pesos .pt y hace la detección de objetos.
-opencv-python (se importa como cv2) — procesamiento de imagen: decodificar los JPEGs que llegan del ESP32 (cv2.imdecode), dibujar las cajas y texto sobre el frame (cv2.rectangle, cv2.putText), y volver a codificar a JPEG para servirlo (cv2.imencode).
-numpy — la estructura de datos numérica de base sobre la que trabajan tanto OpenCV como PyTorch/YOLO. Un frame de vídeo es, por debajo, un array de numpy (np.frombuffer, np.zeros para el keep-alive).
-requests — cliente HTTP para conectarse al stream MJPEG del ESP32 (requests.get(..., stream=True)) y leerlo trozo a trozo con iter_content().
-torch (PyTorch) — el motor de deep learning sobre el que corre YOLO por debajo. Tú lo usas directamente para mover el modelo a la GPU (model.to("cuda")) y para el ajuste de torch.backends.cudnn.enabled = False que necesitas por el bug de la GTX 1080.
-aioesphomeapi — cliente de la API nativa de ESPHome (puerto 6053, no HTTP). Es lo que usa tu EsphomeController para suscribirse a huerta_estado y, en el futuro, para mandar
-
-
-Arquitectura por cámara (CameraSession):
-- 1 hilo lector (_read_loop): habla con el ESP32-S3-CAM y solo se queda con
-  el frame más reciente. El ESP32 (esp32_camera_web_server) solo admite UN
-  consumidor de stream a la vez, así que este es el único proceso que abre
-  conexión contra él.
-- 1 hilo de proceso (_process_loop): saca el frame más reciente, corre YOLO
-  SOLO si hay algún cliente pidiendo el stream anotado, y publica el
-  resultado (crudo y/o anotado) para que lo consuman N clientes a la vez
-  mediante una threading.Condition. Así varios clientes (HA, navegador...)
-  pueden mirar el mismo stream sin abrir varias conexiones al ESP32 ni
-  duplicar la inferencia.
-- Arranque/parada: cada sesión tiene un flag `explicit_start`. Si se activa
-  por API (/start), la sesión se mantiene viva aunque no haya clientes. Si
-  no, arranca sola con el primer cliente y se para sola cuando se va el
-  último (evita insistir en conectar a una cámara que el PIR ha dormido).
-
-Historial de depuración de la GTX 1080 (P-states) y de que el filtrado de
-confianza/ByteTrack no era el problema: ver notas originales más abajo,
-en _process_loop.
 """
 
 from __future__ import annotations
@@ -113,6 +11,7 @@ import io
 import json
 import queue
 import re
+import socket
 import sys
 import threading
 import time
@@ -165,6 +64,58 @@ CENTER_DOT_RADIUS = 4
 # causando cuelgues de hasta varios minutos -- confirmado con pruebas
 # aisladas moviendo la cámara físicamente).
 _CONTENT_LENGTH_RE = re.compile(rb"Content-Length:\s*(\d+)", re.IGNORECASE)
+
+
+def _quiet_close(resp: "requests.Response"):
+    try:
+        resp.close()
+    except Exception:
+        pass
+
+
+def _force_close_response(resp: "requests.Response", tag: str = ""):
+    """Cierra la conexión HTTP con el ESP32 sin bloquear a quien llama.
+
+    resp.close() por sí solo puede tardar SEGUNDOS (medidos 12s en pruebas)
+    cuando el hilo lector está dentro de un recv() sobre ese mismo socket: en
+    Windows, cerrar el objeto fichero no interrumpe la lectura en curso. Como
+    stop() se llama desde el event loop de EsphomeController (cuando la placa
+    publica `estado=off` justo antes de dormirse) y desde endpoints async,
+    quedarse bloqueado ahí congelaba la API entera durante esos segundos.
+
+    Lo que sí desbloquea al lector al instante (~0.1 ms medidos) es un
+    shutdown() del socket subyacente, así que va primero; el close() ordenado
+    de después ya es inmediato. El lector se despierta con un
+    ChunkedEncodingError, que su propio except captura y trata como parada.
+
+    Las tripas de urllib3 cambian entre versiones, así que probamos varias
+    rutas hasta el socket. Si no lo encontramos, delegamos el close() a un
+    hilo aparte: en el peor caso el que se bloquea es ese hilo desechable y
+    no el que pidió la parada.
+    """
+    sock = None
+    for get_sock in (
+        lambda: resp.raw._fp.fp.raw._sock,             # urllib3 2.x / 1.26
+        lambda: resp.raw._original_response.fp.raw._sock,
+        lambda: resp.raw._connection.sock,
+    ):
+        try:
+            sock = get_sock()
+        except Exception:
+            sock = None
+        if sock is not None:
+            break
+
+    if sock is None:
+        threading.Thread(target=_quiet_close, args=(resp,), daemon=True,
+                         name=f"close-{tag}").start()
+        return
+
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass  # el otro extremo ya lo había cerrado (la placa se durmió)
+    _quiet_close(resp)
 
 
 @asynccontextmanager
@@ -307,6 +258,10 @@ class EsphomeController:
         self._watch_key: Optional[int] = None
         self._connected = threading.Event()
         self._stopping = False
+        # Se marca cuando el hilo ya ha cerrado el socket y el event loop.
+        # Sirve para que shutdown() sea idempotente y para que notify_awake()/
+        # move_servo() no intenten programar nada en un loop ya cerrado.
+        self._closed = threading.Event()
 
         # Creados aquí, se usan dentro del loop propio de este controller.
         self._disconnected_event = asyncio.Event()
@@ -325,7 +280,47 @@ class EsphomeController:
 
     def _run_loop(self):
         asyncio.set_event_loop(self._loop)
-        self._loop.run_until_complete(self._reconnect_loop())
+        try:
+            self._loop.run_until_complete(self._reconnect_loop())
+        finally:
+            # El cierre se hace DENTRO de este hilo, que es el único sitio
+            # donde el loop sigue vivo y se puede esperar de verdad a que el
+            # socket con la placa (puerto 6053) se cierre.
+            #
+            # Antes shutdown() hacía loop.stop() desde fuera justo después de
+            # programar disconnect(): el loop paraba antes de que esa corrutina
+            # llegara a ejecutarse, así que el socket quedaba abierto hasta que
+            # moría el proceso (un descriptor filtrado por cada DELETE de
+            # cámara), y run_until_complete de arriba reventaba con
+            # "Event loop stopped before Future completed".
+            self._close_loop()
+
+    def _close_loop(self):
+        """Cierre ordenado del cliente, las tareas pendientes y el loop.
+        Solo se llama desde el propio hilo del controller."""
+        try:
+            if self._client is not None:
+                self._loop.run_until_complete(
+                    asyncio.wait_for(self._client.disconnect(), timeout=1.0)
+                )
+        except Exception:
+            # Si la placa ya se ha dormido no hay nadie al otro lado y el
+            # disconnect puede fallar o agotar el timeout: da igual, lo que
+            # importa es que el socket local quede cerrado igualmente.
+            pass
+        try:
+            pending = [t for t in asyncio.all_tasks(self._loop) if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                self._loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        self._loop.close()
+        self._closed.set()
 
     async def _reconnect_loop(self):
         self._client = APIClient(self.address, self.port, password="", noise_psk=self.noise_psk)
@@ -370,7 +365,12 @@ class EsphomeController:
                 connect_task.cancel()
                 try:
                     await connect_task
-                except Exception:
+                except (asyncio.CancelledError, Exception):
+                    # CancelledError hereda de BaseException, NO de Exception:
+                    # sin nombrarla aquí se escapaba de este except, subía por
+                    # run_until_complete y mataba el hilo del controller con un
+                    # traceback cada vez que shutdown() o notify_awake()
+                    # cancelaban un intento de conexión en vuelo.
                     pass
                 try:
                     await self._client.disconnect()
@@ -424,7 +424,12 @@ class EsphomeController:
         """Llamar cuando algo externo (el webhook del propio ESP32 al
         conectar WiFi) nos indica que la placa puede estar lista, para
         saltarnos la espera de safety_retry_sec y reintentar ya."""
-        self._loop.call_soon_threadsafe(self._wake_event.set)
+        if self._closed.is_set():
+            return
+        try:
+            self._loop.call_soon_threadsafe(self._wake_event.set)
+        except RuntimeError:
+            pass  # el loop se cerró entre el check y esta llamada
 
     def _on_state(self, state):
         # Llamado en el hilo/loop propio de este controller.
@@ -447,7 +452,12 @@ class EsphomeController:
     def move_servo(self, pan: float, tilt: float):
         if not self._connected.is_set() or self._servo_service is None:
             return
-        asyncio.run_coroutine_threadsafe(self._send_servo(pan, tilt), self._loop)
+        if self._closed.is_set():
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._send_servo(pan, tilt), self._loop)
+        except RuntimeError:
+            pass  # el loop se cerró entre el check y esta llamada
 
     async def _send_servo(self, pan: float, tilt: float):
         try:
@@ -457,13 +467,27 @@ class EsphomeController:
 
     # -- apagado ---------------------------------------------------------
 
-    def shutdown(self):
+    def shutdown(self, timeout: float = 1.5):
+        """Para el hilo y cierra la conexión con la placa. Idempotente.
+
+        No para el loop a la fuerza: solo levanta los dos eventos que hacen
+        salir a _reconnect_loop por su propio pie, y espera a que el hilo
+        cierre el socket y el loop en _close_loop(). Así el disconnect()
+        siempre llega a ejecutarse dentro del loop, que es donde asyncio
+        puede esperarlo.
+        """
+        if self._closed.is_set():
+            return
         self._stopping = True
-        self._loop.call_soon_threadsafe(self._disconnected_event.set)
-        self._loop.call_soon_threadsafe(self._wake_event.set)
-        if self._client is not None:
-            asyncio.run_coroutine_threadsafe(self._client.disconnect(), self._loop)
-        self._loop.call_soon_threadsafe(self._loop.stop)
+        try:
+            self._loop.call_soon_threadsafe(self._disconnected_event.set)
+            self._loop.call_soon_threadsafe(self._wake_event.set)
+        except RuntimeError:
+            return  # el loop ya estaba cerrado
+        self._thread.join(timeout=timeout)
+        if self._thread.is_alive():
+            print(f"EsphomeController[{self.address}]: el hilo no terminó en "
+                  f"{timeout}s (es daemon, no bloquea el cierre del proceso)")
 
 
 # ---------------------------------------------------------------------------
@@ -557,8 +581,14 @@ class CameraSession:
         if value is None:
             return
         value = bool(value)
-        if value == self._last_esphome_state:
-            return  # ignora repeticiones (p.ej. True republicado al reconectar)
+        # Ignoramos repeticiones (la placa republica el estado al reconectar),
+        # PERO solo si la sesión ya está como debería estar. Si el estado dice
+        # "on" y la lectura está parada -- p.ej. el _read_loop se rindió porque
+        # la placa se durmió sin llegar a publicar el "off" -- volvemos a
+        # arrancar aunque el valor no haya cambiado. Sin esto, esa combinación
+        # dejaba la cámara muerta hasta el siguiente ciclo de sueño completo.
+        if value == self._last_esphome_state and value == self.is_running:
+            return
         self._last_esphome_state = value
         if value:
             print(f"[{self.cfg.camera_id}] {self.cfg.esphome_state_object_id}=on -> arrancando cámara")
@@ -597,8 +627,14 @@ class CameraSession:
             self._stop_event = threading.Event()
             self._raw_queue = queue.Queue(maxsize=1)
             self._fps_window = deque()
-            self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
-            self._processing_thread = threading.Thread(target=self._process_loop, daemon=True)
+            # Con nombre, para poder identificarlos en los logs de cierre y en
+            # un volcado de hilos si alguna generación se queda colgada.
+            self._reader_thread = threading.Thread(
+                target=self._read_loop, daemon=True, name=f"read-{self.cfg.camera_id}"
+            )
+            self._processing_thread = threading.Thread(
+                target=self._process_loop, daemon=True, name=f"yolo-{self.cfg.camera_id}"
+            )
             self._reader_thread.start()
             self._processing_thread.start()
             print(f"[{self.cfg.camera_id}] lectura iniciada")
@@ -611,27 +647,41 @@ class CameraSession:
                 return  # aún hay clientes mirando, no paramos
             self._stop_event.set()
             resp = self._current_response
-        # cerrar la conexión HTTP abierta fuera del lock, para no bloquearlo
+        # Cerrar la conexión HTTP abierta fuera del lock, para no bloquearlo, y
+        # a la fuerza (shutdown del socket): ver _force_close_response, un
+        # resp.close() a secas podía tardar segundos y este stop() lo llama el
+        # loop de ESPHome cuando la placa avisa de que se va a dormir.
         if resp is not None:
-            try:
-                resp.close()
-            except Exception:
-                pass
+            _force_close_response(resp, tag=self.cfg.camera_id)
         with self._cond:
             self._cond.notify_all()  # despierta YA a los generadores esperando, sin esperar al polling de 5s
         print(f"[{self.cfg.camera_id}] lectura detenida")
 
     def shutdown(self):
-        """Para la sesión y espera a que los hilos terminen. Para usar al apagar el servicio."""
+        """Para la sesión y espera a que los hilos terminen. Para usar al apagar
+        el servicio o al borrar la cámara con DELETE.
+
+        El presupuesto total está acotado a ~4s a propósito: lifespan solo da
+        5s por sesión y uvicorn arranca con --timeout-graceful-shutdown 5. Los
+        tres hilos son daemon, así que si alguno se pasa del plazo no impide
+        que el proceso muera; solo lo dejamos dicho en el log.
+        """
         self.stop(explicit=True)
-        if self._reader_thread is not None:
-            self._reader_thread.join(timeout=3)
-        if self._processing_thread is not None:
-            self._processing_thread.join(timeout=3)
+        # Primero el controller: así deja de reintentar contra la placa y
+        # cierra su socket de la API nativa (6053) mientras los hilos de vídeo
+        # terminan de salir, en vez de en serie después de ellos.
+        if self.esphome is not None:
+            self.esphome.shutdown(timeout=1.5)
+        deadline = time.monotonic() + 2.5
+        for t in (self._reader_thread, self._processing_thread):
+            if t is None:
+                continue
+            t.join(timeout=max(0.0, deadline - time.monotonic()))
+            if t.is_alive():
+                print(f"[{self.cfg.camera_id}] el hilo {t.name} no terminó a tiempo "
+                      f"(es daemon, no bloquea el cierre del proceso)")
         with self._cond:
             self._cond.notify_all()  # despierta a los generadores que sigan esperando
-        if self.esphome is not None:
-            self.esphome.shutdown()
 
     def _maybe_autostop(self):
         with self._lock:
@@ -690,9 +740,21 @@ class CameraSession:
         while not stop_event.is_set():
             r = None
             try:
-                r = requests.get(self.cfg.stream_url, stream=True, timeout=(5, 15))
+                # Connect timeout de 3s (no 5): en la LAN abrir la conexión son
+                # milisegundos, y ese número es el tiempo máximo que este hilo
+                # puede tardar en enterarse de un stop() si le pilla justo aquí,
+                # con la placa ya dormida y sin nadie que acepte la conexión.
+                r = requests.get(self.cfg.stream_url, stream=True, timeout=(3, 15))
                 with self._lock:
                     self._current_response = r
+                # Si nos pararon MIENTRAS se abría esta conexión, stop() leyó
+                # _current_response cuando todavía era None y no la cerró; sin
+                # este chequeo nos meteríamos en iter_content y, con la placa
+                # ya dormida y sin enviar nada, el hilo se quedaría ahí hasta
+                # agotar los 15s de read timeout. El finally cierra la
+                # respuesta al salir.
+                if stop_event.is_set():
+                    break
                 buffer = b""
                 # None = esperando la cabecera de la siguiente parte del
                 # multipart; int = bytes de JPEG que todavía faltan por leer
@@ -748,11 +810,32 @@ class CameraSession:
                     if len(buffer) > 2_000_000:
                         buffer = b""
                         expected_len = None
-            except requests.exceptions.RequestException as e:
+            except Exception as e:
+                # Except amplio a propósito: al parar la sesión cerramos la
+                # respuesta desde OTRO hilo (stop() -> _current_response.close())
+                # y eso hace saltar a iter_content lo que toque según por dónde
+                # le pille a urllib3: a veces un RequestException, pero también
+                # ValueError("I/O operation on closed file") o AttributeError
+                # sobre un socket ya puesto a None. Cazando solo
+                # RequestException esos casos mataban el hilo con un traceback
+                # por consola en vez de salir por el camino limpio de abajo.
+                if stop_event.is_set():
+                    # Parada pedida: la excepción es la consecuencia, no la
+                    # causa. Salimos sin log de error ni espera de reconexión.
+                    break
                 self.last_error = repr(e)
                 # Si nadie quiere ya la cámara (p.ej. se durmió por el PIR y no hay
                 # clientes ni arranque explícito), dejamos de insistir en reconectar.
                 if not self.explicit_start and self.client_count == 0:
+                    break
+                # Si esta sesión la gobierna ESPHome y también hemos perdido la
+                # API nativa, la placa está dormida (o fuera de cobertura): no
+                # tiene sentido machacar el stream HTTP cada segundo contra una
+                # IP muerta. Paramos; el siguiente `estado=on` nos rearranca
+                # (ver la nota sobre repeticiones en _on_esphome_state).
+                if self.esphome is not None and not self.esphome.is_connected:
+                    print(f"[{self.cfg.camera_id}] stream caído ({e!r}) y API de ESPHome "
+                          f"desconectada -> la placa parece dormida, dejo de reintentar")
                     break
                 print(f"[{self.cfg.camera_id}] stream interrumpido ({e!r}), "
                       f"reconectando en {GLOBAL_CONFIG.reconnect_delay_sec}s...")
@@ -1025,7 +1108,12 @@ async def remove_camera(camera_id: str):
         session = CAMERAS.pop(camera_id, None)
     if session is None:
         raise HTTPException(404, f"Cámara '{camera_id}' no registrada")
-    session.shutdown()
+    # session.shutdown() es bloqueante (hace join() sobre hilos, hasta ~4s).
+    # Llamarla directamente desde este endpoint async congelaba el event loop
+    # entero durante ese rato: todos los demás streams y peticiones se
+    # quedaban parados mientras se borraba una cámara. Mismo motivo que en
+    # lifespan().
+    await asyncio.to_thread(session.shutdown)
     save_cameras_to_disk()
     return {"removed": camera_id}
 
@@ -1127,7 +1215,10 @@ async def snapshot_camera(camera_id: str, infer: Optional[bool] = Query(None)):
         deadline = time.time() + 1.0
         jpg = session.snapshot(infer)
         while jpg is None and time.time() < deadline:
-            time.sleep(0.05)
+            # await, no time.sleep(): esto corre en el event loop y un sleep
+            # síncrono congelaba todos los demás streams hasta 1s cada vez que
+            # se pedía un snapshot de una cámara que aún no tiene frame.
+            await asyncio.sleep(0.05)
             jpg = session.snapshot(infer)
     finally:
         session.remove_client(mode)
