@@ -48,7 +48,7 @@ API nativa    :6053  ──estado on/off──►  EsphomeController → start/s
 Cada mitad tiene su propio `venv` y sus instrucciones detalladas:
 
 1. **Firmware** — ver [`esphome/README.md`](esphome/README.md). Flashea
-   `huerta.yaml` (nodo a baterías) o `esp32-s3-cam.yaml` (cámara-proxy
+   `huerta.yaml` (nodo a baterías) o `esp32-s3-cam.yaml` (cámara
    siempre encendida). Necesita un `secrets.yaml` con el WiFi.
 2. **Servicio de detección** — ver [`detect/README.md`](detect/README.md).
    Instala PyTorch con la variante de CUDA correcta, arranca `uvicorn` y
