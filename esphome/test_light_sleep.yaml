@@ -1,0 +1,113 @@
+# -----------------------------------------------------------------------------
+# TEST light sleep automático (ESP-IDF power management)
+#
+# Objetivo: comprobar si, con esp_pm_configure() + light_sleep_enable=true,
+# el WiFi se mantiene asociado al router sin necesidad de reasociación
+# completa, a diferencia de lo que pasa tras un deep_sleep.
+#
+# Cómo probarlo:
+#   1) Flashea esto en la placa (usa el mismo esp32-s3-devkitc-1 / secrets.yaml
+#      que ya tienes, solo cambia el nombre para no pisar "huerta").
+#   2) esphome logs test_light_sleep.yaml --device 192.168.1.51
+#   3) Déjalo correr varios minutos. Fíjate en:
+#      - Si aparece algún "WiFi disconnected" / "Association Expired" por sí
+#        solo (sin que tú hagas nada) -> el light sleep está rompiendo la
+#        sesión, mala señal.
+#      - El valor de "WiFi Signal dB" y "Free heap" cada 5s -> deben seguir
+#        actualizándose sin huecos raros ni caídas de memoria progresivas.
+#   4) Compara consumo real con un medidor USB (INA219, multímetro con pinza,
+#      o el propio panel solar/BMS) frente al mismo test sin light_sleep_enable
+#      (coméntalo y vuelve a flashear) para ver si el ahorro es significativo
+#      antes de meterlo en el firmware completo de la cámara.
+# -----------------------------------------------------------------------------
+
+esphome:
+  name: test-light-sleep
+  friendly_name: Test Light Sleep
+  includes:
+    - esp_pm_local.h
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          esp_pm_config_t pm_config = {
+              .max_freq_mhz = 160,
+              .min_freq_mhz = 40,
+              .light_sleep_enable = true
+          };
+          esp_err_t err = esp_pm_configure(&pm_config);
+          if (err == ESP_OK) {
+            ESP_LOGI("pm", "esp_pm_configure OK: light sleep habilitado");
+          } else {
+            ESP_LOGE("pm", "esp_pm_configure FALLO: %s", esp_err_to_name(err));
+          }
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    version: recommended
+    sdkconfig_options:
+      CONFIG_PM_ENABLE: "y"
+      CONFIG_FREERTOS_USE_TICKLESS_IDLE: "y"
+      CONFIG_PM_DFS_INIT_AUTO: "y"
+      CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE: "y"
+
+logger:
+  level: DEBUG
+
+api:
+
+ota:
+  - platform: esphome
+    password: "test1234"
+
+wifi:
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+      bssid: 78:C5:7D:14:E4:9C
+      channel: 11
+
+  # OJO: sin power_save_mode: none aquí -> queremos ver el comportamiento
+  # real del ahorro de energía, no forzarlo a máximo rendimiento.
+  fast_connect: true
+
+  manual_ip:
+    static_ip: 192.168.1.51
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+    dns1: 192.168.1.1
+    dns2: 1.1.1.1
+
+  on_connect:
+    - logger.log: "WiFi connected"
+  on_disconnect:
+    - logger.log: "WiFi disconnected (esto NO debería pasar solo, sin deep sleep de por medio)"
+
+# -----------------------------------------------------------------------------
+# Sensores de diagnóstico para vigilar si la sesión se mantiene estable.
+# -----------------------------------------------------------------------------
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal dB"
+    id: wifi_signal_db
+    update_interval: 5s
+
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_sensor
+    update_interval: 5s
+
+  - platform: internal_temperature
+    name: "Temperature"
+    update_interval: 10s
+
+  - platform: template
+    name: "Free heap"
+    unit_of_measurement: "bytes"
+    accuracy_decimals: 0
+    update_interval: 5s
+    lambda: |-
+      return (float) heap_caps_get_free_size(MALLOC_CAP_INTERNAL);

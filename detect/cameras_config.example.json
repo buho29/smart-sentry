@@ -1,0 +1,17 @@
+[
+  {
+    "camera_id": "huerta",
+    "stream_url": "http://CAMERA_IP:8080/",
+    "model_name": "yolo26m",
+    "device": "cuda",
+    "confidence": 0.5,
+    "imgsz": 640,
+    "classes": [
+      0
+    ],
+    "keepalive_enabled": true,
+    "default_infer": true,
+    "noise_psk": "",
+    "esphome_state_object_id": "huerta_estado"
+  }
+]

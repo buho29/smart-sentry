@@ -1,0 +1,44 @@
+cd C:\yolo-service
+python -m venv yolo-env
+
+yolo-env\Scripts\activate
+
+Si PowerShell te tira un error de política de ejecución de scripts (es bastante común la primera vez), ejecuta esto una vez como administrador:
+
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+Perfecto, 3.11.7 es justo lo que queríamos. Entorno ya activo (se ve por el (yolo-env) delante del prompt).
+
+Siguiente paso: instalar PyTorch con soporte CUDA. Primero comprobemos qué versión de CUDA soporta tu driver actual, para pedir el paquete correcto:
+
+nvidia-smi
+
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+Va a bajar unos cuantos GB, dale un rato. Cuando termine, verifica que ve la GPU:
+
+python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
+
+Debería devolver:
+
+True
+NVIDIA GeForce GTX 1080
+
+pip install ultralytics fastapi uvicorn python-multipart opencv-python requests
+
+python -c "from ultralytics import YOLO; m = YOLO('yolo11n.pt'); m.to('cuda'); print('ok')"
+
+La primera vez descargará el modelo yolo11n.pt (nano, unos 5-6MB) automáticamente. Si sale ok sin errores, ya tenemos todo el stack listo y pasamos a escribir el main.py del servicio.
+
+uvicorn main2:app --host 0.0.0.0 --port 8080 --workers 1
+
+http://192.168.1.171:8080/detect/stream?stream_url=http%3A%2F%2F192.168.1.56%3A8080%2F&model_name=yolo11m&confidence=0.5&device=cuda
+
+python stats_stream_test.py
+
+uvicorn main2:app --host 0.0.0.0 --port 8080 --workers 1 --timeout-graceful-shutdown 5
+
+cd C:\cupula-de-agua\detect
+python -m venv venv
+venv\Scripts\activate
+pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+pip install -r requirements.txt

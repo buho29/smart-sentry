@@ -1,0 +1,5 @@
+# .gitignore en la raíz del repo
+venv/
+.pio/
+.esphome/
+__pycache__/

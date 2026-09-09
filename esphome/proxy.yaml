@@ -1,0 +1,109 @@
+esphome:
+  name: proxy
+  friendly_name: proxy
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+    version: recommended
+    sdkconfig_options:
+      # --- AJUSTES SDKCONFIG DE BERMUDA ---
+      # Soportado por todos los ESP32 con Bluetooth
+      CONFIG_BT_BLE_42_FEATURES_SUPPORTED: "y"
+      
+      # Amplía el tiempo de espera del watchdog a 10s para reiniciar si el chip se bloquea
+      CONFIG_ESP_TASK_WDT_TIMEOUT_S: "10"
+
+# Logger con baud_rate a 0 para desactivar el log por puerto serie (UART).
+# Esto libera CPU y memoria RAM, evitando cuellos de botella en la recepción BLE.
+logger:
+  baud_rate: 0
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "fCPVcu5zpG3pVXaPK1XqDN6WfLioZRXPI8XC3BM2lNA="
+  on_client_connected:
+    - esp32_ble_tracker.start_scan:
+        continuous: true
+  on_client_disconnected:
+    if:
+      condition:
+        not:
+          api.connected:
+      then:
+        - esp32_ble_tracker.stop_scan:
+
+ota:
+  - platform: esphome
+    password: "22636e1ca9676470731fcebc314df0a8"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none 
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Proxy Fallback Hotspot"
+    password: "teta1234"
+
+captive_portal:
+
+# Configuración del escáner BLE
+esp32_ble_tracker:
+  scan_parameters:
+    # Desactivamos el inicio automático porque se controla arriba mediante el evento de la API
+    continuous: false
+    # Send scan-request packets para recopilar más info (como nombres de dispositivos)
+    active: true
+    # Tiempo gastado en cada canal de anuncio BLE (por defecto 320ms)
+    interval: 320ms
+    # Tiempo efectivo de escucha dentro del intervalo. 300ms sobre 320ms representa 
+    # más del 93% de ciclo útil de escucha sin saturar la CPU por completo.
+    window: 300ms
+
+# Proxy Bluetooth para conectar Home Assistant a dispositivos lejanos
+bluetooth_proxy:
+  # Permite conexiones salientes desde Home Assistant hacia dispositivos Bluetooth a través del proxy
+  active: true
+
+safe_mode: 
+
+esp32_ble_beacon:
+  type: iBeacon
+  uuid: fde3b150-2f64-43ba-aee9-867f75ee4a6f
+  major: 1
+  minor: 1
+  min_interval: 500ms
+  max_interval: 1000ms 
+  
+  # Entidades de diagnóstico y control integradas en Home Assistant
+button:
+  - platform: restart
+    name: "Restart"
+    entity_category: config
+
+  - platform: factory_reset
+    name: "Factory Reset"
+    id: Reset
+    entity_category: config
+
+  - platform: safe_mode
+    name: "Safe Mode"
+    internal: false
+    entity_category: config
+
+sensor:
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_sensor
+    entity_category: diagnostic
+    internal: true
+
+  - platform: wifi_signal
+    name: "WiFi Signal dB"
+    id: wifi_signal_db
+    update_interval: 60s
+    entity_category: "diagnostic"

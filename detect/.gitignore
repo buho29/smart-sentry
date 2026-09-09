@@ -1,0 +1,20 @@
+# .gitignore para detect/
+
+# Entorno virtual y cachés (ya cubiertos por el .gitignore raíz, aquí por claridad)
+venv/
+__pycache__/
+*.pyc
+
+# Pesos de modelos (se descargan solos con ultralytics)
+*.pt
+*.onnx
+*.engine
+
+# Logs y salidas de runtime
+gpu_log*.csv
+*.log
+
+# Configuración con secretos (contiene noise_psk e IPs de la LAN)
+cameras_config.json
+cameras_config*.json
+!cameras_config.example.json
