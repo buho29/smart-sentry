@@ -61,7 +61,13 @@ esphome logs huerta.yaml --device COM10    # logs por USB (puerto serie)
 | Fichero | Placa | Qué es |
 | --- | --- | --- |
 | `huerta.yaml` | ESP32-S3-DevKitC-1 + cámara + PIR | **Config principal.** Nodo exterior a baterías: deep sleep permanente, despierta por PIR. |
-| `esp32-s3-cam.yaml` | ESP32-S3-DevKitC-1 + cámara | Cámara-proxy siempre encendida, sirve stream/snapshot de forma continua para Frigate/YOLO.
+| `esp32-s3-cam.yaml` | ESP32-S3-DevKitC-1 + cámara | Cámara-proxy siempre encendida, sirve stream/snapshot de forma continua para Frigate/YOLO. |
+| `esp32-s3-cam-servo.yaml` | ESP32-S3-DevKitC-1 + cámara + 2 servos | **Torreta.** Como la anterior, más un pan/tilt que el servicio Python mueve para seguir al objetivo detectado. |
+
+Cada variante de hardware lleva su propio YAML en vez de acumular condicionales
+en uno solo. La duplicación entre ellos es consciente por ahora; si crecen más,
+el mecanismo `packages:` de ESPHome permite factorizar el bloque común de
+cámara/wifi/OTA.
 
 ---
 
@@ -108,6 +114,39 @@ Igual que `huerta.yaml` pero **sin deep sleep**: la placa está siempre
 encendida y conectada, sirviendo stream (`:8080/`) y snapshot (`:8081`) sin
 parar. La IP la asigna el DHCP. `logger` con `baud_rate: 0`, así que no hay
 log por serie: usa `esphome logs esp32-s3-cam.yaml` (por red).
+
+---
+
+## `esp32-s3-cam-servo.yaml` — torreta de seguimiento
+
+`esp32-s3-cam.yaml` más dos servos pan/tilt, sin PIR y sin deep sleep. El
+servicio Python de inferencia (`detect/`) sigue a un objetivo detectado y va
+corrigiendo la posición de la torreta para centrarlo.
+
+- **Contrato con Python:** la acción de la API `set_servo_position`, con las
+  variables `pan` y `tilt` en el rango **-1.0 a 1.0** (lo que espera
+  `servo.write`; no se manejan grados en ninguna capa). El nombre se busca
+  literal desde Python, así que renombrarlo aquí deja el seguimiento mudo sin
+  dar ningún error.
+- **Cuidado con el timer LEDC:** la cámara usa `LEDC_TIMER_0` para el XCLK, a
+  decenas de MHz, y los servos van a 50 Hz. Como cada par de canales LEDC
+  comparte timer (0-1 → timer 0, 2-3 → timer 1, 4-5 → timer 2, 6-7 → timer 3),
+  los servos usan los canales **4 y 6**. Ponerlos en el 0 o el 1 reprogramaría
+  el timer del XCLK y rompería la imagen.
+- **Antes de flashear** hay que rellenar lo marcado como `PENDIENTE` en el YAML:
+  los dos GPIO de los servos, una `api.encryption.key` **propia**
+  (`openssl rand -base64 32`, la misma que se pone como `noise_psk` en
+  `detect/cameras_config.json`) y una contraseña de OTA propia.
+- **Probar el hardware** sin esperar a que haya detecciones, con
+  `esphome logs esp32-s3-cam-servo.yaml` abierto:
+  `POST http://<servidor>:8080/cameras/<camera_id>/servo` con
+  `{"pan": 0, "tilt": 0}`. También hay un botón *"Servos a reposo"* en Home
+  Assistant. `GET /cameras/<camera_id>/status` indica en `consumers` si la placa
+  llegó a publicar el servicio.
+
+El lado Python está en `detect/servo_tracker.py`; la lógica de seguimiento
+(bloqueo de objetivo, zona muerta, rate limit) se documenta en
+`detect/docs/ARQUITECTURA.md`.
 
 ---
 

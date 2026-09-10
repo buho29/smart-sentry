@@ -4,10 +4,12 @@
 /.esphome/
 /secrets.yaml
 
-# Ignorar todos los YAML de la raíz menos huerta* y esp32-s3-cam
+# Ignorar todos los YAML de la raíz menos las variantes de placa del proyecto
+# (huerta*, esp32-s3-cam*): los proxies BLE y las pruebas sueltas no se versionan.
 /*.yaml
 !/huerta*.yaml
 !/esp32-s3-cam.yaml
+!/esp32-s3-cam-servo.yaml
 
 # Código viejo / descartado
 old/

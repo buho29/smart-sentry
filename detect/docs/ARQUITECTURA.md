@@ -290,6 +290,7 @@ serializa a `cameras_config.json`.
 | `default_infer` | Qué devuelven `/stream` y `/snapshot` si no se pasa `?infer=`. |
 | `noise_psk` | `api.encryption.key` del YAML de la placa. Si se rellena, la sesión abre además el `EsphomeController`. |
 | `esphome_state_object_id` | `object_id` del `binary_sensor` a vigilar (`"estado"` por defecto). |
+| `servo` | Sección anidada (`ServoConfig`) con los ajustes de la torreta pan/tilt. `None` = esta variante de placa no lleva servos y no se crea el consumidor. Requiere `noise_psk`, porque las órdenes van por la API nativa. |
 
 Ver [`cameras_config.example.json`](../cameras_config.example.json) para un
 ejemplo completo.
@@ -446,7 +447,9 @@ Referencias locales otra vez. Obtiene el modelo con `get_model()`. Bucle:
 1. Calcula si el keep-alive está activo (config de cámara o global) y el
    `wait_timeout` (0.05 s si CUDA + keepalive, si no 1 s).
 2. `raw_queue.get(timeout=wait_timeout)`.
-3. **Si salta `queue.Empty`** (no llegó frame): si CUDA + keepalive, hace
+3. **Si salta `queue.Empty`** (no llegó frame): avisa a los consumidores con
+   `on_idle()` (ver §6.bis) para que puedan caducar su objetivo; si CUDA +
+   keepalive, hace
    `model.predict()` sobre un frame negro. **Por qué:** la GTX 1080 produce
    inferencias corruptas (confianzas fuera de 0-1) cuando el driver baja el
    P-state entre frames; las anomalías coinciden al segundo con las
@@ -456,15 +459,26 @@ Referencias locales otra vez. Obtiene el modelo con `get_model()`. Bucle:
 5. Decide qué hace falta releyendo los contadores y `cfg.default_infer` **en
    cada frame** (por eso cambiar `default_infer` por API afecta a streams ya
    abiertos):
-   - `want_infer` = hay `_infer_clients`, o hay `_follow_clients` y
-     `default_infer` está a `True`.
+   - `want_draw` = hay `_infer_clients`, o hay `_follow_clients` y
+     `default_infer` está a `True`. Es decir: **alguien está mirando el vídeo
+     anotado**.
+   - `want_infer` = `want_draw` **o** algún consumidor pide inferencia
+     (`wants_inference()`). Un seguimiento de servos necesita las detecciones
+     pero no el dibujo, así que sin clientes se ejecuta YOLO y se ahorra pintar
+     cajas y recodificar el JPEG.
    - `want_raw` = hay `_raw_clients`, o hay `_follow_clients` y `default_infer`
      a `False`.
 6. **Si `want_infer`:** `model.track(frame, persist=True,
-   tracker="bytetrack.yaml", classes=...)` → para cada caja dibuja
-   rectángulo, punto central, y `label conf #track_id`; añade un overlay con
-   `ms`, device y fps; `cv2.imencode(".jpg")` → `annotated_bytes`. Guarda
-   `last_inference_ms`. Errores → `last_error`.
+   tracker="bytetrack.yaml", classes=...)`, y las cajas se traducen **una sola
+   vez** a una lista de `Detection` (objetos planos, sin dependencia de
+   ultralytics). Con esa lista:
+   - **si `want_draw`**, dibuja rectángulo, punto central y
+     `label conf #track_id` por detección, añade el overlay de `ms`/device/fps y
+     `cv2.imencode(".jpg")` → `annotated_bytes`;
+   - y en cualquier caso la entrega a los consumidores con
+     `on_detections(dets, w, h)`.
+
+   Guarda `last_inference_ms`. Errores → `last_error`.
 7. **Si `want_raw` o falló la inferencia:** `cv2.imencode` del frame crudo →
    `raw_bytes`.
 8. Bajo `_cond`: actualiza `_latest_raw_jpeg` / `_latest_annotated_jpeg`,
@@ -489,8 +503,76 @@ frame.
 ### `status()` — [`main.py:996`](../main.py#L996)
 
 Dict de diagnóstico para `/status`: running, `explicit_start`, los tres
-contadores, últimas métricas, `last_error`, `esphome_connected` y la config
-entera.
+contadores, últimas métricas, `last_error`, `esphome_connected`, el `status()`
+de cada consumidor bajo `consumers` y la config entera.
+
+---
+
+## 6.bis Consumidores de detecciones — [`detections.py`](../detections.py)
+
+El punto de extensión del pipeline. Existe porque el proyecto tiene **varias
+variantes de placa** (cámara sola, cámara+PIR, cámara+servos para seguimiento,
+cámara+PIR+servos para la pistola) y meter la lógica de cada una dentro de
+`_process_loop` lo convertiría en un amasijo de condicionales por variante,
+imposible de probar sin GPU y sin hardware delante.
+
+En su lugar, `_process_loop` solo **produce** detecciones y se las pasa a los
+consumidores que la sesión tenga registrados en `self._consumers`.
+
+- **`Detection`** — dataclass plana: `x1,y1,x2,y2` (píxeles del frame original),
+  `cls`, `label`, `conf`, `track_id` (`None` si ByteTrack aún no lo confirmó) y
+  las propiedades `cx`, `cy`, `area`. **No depende de ultralytics**: por eso los
+  consumidores se prueban construyéndolas a mano.
+- **`DetectionConsumer`** (Protocol) — `on_detections(dets, width, height)`,
+  `on_idle()`, `wants_inference()`, `status()`, `shutdown()`.
+
+**Todos los métodos corren en el hilo de proceso (`yolo-<camera_id>`), en el
+camino crítico del vídeo: no deben bloquear.** Para hablar con la placa hay que
+usar algo asíncrono como `EsphomeController.move_servo()`, que solo encola la
+orden en otro hilo.
+
+`CameraSession` los invoca siempre a través de `_avisar_consumidores(metodo,
+*args)`, que envuelve cada llamada en su propio `try`: un fallo de un consumidor
+no puede tumbar el pipeline de vídeo. En `shutdown()` se les avisa **antes** que
+al `EsphomeController`, para que puedan dejar el hardware en reposo con la
+conexión todavía viva.
+
+Añadir una variante nueva = un módulo con un consumidor + una sección en
+`CameraConfig`. `_process_loop` no se vuelve a tocar.
+
+### `ServoTracker` — [`servo_tracker.py`](../servo_tracker.py)
+
+Primer consumidor: mueve una torreta pan/tilt para centrar un objetivo.
+
+- **Elección de objetivo por bloqueo de track ID.** Engancha uno (el más cercano
+  al centro de entre los que tienen `track_id`) y lo sigue mientras siga
+  visible. Recalcular el "mejor" cada frame haría que la torreta saltara entre
+  objetos en cuanto uno se acercara un píxel más al centro. Al perderlo se le da
+  un margen de `lost_target_sec` antes de soltarlo, para que una oclusión de dos
+  frames no cambie de objetivo.
+- **Control proporcional sobre el error normalizado.** `ex = (cx - w/2)/(w/2)`,
+  `ey` análogo, ambos en `[-1, 1]` (independientes de la resolución). Se corrige
+  `gain * error` en cada envío en vez de saltar a una posición absoluta: no
+  conocemos ni la geometría del montaje ni el campo de visión de la lente, así
+  que calcular ángulos sería inventarse una precisión que no existe. El lazo
+  cerrado converge igual y no necesita calibración.
+- **Zona muerta** (`deadzone`): con el objetivo ya centrado no se envía nada. Sin
+  ella el servo tiembla sin parar persiguiendo el ruido de la caja, que baila
+  unos píxeles entre frames aunque el objeto esté quieto.
+- **Rate limit** (`min_interval_sec`): a 25 fps, un servicio por frame satura la
+  API nativa sin ganar nada, porque el servo tarda más en llegar a la posición
+  que en llegar el frame siguiente. El control manual (`move_to`) lo salta a
+  propósito.
+
+**Contrato con el firmware:** servicio `set_servo_position` con variables
+`pan` y `tilt` en el rango **-1.0 a 1.0** (lo que espera `servo.write` de
+ESPHome). El nombre se busca literal en `_try_connect_once`, así que renombrarlo
+en el YAML deja el seguimiento mudo sin dar ningún error; `has_servo_service` lo
+expone en `/status` justamente para poder descartar eso de un vistazo. Firmware
+de referencia: [`esphome/esp32-s3-cam-servo.yaml`](../../esphome/esp32-s3-cam-servo.yaml).
+
+Pruebas: [`test/test_servo_tracker.py`](../test/test_servo_tracker.py), sin GPU
+ni ESP32 (placa de mentira que apunta las órdenes recibidas).
 
 ---
 
@@ -543,6 +625,20 @@ de la LAN.
 | `POST /cameras/{id}/inference/config` | `set_inference_config` | Cambia `confidence` / `imgsz` / `classes` (modelo `InferenceConfig`), persiste. Efecto inmediato (se releen por frame). |
 | `POST /cameras/{id}/config/keepalive` | `set_camera_keepalive` | Override de keep-alive por cámara. |
 | `POST /cameras/{id}/stream/config` | `set_stream_default` | Cambia `default_infer` (modelo `StreamDefaultConfig`); los streams en modo "follow" cambian en caliente. |
+
+### Servos (variantes con torreta)
+
+| Método / ruta | Función | Qué hace |
+| --- | --- | --- |
+| `POST /cameras/{id}/servo` | `move_servo` | Control manual: `{"pan": p, "tilt": t}` en `[-1, 1]`. Salta el rate limit del seguimiento, para poder verificar el hardware sin depender de que haya detecciones. |
+| `POST /cameras/{id}/servo/tracking` | `set_servo_tracking` | `{"enabled": bool}` — activa/desactiva el seguimiento automático sin quitar el control manual. Persiste. |
+
+Ambos pasan por `get_servo_tracker(camera_id)`, que distingue los tres motivos
+por los que la torreta puede no responder: **400** si la cámara no tiene sección
+`servo` (o le falta `noise_psk`), **503** si no hay conexión con la placa, y
+**503** con mensaje propio si la placa está conectada pero **no publica
+`set_servo_position`** (firmware sin servos) — el caso que más despista, porque
+`move_servo()` falla en silencio.
 
 ### Consumo de vídeo
 

@@ -30,8 +30,11 @@ import torch
 from aioesphomeapi import APIClient
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from ultralytics import YOLO
+
+from detections import Detection, DetectionConsumer
+from servo_tracker import ServoConfig, ServoTracker
 
 # Todos los mensajes de este servicio salen por print(). Lo envolvemos una
 # sola vez para anteponer la hora local en el mismo formato que usa el log de
@@ -379,6 +382,16 @@ class EsphomeController:
     def is_connected(self) -> bool:
         return self._connected.is_set()
 
+    @property
+    def has_servo_service(self) -> bool:
+        """Si la placa publicó el servicio `set_servo_position`.
+
+        move_servo() falla en silencio cuando no existe (firmware sin servos),
+        que es indistinguible de "está apuntando mal" mirando solo el vídeo.
+        Esto lo expone en /status para poder descartarlo de un vistazo.
+        """
+        return self._servo_service is not None
+
     def _run_loop(self):
         asyncio.set_event_loop(self._loop)
         try:
@@ -624,6 +637,12 @@ class CameraConfig(BaseModel):
     noise_psk: Optional[str] = None  # api.encryption.key del YAML de la placa
     esphome_state_object_id: Optional[str] = "estado"
 
+    # Hardware opcional de esta placa. None = esta variante no lo lleva, y
+    # entonces la sesión ni siquiera crea el consumidor correspondiente. Va como
+    # sección anidada y no como campos sueltos para que las variantes futuras
+    # (p.ej. la pistola) añadan su propia sección sin ensanchar esto.
+    servo: Optional[ServoConfig] = None
+
 
 # ---------------------------------------------------------------------------
 # Sesión de cámara
@@ -684,6 +703,23 @@ class CameraSession:
                     watch_entity_object_id=cfg.esphome_state_object_id,
                     on_state_value=self._on_esphome_state,
                 )
+
+        # Consumidores de detecciones (ver detections.py): lo que cada variante
+        # de placa hace con lo que ve la cámara. Vacío para una cámara normal,
+        # que así se comporta exactamente igual que antes de que esto existiera.
+        self._consumers: list[DetectionConsumer] = []
+        self.servo_tracker: Optional[ServoTracker] = None
+        if cfg.servo is not None:
+            if self.esphome is None:
+                # Los servos van por la API nativa de la placa, que solo se
+                # levanta con noise_psk. Sin ella no hay por dónde enviar nada,
+                # y arrancar el seguimiento igualmente solo serviría para forzar
+                # inferencia continua sin efecto ninguno.
+                print(f"[{cfg.camera_id}] servo configurado pero sin noise_psk: "
+                      f"no hay API de ESPHome por la que mover nada, lo ignoro")
+            else:
+                self.servo_tracker = ServoTracker(cfg.servo, self.esphome, cfg.camera_id)
+                self._consumers.append(self.servo_tracker)
 
     def _on_esphome_state(self, value: Optional[bool]):
         # `estado` es un binary_sensor en el YAML de la placa, así que el valor
@@ -778,7 +814,15 @@ class CameraSession:
         que el proceso muera; solo lo dejamos dicho en el log.
         """
         self.stop(explicit=True)
-        # Primero el controller: así deja de reintentar contra la placa y
+        # Los consumidores, ANTES del controller: un ServoTracker aprovecha su
+        # shutdown() para volver a reposo, y para eso la conexión con la placa
+        # todavía tiene que estar viva.
+        for c in self._consumers:
+            try:
+                c.shutdown()
+            except Exception as e:
+                print(f"[{self.cfg.camera_id}] {type(c).__name__}.shutdown falló:", repr(e))
+        # Después el controller: así deja de reintentar contra la placa y
         # cierra su socket de la API nativa (6053) mientras los hilos de vídeo
         # terminan de salir, en vez de en serie después de ellos.
         if self.esphome is not None:
@@ -998,6 +1042,29 @@ class CameraSession:
             if span > 0:
                 self.pipeline_fps = (len(fps_window) - 1) / span
 
+    def _avisar_consumidores(self, metodo: str, *args):
+        """Llama a un método de cada consumidor sin dejar que uno tumbe el resto.
+
+        Esto corre en el hilo de proceso, en el camino crítico del vídeo: un
+        fallo moviendo servos no puede llevarse por delante el stream, así que
+        cada uno va en su propio try.
+        """
+        for c in self._consumers:
+            try:
+                getattr(c, metodo)(*args)
+            except Exception as e:
+                self.last_error = repr(e)
+                print(f"[{self.cfg.camera_id}] {type(c).__name__}.{metodo} falló:", repr(e))
+
+    def _consumidores_quieren_inferencia(self) -> bool:
+        for c in self._consumers:
+            try:
+                if c.wants_inference():
+                    return True
+            except Exception:
+                pass
+        return False
+
     def _process_loop(self):
         # Referencias LOCALES de esta generación (ver comentario en _read_loop
         # sobre por qué no se puede usar self._stop_event/self._raw_queue
@@ -1035,6 +1102,9 @@ class CameraSession:
             try:
                 frame = raw_queue.get(timeout=wait_timeout)
             except queue.Empty:
+                # Sin frame: que los consumidores puedan caducar su objetivo en
+                # vez de quedarse apuntando a algo que ya no se ve.
+                self._avisar_consumidores("on_idle")
                 if calentando:
                     calentar()
                 elif is_cuda and keepalive_on and not en_reposo:
@@ -1060,7 +1130,14 @@ class CameraSession:
             # está a true en este momento; como se relee en cada frame, cambiar
             # default_infer por API afecta a los clientes ya conectados sin que
             # tengan que reconectar.
-            want_infer = self._infer_clients > 0 or (self._follow_clients > 0 and self.cfg.default_infer)
+            # want_draw = alguien está mirando el vídeo anotado. Se separa de
+            # want_infer porque un consumidor (los servos) necesita la
+            # inferencia pero no el dibujo: sin clientes, pintar cajas y
+            # recodificar el JPEG sería trabajo tirado en cada frame.
+            want_draw = self._infer_clients > 0 or (self._follow_clients > 0 and self.cfg.default_infer)
+            # Los consumidores (servos, etc.) también piden inferencia: sin eso,
+            # el seguimiento se apagaría en cuanto se cierra el navegador.
+            want_infer = want_draw or self._consumidores_quieren_inferencia()
             want_raw = self._raw_clients > 0 or (self._follow_clients > 0 and not self.cfg.default_infer)
             annotated_bytes = None
             raw_bytes = None
@@ -1074,26 +1151,43 @@ class CameraSession:
                         tracker="bytetrack.yaml", classes=self.cfg.classes,
                     )[0]
                     inference_ms = (time.time() - t0) * 1000
-                    annotated = frame.copy()
-                    for box in results.boxes:
-                        x1, y1, x2, y2 = [float(v) for v in box.xyxy[0]]
-                        label = model.names[int(box.cls)]
-                        conf_val = float(box.conf[0])
-                        tid = int(box.id) if box.id is not None else -1
-                        cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
-                        cv2.rectangle(annotated, (int(x1), int(y1)), (int(x2), int(y2)), BOX_COLOR, BOX_THICKNESS)
-                        cv2.circle(annotated, (cx, cy), CENTER_DOT_RADIUS, BOX_COLOR, -1)
-                        cv2.putText(annotated, f"{label} {conf_val:.2f} #{tid}", (int(x1), int(y1) - 8),
-                                    cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, BOX_COLOR, FONT_THICKNESS)
 
-                    cv2.putText(annotated, f"{inference_ms:.0f} ms ({self.cfg.device}) | "
-                                            f"{self.pipeline_fps:.1f} fps", (10, 20),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                    # Las cajas se traducen UNA vez a objetos planos: los usan
+                    # tanto el dibujo como los consumidores, y así estos últimos
+                    # no dependen de ultralytics y se pueden probar sin GPU.
+                    dets = [
+                        Detection(
+                            *[float(v) for v in box.xyxy[0]],
+                            cls=int(box.cls),
+                            label=model.names[int(box.cls)],
+                            conf=float(box.conf[0]),
+                            track_id=int(box.id) if box.id is not None else None,
+                        )
+                        for box in results.boxes
+                    ]
 
-                    ok, buf = cv2.imencode(".jpg", annotated)
-                    if ok:
-                        annotated_bytes = buf.tobytes()
+                    if want_draw:
+                        annotated = frame.copy()
+                        for d in dets:
+                            tid = d.track_id if d.track_id is not None else -1
+                            cv2.rectangle(annotated, (int(d.x1), int(d.y1)), (int(d.x2), int(d.y2)),
+                                          BOX_COLOR, BOX_THICKNESS)
+                            cv2.circle(annotated, (int(d.cx), int(d.cy)), CENTER_DOT_RADIUS, BOX_COLOR, -1)
+                            cv2.putText(annotated, f"{d.label} {d.conf:.2f} #{tid}",
+                                        (int(d.x1), int(d.y1) - 8),
+                                        cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, BOX_COLOR, FONT_THICKNESS)
+
+                        cv2.putText(annotated, f"{inference_ms:.0f} ms ({self.cfg.device}) | "
+                                                f"{self.pipeline_fps:.1f} fps", (10, 20),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+
+                        ok, buf = cv2.imencode(".jpg", annotated)
+                        if ok:
+                            annotated_bytes = buf.tobytes()
                     self.last_inference_ms = inference_ms
+
+                    h, w = frame.shape[:2]
+                    self._avisar_consumidores("on_detections", dets, w, h)
                 except Exception as e:
                     self.last_error = repr(e)
                     print(f"[{self.cfg.camera_id}] error en track/dibujo:", repr(e))
@@ -1174,6 +1268,7 @@ class CameraSession:
             "pipeline_fps": round(self.pipeline_fps, 1),
             "last_error": self.last_error,
             "esphome_connected": self.esphome.is_connected if self.esphome else None,
+            "consumers": {type(c).__name__: c.status() for c in self._consumers},
             "config": self.cfg.dict(),
         }
 
@@ -1344,6 +1439,56 @@ async def set_camera_keepalive(camera_id: str, cfg: KeepaliveConfig):
     session = get_camera(camera_id)
     if cfg.enabled is not None:
         session.cfg.keepalive_enabled = cfg.enabled
+    save_cameras_to_disk()
+    return session.status()
+
+
+# ---------------------------------------------------------------------------
+# Servos (variantes de placa con torreta pan/tilt)
+# ---------------------------------------------------------------------------
+
+class ServoPosition(BaseModel):
+    # Mismo rango que espera `servo.write` en el YAML: -1 = un extremo,
+    # 0 = reposo, 1 = el otro. Nada de grados en ninguna capa.
+    pan: float = Field(..., ge=-1.0, le=1.0)
+    tilt: float = Field(..., ge=-1.0, le=1.0)
+
+
+class ServoTrackingConfig(BaseModel):
+    enabled: bool
+
+
+def get_servo_tracker(camera_id: str) -> ServoTracker:
+    """La torreta de una cámara, o el error que explique por qué no la hay."""
+    session = get_camera(camera_id)
+    if session.servo_tracker is None:
+        raise HTTPException(400, f"la cámara '{camera_id}' no tiene servos configurados "
+                                 f"(falta la sección 'servo' y/o noise_psk)")
+    if session.esphome is not None and not session.esphome.is_connected:
+        raise HTTPException(503, f"sin conexión con la placa de '{camera_id}'")
+    if session.esphome is not None and not session.esphome.has_servo_service:
+        # El caso que más despista: todo conectado, pero el firmware no expone
+        # `set_servo_position`, así que move_servo() no haría absolutamente nada.
+        raise HTTPException(503, f"la placa de '{camera_id}' no publica el servicio "
+                                 f"'set_servo_position' (¿firmware sin servos?)")
+    return session.servo_tracker
+
+
+@app.post("/cameras/{camera_id}/servo")
+async def move_servo(camera_id: str, pos: ServoPosition):
+    """Control manual directo, para verificar el hardware sin depender de que
+    haya detecciones. Salta el rate limit del seguimiento a propósito."""
+    tracker = get_servo_tracker(camera_id)
+    tracker.move_to(pos.pan, pos.tilt)
+    return tracker.status()
+
+
+@app.post("/cameras/{camera_id}/servo/tracking")
+async def set_servo_tracking(camera_id: str, cfg: ServoTrackingConfig):
+    """Activa/desactiva el seguimiento automático sin quitar el control manual."""
+    session = get_camera(camera_id)
+    tracker = get_servo_tracker(camera_id)
+    tracker.cfg.enabled = cfg.enabled
     save_cameras_to_disk()
     return session.status()
 

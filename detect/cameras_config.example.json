@@ -13,5 +13,32 @@
     "default_infer": true,
     "noise_psk": "",
     "esphome_state_object_id": "huerta_estado"
+  },
+  {
+    "_comentario": "Variante con torreta pan/tilt (firmware esphome/esp32-s3-cam-servo.yaml). La sección 'servo' es opcional: sin ella la cámara no mueve nada. Necesita noise_psk, porque las órdenes van por la API nativa de la placa. Todos los campos de 'servo' tienen valor por defecto; se listan aquí para saber qué se puede tocar.",
+    "camera_id": "torreta",
+    "stream_url": "http://CAMERA_IP:8080/",
+    "model_name": "yolo26m",
+    "device": "cuda",
+    "confidence": 0.5,
+    "imgsz": 640,
+    "classes": [
+      0
+    ],
+    "default_infer": true,
+    "noise_psk": "LA_MISMA_QUE_api.encryption.key_DEL_YAML",
+    "esphome_state_object_id": "estado",
+    "servo": {
+      "enabled": true,
+      "gain": 0.25,
+      "deadzone": 0.06,
+      "min_interval_sec": 0.08,
+      "invert_pan": false,
+      "invert_tilt": false,
+      "lost_target_sec": 1.5,
+      "home_pan": 0.0,
+      "home_tilt": 0.0,
+      "return_home_on_lost": false
+    }
   }
 ]
