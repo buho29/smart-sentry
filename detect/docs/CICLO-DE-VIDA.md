@@ -53,6 +53,30 @@ se recupera al hacer `DELETE` de la última cámara que lo usaba**. Si algún d�
 molesta, el sitio para liberarlo es `remove_camera`, contando antes cuántas
 sesiones vivas siguen usando esa clave.
 
+### El keep-alive de GPU tiene fecha de caducidad
+
+`_process_loop` lanza una inferencia dummy cada `keepalive_interval_sec`
+(0,05 s) cuando la cola está vacía, para que el driver de la GTX 1080 no baje
+de P-state entre frames y devuelva inferencias corruptas.
+
+Eso **solo tiene sentido entre frames de un stream vivo**, en huecos de decenas
+de milisegundos. Sin ese límite, una cámara desaparecida dejaba el hilo de
+proceso lanzando 20 inferencias por segundo indefinidamente: medido con
+`nvidia-smi`, **29 % de una GTX 1080 con cero frames entrando**, para siempre.
+
+Ahora, pasados `keepalive_idle_limit_sec` (3 s, configurable en
+`GLOBAL_CONFIG` y por `POST /config/keepalive`) sin un frame real, el
+keep-alive se pausa y el `queue.get()` pasa a esperar 1 s en vez de 0,05 s, así
+que el hilo queda de verdad en reposo. Medido: **29 % → 2 %**, con el reposo
+del sistema en 4 %.
+
+Al volver los frames se lanza **una** dummy antes de la primera inferencia
+real, para recalentar: así se conserva la garantía del workaround de P-state,
+que es justo lo que el keep-alive protege. Medido: vuelve a 29 %.
+
+La decisión vive en `_toca_keepalive()`, una función pura precisamente para
+poder probarla sin GPU.
+
 ### `lifespan`
 
 - **Arranque:** `load_cameras_from_disk()` reconstruye las sesiones guardadas
@@ -152,6 +176,16 @@ su propio pie y **espera al hilo**; el hilo cierra el socket y el loop en
 
 `shutdown()` es idempotente, y `notify_awake()` / `move_servo()` comprueban
 `_closed` antes de tocar el loop, así que llamarlos después no lanza nada.
+
+> **Cuidado con los `clear()` de `_wake_event`.** Tras un intento de conexión
+> fallido, `_reconnect_loop` hace `_wake_event.clear()` antes de esperar los
+> `safety_retry_sec`. Si `shutdown()` acaba de levantar ese evento, el `clear()`
+> se lo lleva por delante y el hilo se queda los **30 s** enteros esperando
+> pese a estar parando — el `join(timeout=1.5)` expira y el loop nunca se
+> cierra. Por eso justo después del `clear()` hay un `if self._stopping: break`:
+> como `shutdown()` pone `_stopping` **antes** de programar el `set`, la ventana
+> queda cerrada por los dos lados (si ganó el `clear()`, lo ve el `if`; si no,
+> el `set` despierta al `wait`). Lo cazó el caso 4 de `test_cierre.py`.
 
 ---
 
@@ -260,7 +294,59 @@ pedida, la excepción es la consecuencia, no la causa.
 
 ---
 
-## 7. Presupuesto de tiempo al cerrar
+## 7. El orden de apagado de uvicorn (y por qué importa)
+
+`Server.shutdown()` (`uvicorn/server.py`) apaga en **tres pasos, en este
+orden**:
+
+1. Deja de aceptar conexiones nuevas.
+2. **Espera a que terminen las respuestas en vuelo**, como mucho
+   `--timeout-graceful-shutdown` segundos. Si expira, las cancela a la fuerza y
+   loguea `Cancel N running task(s), timeout graceful shutdown exceeded`.
+3. **Solo entonces** ejecuta el shutdown del `lifespan`, que es donde nosotros
+   paramos las cámaras.
+
+Esto crea un **bloqueo circular** con los streams MJPEG, que son bucles
+infinitos: si un generador solo mirase `_stop_event`, no podría salir hasta el
+paso 3, que no llega hasta que el paso 2 se rinde por timeout. Con clientes
+conectados, cada Ctrl+C costaba los 5 s enteros y soltaba un `CancelledError`
+por cliente.
+
+La salida es que uvicorn instala sus handlers de señal **antes** de arrancar el
+lifespan:
+
+```python
+async def serve(self, sockets=None):
+    with self.capture_signals():    # <- handlers puestos aquí
+        await self._serve(sockets)  # <- _serve -> startup() -> lifespan.startup()
+```
+
+Así que `_install_shutdown_signal_hook()`, llamado desde el arranque de nuestro
+`lifespan`, se **encadena** a `Server.handle_exit`: levanta la bandera global
+`_SHUTTING_DOWN` y luego delega. Los generadores miran `is_shutting_down()` y
+salen en el "paso 0", así que el paso 2 termina enseguida.
+
+Detalles que importan:
+
+- **Es un `bool` de módulo, no un `threading.Event`.** Una asignación es
+  atómica y segura desde un handler de señal; `Event.set()` coge un lock y no
+  lo es del todo.
+- **Hay que delegar en el handler previo.** Si nos comiéramos la señal,
+  uvicorn no se enteraría del Ctrl+C y no se apagaría nunca.
+- **Se encadenan las mismas señales que captura uvicorn**: `SIGINT`, `SIGTERM`
+  y, en Windows, `SIGBREAK` (Ctrl+Break).
+- El generador espera con `timeout=1.0` (no 5 s): es cada cuánto revisa las
+  banderas si la cámara ha dejado de publicar frames. Con 5 s, un cliente
+  pegado a una cámara parada podía tardar más que el propio
+  `--timeout-graceful-shutdown` en enterarse.
+
+Medido con dos streams abiertos: de 5 s + 2 `CancelledError` a **1,4 s y
+ningún error**; ni siquiera llega a aparecer `Waiting for connections to
+close`.
+
+---
+
+## 8. Presupuesto de tiempo al cerrar
 
 uvicorn arranca con `--timeout-graceful-shutdown 5`, y `lifespan` da 5 s por
 sesión. `CameraSession.shutdown()` se ajusta a eso:
@@ -285,7 +371,7 @@ log, pero no impide que el proceso muera.
 
 ---
 
-## 8. Recursos por cliente HTTP
+## 9. Recursos por cliente HTTP
 
 Un generador MJPEG vive lo que dure la respuesta. `add_client()` al entrar,
 `remove_client()` en un `finally`, así que un cliente que se va sin avisar
@@ -305,7 +391,7 @@ cliente lento no acumula memoria, solo se salta frames.
 
 ---
 
-## 9. Resumen de qué se suelta y qué no
+## 10. Resumen de qué se suelta y qué no
 
 **Se suelta correctamente:**
 
@@ -329,3 +415,66 @@ cliente lento no acumula memoria, solo se salta frames.
   streams a la vez.
 - `asyncio.CancelledError` hereda de `BaseException`, no de `Exception`: un
   `except Exception` no la caza y se escapa del hilo.
+- Cualquier respuesta de duración indefinida que se añada tiene que mirar
+  `is_shutting_down()`, o volverá a bloquear el paso 2 del apagado (§7).
+- Un `Event.clear()` puede borrar una señal de parada que acaba de llegar. Si
+  se añade otro, comprobar `_stopping` justo después (ver §4).
+- **Que muera un hilo no para la sesión.** Cuando `_read_loop` se rinde tiene
+  que llamar a `stop()`, o el hilo de proceso se queda vivo quemando GPU con el
+  keep-alive (§2). Y esa llamada debe ir guardada por
+  `self._stop_event is stop_event`: sin esa comparación por identidad, un
+  lector agonizante mataría a la generación **nueva** si ya hubiera arrancado
+  otra (§3).
+
+Los dos tests de `test/` cubren todo esto sin necesidad de las placas:
+`test_cierre.py` para las piezas sueltas y `test_apagado_e2e.py` para el
+apagado real de uvicorn con dos streams abiertos.
+
+---
+
+## 11. Dos avisos del log que son inofensivos
+
+Ya investigados; **ninguno es nuestro** y ninguno indica una fuga.
+
+### `OSError: [WinError 10038]` al final del todo
+
+```
+Exception ignored when trying to send to the signal wakeup fd:
+  File "...\asyncio\runners.py", line 150, in _on_sigint
+OSError: [WinError 10038] ... operación en un elemento que no es un socket
+```
+
+Lo provoca uvicorn **a propósito**: al terminar, `capture_signals` restaura los
+handlers originales y **re-lanza** la señal capturada, para reproducir el
+comportamiento que se esperaría:
+
+```python
+for captured_signal in reversed(self._captured_signals):
+    signal.raise_signal(captured_signal)
+```
+
+En Windows, ese SIGINT re-lanzado hace que CPython escriba en el socket de
+*signal wakeup fd* que el `Runner` de `asyncio.run` ya ha cerrado →
+`WSAENOTSOCK`. Se imprime **después** de `Finished server process`, o sea con
+todo ya cerrado, y lo escribe código C durante el manejo de la señal: **no se
+puede capturar desde Python**. Solo aparece con Ctrl+C en una consola
+interactiva; no con SIGTERM (Docker, servicios), y suele desaparecer en Python
+3.12+.
+
+### `Timezone resolution failed ... attached to a different loop`
+
+```
+192.168.1.56: Timezone resolution failed: Task <...get_timezone()...>
+got Future <Future pending> attached to a different loop
+```
+
+`aioesphomeapi.timezone.get_timezone()` cachea un future **global**: el primer
+`EsphomeController` lo crea en su event loop y el segundo intenta esperarlo
+desde el suyo, que es distinto. Es consecuencia directa de nuestro diseño de
+*un event loop por controller* (§4), y solo afecta a la caché de zona horaria,
+que no usamos: las dos placas conectan igual (~660 ms medidos).
+
+Aparece solo con **dos o más** cámaras con `noise_psk`. Si algún día molesta,
+la solución sería un único hilo + loop compartido por todos los
+`EsphomeController` en vez de uno por cada uno; es un refactor de cierto
+tamaño y no arregla nada más, así que de momento se queda documentado.

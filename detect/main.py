@@ -11,6 +11,7 @@ import io
 import json
 import queue
 import re
+import signal
 import socket
 import sys
 import threading
@@ -66,6 +67,20 @@ CENTER_DOT_RADIUS = 4
 _CONTENT_LENGTH_RE = re.compile(rb"Content-Length:\s*(\d+)", re.IGNORECASE)
 
 
+def _motivo(e: BaseException, max_len: int = 90) -> str:
+    """Resumen corto de una excepción para el log.
+
+    Los errores de urllib3 anidan MaxRetryError/HTTPConnectionPool/... y su
+    repr() ocupa unos 400 caracteres. Repetido una vez por segundo y por cámara
+    mientras se reintenta, ahoga el log. El repr completo se sigue guardando en
+    self.last_error, que se expone en /status.
+    """
+    txt = " ".join(str(e).split())
+    if len(txt) > max_len:
+        txt = txt[:max_len - 1] + "…"
+    return f"{type(e).__name__}: {txt}" if txt else type(e).__name__
+
+
 def _quiet_close(resp: "requests.Response"):
     try:
         resp.close()
@@ -118,8 +133,76 @@ def _force_close_response(resp: "requests.Response", tag: str = ""):
     _quiet_close(resp)
 
 
+# ---------------------------------------------------------------------------
+# Aviso temprano de apagado
+# ---------------------------------------------------------------------------
+#
+# uvicorn apaga en tres pasos, en este orden (uvicorn/server.py, Server.shutdown):
+#   1. deja de aceptar conexiones nuevas;
+#   2. ESPERA a que terminen las respuestas en vuelo, como mucho
+#      --timeout-graceful-shutdown segundos, y si expira las cancela a la
+#      fuerza ("Cancel N running task(s), timeout graceful shutdown exceeded");
+#   3. solo entonces ejecuta el shutdown del lifespan, que es donde nosotros
+#      paramos las cámaras.
+#
+# Nuestros streams MJPEG son bucles infinitos que solo salían cuando el
+# lifespan marcaba _stop_event, o sea en el paso 3 -- que no llega hasta que el
+# paso 2 se rinde. Bloqueo circular: con clientes conectados, cada Ctrl+C
+# costaba los 5s enteros y soltaba un CancelledError por cliente.
+#
+# Como uvicorn instala sus handlers de señal ANTES de arrancar el lifespan
+# (Server.serve: `with self.capture_signals(): await self._serve(...)`), desde
+# el arranque del lifespan podemos encadenarnos a ellos y enterarnos de la
+# señal en el "paso 0". Los generadores miran esta bandera y salen solos, así
+# que el paso 2 termina enseguida en vez de agotar el timeout.
+
+_SHUTTING_DOWN = False
+
+# Las mismas que captura uvicorn (server.py, HANDLED_SIGNALS): si nos
+# encadenáramos a menos, un Ctrl+Break apagaría el servidor sin que los
+# generadores se enteraran, que es justo el problema que esto arregla.
+_SEÑALES_APAGADO = (signal.SIGINT, signal.SIGTERM)
+if sys.platform == "win32":
+    _SEÑALES_APAGADO += (signal.SIGBREAK,)  # Ctrl+Break
+
+
+def is_shutting_down() -> bool:
+    return _SHUTTING_DOWN
+
+
+def _install_shutdown_signal_hook():
+    """Encadena un handler propio a los que ya instaló uvicorn (ver arriba)."""
+    if threading.current_thread() is not threading.main_thread():
+        return  # signal.signal solo funciona desde el hilo principal
+
+    for sig in _SEÑALES_APAGADO:
+        try:
+            previo = signal.getsignal(sig)
+        except (ValueError, OSError):
+            continue
+
+        def handler(signum, frame, _previo=previo):
+            # Ojo: esto corre dentro de un handler de señal. Una asignación a
+            # un bool de módulo es atómica y segura aquí; un threading.Event
+            # no lo sería del todo, porque set() coge un lock.
+            global _SHUTTING_DOWN
+            _SHUTTING_DOWN = True
+            # Delegamos en el handler de uvicorn (Server.handle_exit), que es
+            # quien de verdad arranca el apagado ordenado.
+            if callable(_previo):
+                _previo(signum, frame)
+
+        try:
+            signal.signal(sig, handler)
+        except (ValueError, OSError):
+            pass  # p.ej. SIGTERM no soportado en esta plataforma
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Antes del yield: uvicorn ya tiene puestos sus handlers de señal, así que
+    # este es el momento de encadenarnos a ellos.
+    _install_shutdown_signal_hook()
     load_cameras_from_disk()
     yield
     print("Apagando: deteniendo todas las cámaras...")
@@ -151,17 +234,35 @@ class GlobalConfig:
     def __init__(self):
         self.keepalive_enabled: bool = True
         self.keepalive_interval_sec: float = 0.05
+        # Segundos sin recibir un frame real tras los cuales se deja de
+        # calentar la GPU. El keep-alive solo tiene sentido ENTRE frames de un
+        # stream vivo (huecos de decenas de ms); pasado este plazo la cámara no
+        # está dando nada y seguir lanzando inferencias dummy a 20 Hz es quemar
+        # la GPU para nada.
+        self.keepalive_idle_limit_sec: float = 3.0
         self.reconnect_delay_sec: float = 1.0
 
     def as_dict(self):
         return {
             "keepalive_enabled": self.keepalive_enabled,
             "keepalive_interval_sec": self.keepalive_interval_sec,
+            "keepalive_idle_limit_sec": self.keepalive_idle_limit_sec,
             "reconnect_delay_sec": self.reconnect_delay_sec,
         }
 
 
 GLOBAL_CONFIG = GlobalConfig()
+
+
+def _toca_keepalive(is_cuda: bool, activo: bool, segundos_sin_frame: float,
+                    limite: float) -> bool:
+    """¿Hay que lanzar una inferencia dummy para que la GPU no baje de P-state?
+
+    Separado en una función pura para poder probar la lógica sin GPU. Ver el
+    comentario largo sobre el bug de P-state de la GTX 1080 encima de
+    _process_loop.
+    """
+    return is_cuda and activo and segundos_sin_frame < limite
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +453,14 @@ class EsphomeController:
                 # error) -> esperamos hasta el siguiente aviso o hasta la
                 # red de seguridad.
                 self._wake_event.clear()
+                # Ojo con este clear(): si shutdown() acaba de levantar
+                # _wake_event, se lo lleva por delante y nos quedaríamos aquí
+                # los safety_retry_sec (30s) enteros pese a estar parando. Como
+                # shutdown() pone _stopping ANTES de programar el set, mirarlo
+                # justo después del clear cierra la ventana por los dos lados:
+                # si el clear ganó, esto lo ve; si no, el set despierta al wait.
+                if self._stopping:
+                    break
                 try:
                     await asyncio.wait_for(self._wake_event.wait(), timeout=self.safety_retry_sec)
                 except asyncio.TimeoutError:
@@ -373,8 +482,10 @@ class EsphomeController:
                     # cancelaban un intento de conexión en vuelo.
                     pass
                 try:
-                    await self._client.disconnect()
-                except Exception:
+                    # acotado: contra una placa dormida un disconnect sin
+                    # límite podría pasarse del presupuesto de shutdown()
+                    await asyncio.wait_for(self._client.disconnect(), timeout=1.0)
+                except (asyncio.CancelledError, Exception):
                     pass
                 # seguimos en el while: _disconnected_event sigue set -> reintenta ya, sin esperar
 
@@ -686,8 +797,13 @@ class CameraSession:
     def _maybe_autostop(self):
         with self._lock:
             if not self.explicit_start and self.client_count == 0:
+                # Si ya estaba marcado no hay nada que anunciar: es el caso del
+                # apagado, donde stop() ya logueó "lectura detenida" y luego
+                # cada generador pasa por aquí al soltar su cliente.
+                ya_parada = self._stop_event.is_set()
                 self._stop_event.set()
-                print(f"[{self.cfg.camera_id}] sin clientes, lectura detenida automáticamente")
+                if not ya_parada:
+                    print(f"[{self.cfg.camera_id}] sin clientes, lectura detenida automáticamente")
 
     # -- suscripción de clientes -----------------------------------------
 
@@ -834,10 +950,10 @@ class CameraSession:
                 # IP muerta. Paramos; el siguiente `estado=on` nos rearranca
                 # (ver la nota sobre repeticiones en _on_esphome_state).
                 if self.esphome is not None and not self.esphome.is_connected:
-                    print(f"[{self.cfg.camera_id}] stream caído ({e!r}) y API de ESPHome "
+                    print(f"[{self.cfg.camera_id}] stream caído ({_motivo(e)}) y API de ESPHome "
                           f"desconectada -> la placa parece dormida, dejo de reintentar")
                     break
-                print(f"[{self.cfg.camera_id}] stream interrumpido ({e!r}), "
+                print(f"[{self.cfg.camera_id}] stream interrumpido ({_motivo(e)}), "
                       f"reconectando en {GLOBAL_CONFIG.reconnect_delay_sec}s...")
                 time.sleep(GLOBAL_CONFIG.reconnect_delay_sec)
                 continue
@@ -847,6 +963,20 @@ class CameraSession:
                         self._current_response = None
                 if r is not None:
                     r.close()
+
+        # Hemos salido del bucle. Si fue por nuestra cuenta (nos rendimos con
+        # la placa dormida, o ya no queda nadie que quiera la cámara) y no
+        # porque alguien nos parara, hay que parar la SESIÓN entera. Dejando
+        # morir solo a este hilo, el de proceso se queda vivo con la cola vacía
+        # haciendo keep-alive de GPU cada 50 ms indefinidamente: medido, un 54%
+        # de una GTX 1080 con las dos cámaras desenchufadas y cero frames
+        # entrando.
+        #
+        # La comparación por identidad no es opcional: si mientras este hilo
+        # agonizaba ya arrancó otra generación, self._stop_event es un objeto
+        # distinto del nuestro y llamar a stop() mataría a la generación NUEVA.
+        if self._stop_event is stop_event and not stop_event.is_set():
+            self.stop(explicit=True)
 
     # -- hilo de proceso: YOLO + keep-alive de GPU -----------------------
     #
@@ -880,25 +1010,49 @@ class CameraSession:
         model = get_model(self.cfg.model_name, self.cfg.device)
         is_cuda = self.cfg.device.startswith("cuda")
 
+        def calentar():
+            try:
+                model.predict(np.zeros((640, 640, 3), dtype=np.uint8), imgsz=640, verbose=False)
+            except Exception as e:
+                print(f"[{self.cfg.camera_id}] keep-alive de GPU falló:", repr(e))
+
+        ultimo_frame = time.monotonic()
+        en_reposo = False
+
         while not stop_event.is_set():
             keepalive_on = (
                 self.cfg.keepalive_enabled
                 if self.cfg.keepalive_enabled is not None
                 else GLOBAL_CONFIG.keepalive_enabled
             )
-            wait_timeout = GLOBAL_CONFIG.keepalive_interval_sec if (is_cuda and keepalive_on) else 1.0
+            limite = GLOBAL_CONFIG.keepalive_idle_limit_sec
+            calentando = _toca_keepalive(is_cuda, keepalive_on,
+                                         time.monotonic() - ultimo_frame, limite)
+            # Si ya no toca calentar, esperar 1s en vez de 50ms: así el hilo
+            # queda de verdad en reposo en lugar de girar a 20 Hz sin hacer nada.
+            wait_timeout = GLOBAL_CONFIG.keepalive_interval_sec if calentando else 1.0
 
             try:
                 frame = raw_queue.get(timeout=wait_timeout)
             except queue.Empty:
-                if is_cuda and keepalive_on:
-                    try:
-                        model.predict(np.zeros((640, 640, 3), dtype=np.uint8), imgsz=640, verbose=False)
-                    except Exception as e:
-                        print(f"[{self.cfg.camera_id}] keep-alive de GPU falló:", repr(e))
+                if calentando:
+                    calentar()
+                elif is_cuda and keepalive_on and not en_reposo:
+                    en_reposo = True
+                    print(f"[{self.cfg.camera_id}] {limite:.0f}s sin frames -> "
+                          f"keep-alive de GPU en pausa hasta que vuelva la cámara")
                 if stop_event.is_set():
                     break
                 continue
+
+            if en_reposo:
+                # Volvemos de un parón largo con la GPU ya bajada de P-state.
+                # Una dummy antes de la inferencia real conserva la garantía del
+                # workaround: la primera de verdad no sale corrupta.
+                en_reposo = False
+                print(f"[{self.cfg.camera_id}] vuelven los frames -> keep-alive de GPU reanudado")
+                calentar()
+            ultimo_frame = time.monotonic()
 
             self._update_fps(fps_window)
 
@@ -965,11 +1119,25 @@ class CameraSession:
         self.add_client(mode)
         last_seq_seen = -1
         try:
-            while not self._stop_event.is_set():
+            # is_shutting_down() además de _stop_event: en un Ctrl+C el
+            # lifespan (que es quien marca _stop_event) no corre hasta DESPUÉS
+            # de que uvicorn se canse de esperar a este mismo generador. Ver el
+            # comentario de _install_shutdown_signal_hook. Nos despierta el
+            # notify_all() de cada frame publicado, así que salimos en torno a
+            # un frame (~50-100 ms); en el peor caso, el timeout de 5s de abajo.
+            while not self._stop_event.is_set() and not is_shutting_down():
                 with self._cond:
-                    self._cond.wait_for(lambda: self._frame_seq != last_seq_seen or self._stop_event.is_set(),
-                                         timeout=5.0)
-                    if self._stop_event.is_set():
+                    # timeout de 1s (no 5): es cada cuánto revisamos las
+                    # banderas de parada si la cámara ha dejado de publicar
+                    # frames. Con 5s, un cliente pegado a una cámara parada
+                    # podía tardar más que el --timeout-graceful-shutdown en
+                    # enterarse del apagado. El coste es reenviar el último
+                    # frame una vez por segundo en vez de cada cinco.
+                    self._cond.wait_for(lambda: self._frame_seq != last_seq_seen
+                                                or self._stop_event.is_set()
+                                                or is_shutting_down(),
+                                         timeout=1.0)
+                    if self._stop_event.is_set() or is_shutting_down():
                         break
                     last_seq_seen = self._frame_seq
                     # en modo "follow" se relee cfg.default_infer en cada frame, así
@@ -1080,6 +1248,7 @@ async def get_config():
 class KeepaliveConfig(BaseModel):
     enabled: Optional[bool] = None
     interval_sec: Optional[float] = None
+    idle_limit_sec: Optional[float] = None  # solo global; por cámara se ignora
 
 
 @app.post("/config/keepalive")
@@ -1088,6 +1257,8 @@ async def set_global_keepalive(cfg: KeepaliveConfig):
         GLOBAL_CONFIG.keepalive_enabled = cfg.enabled
     if cfg.interval_sec is not None:
         GLOBAL_CONFIG.keepalive_interval_sec = cfg.interval_sec
+    if cfg.idle_limit_sec is not None:
+        GLOBAL_CONFIG.keepalive_idle_limit_sec = cfg.idle_limit_sec
     return GLOBAL_CONFIG.as_dict()
 
 

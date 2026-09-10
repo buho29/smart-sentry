@@ -88,6 +88,18 @@ uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --timeout-graceful-shutd
 
 Documentación interactiva (Swagger): <http://localhost:8080/docs>
 
+### Dos mensajes del log que son normales
+
+- Al hacer **Ctrl+C**, después de `Finished server process`, sale un
+  `OSError: [WinError 10038] ... signal wakeup fd`. Es cosa de uvicorn +
+  CPython en Windows, con todo ya cerrado; no se puede silenciar desde Python.
+- Con **dos o más** cámaras con `noise_psk`, al arrancar sale
+  `Timezone resolution failed ... attached to a different loop`. Es de
+  `aioesphomeapi` y no afecta a la conexión.
+
+Los dos están explicados en
+[`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md#11-dos-avisos-del-log-que-son-inofensivos).
+
 ---
 
 ## Registrar una cámara
@@ -132,6 +144,9 @@ falta llamar a `/start` a mano.
 
 - `GET /health` — vivo / no vivo
 - `GET /config`, `POST /config/keepalive` — configuración global
+  (`enabled`, `interval_sec`, `idle_limit_sec`: segundos sin frames tras los
+  cuales se deja de calentar la GPU, ver
+  [`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md))
 - `GET /cameras`, `POST /cameras`, `DELETE /cameras/{camera_id}` — alta/baja
 - `POST /cameras/{camera_id}/esphome/awake` — forzar "despierto"
 - `POST /cameras/{camera_id}/inference/config` — cambiar confidence, clases, imgsz…
@@ -192,13 +207,21 @@ falta llamar a `/start` a mano.
 
 ```powershell
 venv\Scripts\python.exe test\test_cierre.py
+venv\Scripts\python.exe test\test_apagado_e2e.py
 ```
 
-`test/test_cierre.py` comprueba, **sin necesidad del ESP32**, que al parar una
-cámara se cierran de verdad la conexión del stream, el socket de la API nativa
-y el event loop del `EsphomeController`, y que ningún hilo se queda vivo ni
-muere con un traceback. Usa `192.0.2.1` (TEST-NET-1) para simular una placa
-dormida y un servidor MJPEG local para el caso de conexión viva.
+Ninguno de los dos necesita el ESP32: simulan una placa dormida con
+`192.0.2.1` (TEST-NET-1) y una despierta con un servidor MJPEG local.
+
+- **`test/test_cierre.py`** — al parar una cámara se cierran de verdad la
+  conexión del stream, el socket de la API nativa y el event loop del
+  `EsphomeController`, y ningún hilo se queda vivo ni muere con un traceback.
+  También cubre que un generador MJPEG sale solo con la señal de apagado y que
+  el hook de señal delega en el handler de uvicorn.
+- **`test/test_apagado_e2e.py`** — levanta un uvicorn **de verdad** en un
+  directorio temporal (no toca tu `cameras_config.json`), abre dos streams y le
+  manda un Ctrl+C. Comprueba que el apagado no se come el
+  `--timeout-graceful-shutdown` ni suelta `CancelledError`. Tarda ~20 s.
 
 El resto de scripts de `test/` son pruebas manuales que sí necesitan la placa.
 

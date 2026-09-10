@@ -63,9 +63,6 @@ esphome logs huerta.yaml --device COM10    # logs por USB (puerto serie)
 | `huerta.yaml` | ESP32-S3-DevKitC-1 + cámara + PIR | **Config principal.** Nodo exterior a baterías: deep sleep permanente, despierta por PIR. |
 | `esp32-s3-cam.yaml` | ESP32-S3-DevKitC-1 + cámara | Cámara-proxy siempre encendida, sirve stream/snapshot de forma continua para Frigate/YOLO.
 
-> Solo `huerta*.yaml` y `esp32-s3-cam.yaml` se versionan. Los `proxy*` / `s3proxy*`
-> están en `.gitignore` y viven solo en local.
-
 ---
 
 ## `huerta.yaml` — nodo de la huerta
