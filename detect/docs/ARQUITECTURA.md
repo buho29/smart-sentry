@@ -1,8 +1,8 @@
-# Arquitectura de `detect/main.py`
+# Arquitectura de `detect/`
 
 Documento de referencia del servicio de inferencia YOLO. Explica cómo encaja
 en el proyecto, el modelo de concurrencia, y qué hace cada clase, método y
-endpoint de [`main.py`](../main.py).
+endpoint. El reparto por ficheros está en la [§0](#0-los-módulos).
 
 Para instalar y arrancar el servicio, ver [`README.md`](../README.md). Para
 cuánto vive cada instancia, qué la destruye y cómo se cierran los sockets
@@ -12,6 +12,25 @@ cuando la placa se duerme, ver [`CICLO-DE-VIDA.md`](CICLO-DE-VIDA.md).
 > en la [§10](#10-diagramas). Se renderizan con
 > [Mermaid](https://mermaid.js.org/): GitHub los pinta solos y en VS Code hace
 > falta la extensión *Markdown Preview Mermaid Support*.
+
+---
+
+## 0. Los módulos
+
+| Fichero | Qué es | Líneas |
+| --- | --- | --- |
+| [`camera.py`](../camera.py) | El pipeline de vídeo: leer del ESP32, inferir con YOLO y repartir el stream. Todo lo que ocurre por frame. | 826 |
+| [`main.py`](../main.py) | Solo la API HTTP: el `lifespan` y los endpoints. | 412 |
+| [`esphome_api.py`](../esphome_api.py) | `EsphomeController`: la conexión con la API nativa de la placa. No sabe nada de cámaras, ni de YOLO, ni del hardware concreto: cada variante llama a los servicios que publique su YAML. | 318 |
+| [`servo_tracker.py`](../servo_tracker.py) | La torreta pan/tilt, como consumidor de detecciones. | 181 |
+| [`detections.py`](../detections.py) | `Detection` y el protocolo `DetectionConsumer`: la frontera entre el pipeline y lo que se hace con lo que ve. | 67 |
+| [`apagado.py`](../apagado.py) | La bandera de apagado y el hook de señal encadenado a uvicorn. | 61 |
+| [`registro.py`](../registro.py) | Alta, baja y persistencia de las cámaras en `cameras_config.json`. | 54 |
+| [`log.py`](../log.py) | El `print` con marca de hora. Los demás hacen `from log import print`. | 15 |
+
+Sin ciclos de importación: `log` y `detections` no importan nada del proyecto;
+`servo_tracker` ← `detections`; `esphome_api` ← `log`; `camera` ← todos los
+anteriores + `apagado`; `registro` ← `camera`; `main` ← todos.
 
 ---
 
@@ -91,24 +110,38 @@ placa y hace de multiplexor hacia Home Assistant, el navegador, VLC, etc.
 
 ## 3. Utilidades y estado global
 
-### `print(*args, **kwargs)` — [`main.py:41`](../main.py#L41)
+### `print(*args, **kwargs)` — [`log.py`](../log.py)
 
 Envoltura sobre el `print` nativo (guardado en `_orig_print`) que antepone la
 hora local en formato `[HH:MM:SS.mmm]`, el mismo que usa el log de ESPHome,
 para poder cotejar tiempos entre ambos logs.
 
-### `torch.backends.cudnn.enabled = False` — [`main.py:48`](../main.py#L48)
+### `torch.backends.cudnn.enabled = False` — [`camera.py`](../camera.py)
 
 Necesario en la GTX 1080 (Pascal): con cuDNN activo se produce
 `CUDA misaligned address`.
 
-### Constantes — [`main.py:51-66`](../main.py#L51-L66)
+### Constantes — [`camera.py`](../camera.py)
 
-`CAMERAS_CONFIG_FILE` (dónde se persiste la lista de cámaras),
-colores/grosores de las cajas de detección, y `_CONTENT_LENGTH_RE` (regex para
-extraer el `Content-Length` de cada parte del stream multipart).
+Colores y grosores de las cajas de detección, y `_CONTENT_LENGTH_RE` (la regex
+que usa `_iter_jpegs`). `CAMERAS_CONFIG_FILE`, que es dónde se persiste la
+lista de cámaras, vive con el registro en [`registro.py`](../registro.py).
 
-### `_force_close_response(resp, tag)` — [`main.py:76`](../main.py#L76)
+### `_iter_jpegs(chunks)` — [`camera.py`](../camera.py)
+
+Generador **puro** que trocea el multipart del ESP32 y va soltando los JPEG uno
+a uno, usando el `Content-Length` que declara cada parte. Buscar a mano los
+marcadores `\xff\xd8` / `\xff\xd9` se desincronizaba cuando esos bytes
+aparecían dentro de los datos comprimidos de un JPEG real, y provocaba cuelgues
+de varios minutos.
+
+Vive fuera de `_read_loop` justamente por ser puro —un iterable de bytes
+entra, JPEG salen; ni sockets ni hilos—: así se puede probar sin red la
+cabecera partida entre chunks, el cuerpo partido, el JPEG con marcadores
+dentro, la parte sin `Content-Length` y el salvavidas del buffer. Antes estaba
+incrustado en el bucle y no se probaba ninguno de esos casos.
+
+### `_force_close_response(resp, tag)` — [`camera.py`](../camera.py)
 
 Cierra la conexión HTTP con el ESP32 **sin bloquear a quien llama**. Hace
 `sock.shutdown(SHUT_RDWR)` sobre el socket subyacente antes del `close()`,
@@ -119,7 +152,7 @@ el socket (las tripas de `urllib3` cambian entre versiones) delega el
 `close()` a un hilo desechable. Detalles en
 [`CICLO-DE-VIDA.md`](CICLO-DE-VIDA.md#6-cierre-de-la-conexión-http-con-la-cámara).
 
-### `lifespan(app)` — [`main.py:122`](../main.py#L122)
+### `lifespan(app)` — [`main.py`](../main.py)
 
 Context manager del ciclo de vida de FastAPI:
 
@@ -131,7 +164,7 @@ Context manager del ciclo de vida de FastAPI:
   una tarda más de 5 s, la deja (son hilos daemon, no bloquean el cierre del
   proceso).
 
-### `class GlobalConfig` — [`main.py:150`](../main.py#L150)
+### `class GlobalConfig` — [`camera.py`](../camera.py)
 
 Config global editable en caliente por API. Campos:
 
@@ -142,7 +175,7 @@ Config global editable en caliente por API. Campos:
 `as_dict()` la serializa para el endpoint `GET /config`. La instancia única es
 `GLOBAL_CONFIG`.
 
-### `get_model(name, device)` — [`main.py:175`](../main.py#L175)
+### `get_model(name, device)` — [`camera.py`](../camera.py)
 
 Cache de modelos YOLO compartida entre cámaras. Clave `"{name}_{device}"`. La
 primera vez: `YOLO("{name}.pt")`, `.to(device)`, y una inferencia dummy sobre
@@ -150,15 +183,13 @@ un frame negro 640×640 para **precalentar** (la primera inferencia real de
 YOLO es lentísima). Protegido con `_models_lock` para que dos cámaras
 arrancando a la vez no carguen el mismo modelo dos veces.
 
-### `get_default_model()` — [`main.py:195`](../main.py#L195)
-
-Devuelve el modelo por defecto (`yolo11m` en CUDA si hay, si no CPU) que usan
-los endpoints de prueba puntual (`/detect`, etc.). Carga perezosa: no se
-penaliza el arranque si solo se usan cámaras.
+`DEFAULT_DEVICE` (CUDA si hay, si no CPU) es dónde corre el endpoint de prueba
+puntual `/detect-file`; el modelo lo elige quien llama y se carga perezosamente
+por aquí, así que no se penaliza el arranque si solo se usan cámaras.
 
 ---
 
-## 4. `class EsphomeController` — [`main.py:218`](../main.py#L218)
+## 4. `class EsphomeController` — [`esphome_api.py`](../esphome_api.py)
 
 Conexión persistente a la **API nativa de ESPHome** (puerto 6053) de **una**
 placa. Maneja `APIClient` de `aioesphomeapi` directamente, sin
@@ -171,13 +202,13 @@ síncronos (`CameraSession`) sin bloquearlos.
 
 **Para qué se usa:**
 
-- `move_servo(pan, tilt)` — llama al servicio `set_servo_position` del YAML si
+- `llamar_servicio(nombre, **args)` — llama a cualquier `api: services:` del YAML si
   existe.
 - Vigilar una entidad (`watch_entity_object_id`, p. ej. `estado`) y llamar a
   `on_state_value(bool)` cada vez que cambia, para arrancar/parar la cámara
   según el hardware real.
 
-### `__init__(...)` — [`main.py:238`](../main.py#L238)
+### `__init__(...)` — [`esphome_api.py`](../esphome_api.py)
 
 Guarda parámetros. Los más sutiles:
 
@@ -192,11 +223,11 @@ Guarda parámetros. Los más sutiles:
 Crea `_disconnected_event` (arranca en `set()` → primer intento inmediato),
 `_wake_event`, `_connected` (`threading.Event`), y lanza el hilo.
 
-### `is_connected` (property) — [`main.py:278`](../main.py#L278)
+### `is_connected` (property) — [`esphome_api.py`](../esphome_api.py)
 
 `True` si `_connected` está marcado.
 
-### `_run_loop()` — [`main.py:281`](../main.py#L281)
+### `_run_loop()` — [`esphome_api.py`](../esphome_api.py)
 
 Punto de entrada del hilo: fija el event loop propio y corre
 `_reconnect_loop()` hasta que termine. En un `finally` llama a `_close_loop()`,
@@ -204,7 +235,7 @@ que cierra el cliente, cancela las tareas pendientes y cierra el loop **dentro
 de este hilo** — el único sitio donde el loop sigue vivo y se puede esperar de
 verdad a que el socket con la placa se cierre.
 
-### `_reconnect_loop()` (async) — [`main.py:325`](../main.py#L325)
+### `_reconnect_loop()` (async) — [`esphome_api.py`](../esphome_api.py)
 
 El bucle de reconexión, con **cero polling mientras está conectado**:
 
@@ -221,7 +252,7 @@ El bucle de reconexión, con **cero polling mientras está conectado**:
    en vez de esperar su timeout, hace `disconnect()` para dejar el cliente
    limpio, y reintenta ya.
 
-### `_try_connect_once()` (async) → `bool` — [`main.py:381`](../main.py#L381)
+### `_try_connect_once()` (async) → `bool` — [`esphome_api.py`](../esphome_api.py)
 
 Un intento de conexión acotado a `connect_attempt_timeout_sec`. Si conecta:
 pide `list_entities_services()`, localiza el servicio `set_servo_position` y la
@@ -229,35 +260,49 @@ pide `list_entities_services()`, localiza el servicio `set_servo_position` y la
 `_watch_key`), se suscribe a estados con `subscribe_states(self._on_state)`,
 marca `_connected` y loguea el tiempo que tardó. Devuelve `True`/`False`.
 
-### `_on_stop(expected_disconnect=False)` (async) — [`main.py:412`](../main.py#L412)
+### `_on_stop(expected_disconnect=False)` (async) — [`esphome_api.py`](../esphome_api.py)
 
 Callback que `APIClient` invoca al perder la conexión. Limpia `_connected` y
 marca `_disconnected_event` para que el bucle reintente. El argumento tiene
 valor por defecto porque su firma varía entre versiones de `aioesphomeapi`.
 
-### `notify_awake()` — [`main.py:423`](../main.py#L423)
+### `notify_awake()` — [`esphome_api.py`](../esphome_api.py)
 
 API pública **thread-safe** (`call_soon_threadsafe`) para marcar
 `_wake_event`. La llama el endpoint `POST /cameras/{id}/esphome/awake`, que a
 su vez lo golpea el propio ESP32 en `wifi.on_connect`. Salta la espera de
 `safety_retry_sec`.
 
-### `_on_state(state)` — [`main.py:434`](../main.py#L434)
+### `_on_state(state)` — [`esphome_api.py`](../esphome_api.py)
 
 Callback de `subscribe_states`, corre en el loop propio. Si `state.key`
 coincide con `_watch_key` y no está `missing_state` (aún sin publicar), llama a
 `on_state_value(state.state)` con el bool, capturando excepciones del callback.
 
-### `move_servo(pan, tilt)` — [`main.py:452`](../main.py#L452)
+### `llamar_servicio(nombre, **args)` — [`esphome_api.py`](../esphome_api.py)
 
-Si está conectado y el servicio existe, programa `_send_servo` en el loop
+Si está conectado y el servicio existe, programa `_ejecutar_servicio` en el loop
 propio con `run_coroutine_threadsafe` (llamable desde cualquier hilo).
 
-### `_send_servo(pan, tilt)` (async) — [`main.py:462`](../main.py#L462)
+Devuelve si se llegó a encolar: `False` si no hay conexión, si el loop ya está
+cerrado o si **la placa no publica ese servicio**. Eso último es lo que permite
+que un firmware sin ese hardware no rompa nada, y es cómo una variante nueva
+comprueba si está soportada. `nombre` va posicional-only para que un argumento
+del servicio llamado `nombre` no choque con él.
 
-Ejecuta `execute_service(self._servo_service, {"pan": pan, "tilt": tilt})`.
+### `_ejecutar_servicio(nombre, servicio, args)` (async) — [`esphome_api.py`](../esphome_api.py)
 
-### `shutdown()` — [`main.py:470`](../main.py#L470)
+Ejecuta `execute_service(servicio, args)` y loguea el fallo con el nombre del
+servicio si lo hay.
+
+### `tiene_servicio(nombre)` / `servicios` — [`esphome_api.py`](../esphome_api.py)
+
+Si la placa publica ese servicio, y la lista completa de los que publica.
+Llamar a uno que no existe falla en silencio, y desde fuera es indistinguible
+de apuntar mal o de un relé mal cableado; esto lo expone en `/status` y en el
+log de conexión para descartarlo de un vistazo.
+
+### `shutdown()` — [`esphome_api.py`](../esphome_api.py)
 
 Marca `_stopping`, levanta los dos eventos que hacen salir a
 `_reconnect_loop` por su propio pie (con `call_soon_threadsafe`, porque se
@@ -274,7 +319,7 @@ defecto). El cierre real del socket y del loop lo hace el propio hilo en
 
 ---
 
-## 5. `class CameraConfig(BaseModel)` — [`main.py:497`](../main.py#L497)
+## 5. `class CameraConfig(BaseModel)` — [`camera.py`](../camera.py)
 
 Modelo Pydantic con la config de una cámara. Se valida al registrarla y se
 serializa a `cameras_config.json`.
@@ -287,7 +332,8 @@ serializa a `cameras_config.json`.
 | `confidence` / `imgsz` | Umbral de confianza y resolución de inferencia. |
 | `classes` | Lista de IDs de clase COCO a detectar (`None` = todas; `[0]` = solo personas). |
 | `keepalive_enabled` | `None` = hereda de `GLOBAL_CONFIG`. |
-| `default_infer` | Qué devuelven `/stream` y `/snapshot` si no se pasa `?infer=`. |
+| `default_infer` | Qué devuelven `/stream` y `/snapshot` si no se pasa `?infer=` (anotado o crudo). |
+| `always_infer` | Si YOLO corre aunque no haya nadie mirando ni ningún consumidor. `True` por defecto: la cámara sigue detectando con el navegador cerrado. **No confundir con `default_infer`**: aquel decide *qué* se devuelve, este *si* la detección llega a correr. |
 | `noise_psk` | `api.encryption.key` del YAML de la placa. Si se rellena, la sesión abre además el `EsphomeController`. |
 | `esphome_state_object_id` | `object_id` del `binary_sensor` a vigilar (`"estado"` por defecto). |
 | `servo` | Sección anidada (`ServoConfig`) con los ajustes de la torreta pan/tilt. `None` = esta variante de placa no lleva servos y no se crea el consumidor. Requiere `noise_psk`, porque las órdenes van por la API nativa. |
@@ -297,12 +343,12 @@ ejemplo completo.
 
 ---
 
-## 6. `class CameraSession` — [`main.py:521`](../main.py#L521)
+## 6. `class CameraSession` — [`camera.py`](../camera.py)
 
 El corazón del servicio. Una instancia por cámara registrada. Encapsula los
 dos hilos, el estado compartido y la lógica de arranque/parada.
 
-### `__init__(cfg)` — [`main.py:522`](../main.py#L522)
+### `__init__(cfg)` — [`camera.py`](../camera.py)
 
 Crea todo el estado:
 
@@ -328,7 +374,7 @@ Crea todo el estado:
 - Si `cfg.noise_psk`: saca el host de `stream_url` y crea el
   `EsphomeController` con `on_state_value=self._on_esphome_state`.
 
-### `_on_esphome_state(value)` — [`main.py:577`](../main.py#L577)
+### `_on_esphome_state(value)` — [`camera.py`](../camera.py)
 
 Callback del `EsphomeController`. Ignora `None`. En flanco a `on` →
 `start(explicit=True)`; en flanco a `off` → `stop(explicit=True)`.
@@ -342,22 +388,22 @@ estaba parada — el caso de una placa que se durmió sin llegar a publicar el
 Ojo al modificarlo: **corre en el event loop del `EsphomeController`**, así que
 nada de lo que llame puede bloquear.
 
-### `is_running` (property) — [`main.py:603`](../main.py#L603)
+### `is_running` (property) — [`camera.py`](../camera.py)
 
 `True` si el hilo lector o el de proceso siguen vivos.
 
-### `client_count` (property) — [`main.py:609`](../main.py#L609)
+### `client_count` (property) — [`camera.py`](../camera.py)
 
 Suma de los tres contadores de clientes.
 
-### `start(explicit=False)` — [`main.py:612`](../main.py#L612)
+### `start(explicit=False)` — [`camera.py`](../camera.py)
 
 Bajo `_lock`: si ya corre, no hace nada. Si no, **crea objetos nuevos** de
 `_stop_event`, `_raw_queue` y `_fps_window` (no los recicla — ver
 [§9](#9-decisiones-de-diseño-que-conviene-entender)), lanza los dos hilos
 daemon y los arranca. `explicit=True` además fija `explicit_start`.
 
-### `stop(explicit=False)` — [`main.py:642`](../main.py#L642)
+### `stop(explicit=False)` — [`camera.py`](../camera.py)
 
 Si quedan clientes y no es `explicit`, no para. Si no: marca `_stop_event`,
 cierra la conexión HTTP viva con `_force_close_response()` (fuera del lock, y
@@ -366,7 +412,7 @@ generadores en vez de esperar su timeout de 5 s. `explicit=True` limpia
 `explicit_start`. Vuelve en ~0,01 s incluso con el stream activo, que es lo
 que permite llamarlo desde el loop de ESPHome.
 
-### `shutdown()` — [`main.py:660`](../main.py#L660)
+### `shutdown()` — [`camera.py`](../camera.py)
 
 `stop(explicit=True)` → `esphome.shutdown(timeout=1.5)` (primero, para que deje
 de reintentar contra la placa mientras los hilos de vídeo salen) → `join()` de
@@ -377,28 +423,28 @@ y uvicorn arranca con `--timeout-graceful-shutdown 5`. Los hilos son daemon: si
 alguno se pasa del plazo se deja dicho en el log pero no impide que el proceso
 muera.
 
-### `_maybe_autostop()` — [`main.py:686`](../main.py#L686)
+### `_maybe_autostop()` — [`camera.py`](../camera.py)
 
 Si no hay `explicit_start` ni clientes, marca `_stop_event`. Lo llama
 `remove_client`.
 
-### `_resolve_mode(infer)` (staticmethod) — [`main.py:695`](../main.py#L695)
+### `_resolve_mode(infer)` (staticmethod) — [`camera.py`](../camera.py)
 
 Traduce el query param: `True → "true"`, `False → "false"`, `None →
 "follow"`.
 
-### `add_client(mode)` — [`main.py:703`](../main.py#L703)
+### `add_client(mode)` — [`camera.py`](../camera.py)
 
 Incrementa el contador correspondiente. **Solo arranca la sesión aquí si NO
 hay `EsphomeController`**: con control ESPHome, arrancar sin saber si la placa
 está despierta dejaría el hilo lector reintentando en bucle contra una cámara
 dormida; en ese caso el arranque lo dispara `estado=on`.
 
-### `remove_client(mode)` — [`main.py:720`](../main.py#L720)
+### `remove_client(mode)` — [`camera.py`](../camera.py)
 
 Decrementa (con suelo en 0) y llama a `_maybe_autostop()`.
 
-### `_read_loop()` — [`main.py:732`](../main.py#L732) — hilo lector
+### `_read_loop()` — [`camera.py`](../camera.py) — hilo lector
 
 Toma referencias **locales** de `_stop_event` y `_raw_queue` (clave: ver
 [§9](#9-decisiones-de-diseño-que-conviene-entender)). Bucle:
@@ -435,40 +481,46 @@ Toma referencias **locales** de `_stop_event` y `_raw_queue` (clave: ver
    - si no, espera `reconnect_delay_sec` y reintenta.
 7. `finally`: limpia `_current_response` y cierra la respuesta.
 
-### `_update_fps(fps_window)` — [`main.py:860`](../main.py#L860)
+### `_update_fps(fps_window)` — [`camera.py`](../camera.py)
 
 Añade el timestamp actual, descarta los de hace más de 1 s, y calcula
 `pipeline_fps` como `(n-1) / span` sobre la ventana.
 
-### `_process_loop()` — [`main.py:871`](../main.py#L871) — hilo de proceso
+### `_process_loop()` — [`camera.py`](../camera.py) — hilo de proceso
 
 Referencias locales otra vez. Obtiene el modelo con `get_model()`. Bucle:
 
-1. Calcula si el keep-alive está activo (config de cámara o global) y el
-   `wait_timeout` (0.05 s si CUDA + keepalive, si no 1 s).
-2. `raw_queue.get(timeout=wait_timeout)`.
-3. **Si salta `queue.Empty`** (no llegó frame): avisa a los consumidores con
-   `on_idle()` (ver §6.bis) para que puedan caducar su objetivo; si CUDA +
-   keepalive, hace
-   `model.predict()` sobre un frame negro. **Por qué:** la GTX 1080 produce
-   inferencias corruptas (confianzas fuera de 0-1) cuando el driver baja el
-   P-state entre frames; las anomalías coinciden al segundo con las
-   transiciones de P-state en `nvidia-smi`. Mantener la GPU ocupada lo evita.
-   Luego `continue`.
-4. **Si llega frame:** `_update_fps()`.
-5. Decide qué hace falta releyendo los contadores y `cfg.default_infer` **en
-   cada frame** (por eso cambiar `default_infer` por API afecta a streams ya
-   abiertos):
+1. Decide qué hace falta, **antes** del `get()` y releyendo los contadores y la
+   config en cada vuelta (por eso cambiar `default_infer` o `always_infer` por
+   API afecta a streams ya abiertos, sin reconectar):
    - `want_draw` = hay `_infer_clients`, o hay `_follow_clients` y
      `default_infer` está a `True`. Es decir: **alguien está mirando el vídeo
      anotado**.
-   - `want_infer` = `want_draw` **o** algún consumidor pide inferencia
-     (`wants_inference()`). Un seguimiento de servos necesita las detecciones
-     pero no el dibujo, así que sin clientes se ejecuta YOLO y se ahorra pintar
-     cajas y recodificar el JPEG.
+   - `want_infer` = `cfg.always_infer` **o** `want_draw` **o** algún consumidor
+     pide inferencia (`wants_inference()`). Con `always_infer` (por defecto
+     `True`) la cámara **sigue detectando con el navegador cerrado**; un
+     seguimiento de servos necesita las detecciones pero no el dibujo, así que
+     sin clientes se ejecuta YOLO y se ahorra pintar cajas y recodificar el JPEG.
    - `want_raw` = hay `_raw_clients`, o hay `_follow_clients` y `default_infer`
      a `False`.
-6. **Si `want_infer`:** `model.track(frame, persist=True,
+2. Calcula el keep-alive con `_toca_keepalive(...)` y de ahí el `wait_timeout`
+   (0,05 s si toca calentar, si no 1 s). **Requiere `want_infer`**: el
+   workaround protege a las inferencias reales de salir corruptas, así que si
+   no va a haber ninguna, calentar no protege nada — era el ~10 % de GPU que se
+   gastaba en reposo.
+3. `raw_queue.get(timeout=wait_timeout)`.
+4. **Si salta `queue.Empty`** (no llegó frame): avisa a los consumidores con
+   `on_idle()` (ver §6.bis) para que puedan caducar su objetivo; y si toca
+   calentar, hace `model.predict()` sobre un frame negro. **Por qué:** la GTX
+   1080 produce inferencias corruptas (confianzas fuera de 0-1) cuando el
+   driver baja el P-state entre frames; las anomalías coinciden al segundo con
+   las transiciones de P-state en `nvidia-smi`. Mantener la GPU ocupada lo
+   evita. Luego `continue`.
+5. **Si llega frame:** `_update_fps()`.
+6. **Si `want_infer`:** si se venía de dejar enfriar la GPU, lanza **una** dummy
+   justo antes (así la primera inferencia real no sale corrupta; se hace aquí y
+   no al recibir el frame, para no calentar por un frame que no se va a
+   inferir). Después `model.track(frame, persist=True,
    tracker="bytetrack.yaml", classes=...)`, y las cajas se traducen **una sola
    vez** a una lista de `Detection` (objetos planos, sin dependencia de
    ultralytics). Con esa lista:
@@ -484,7 +536,7 @@ Referencias locales otra vez. Obtiene el modelo con `get_model()`. Bucle:
 8. Bajo `_cond`: actualiza `_latest_raw_jpeg` / `_latest_annotated_jpeg`,
    incrementa `_frame_seq`, fija `last_frame_time`, `notify_all()`.
 
-### `mjpeg_generator(infer)` — [`main.py:963`](../main.py#L963) — salida a cliente
+### `mjpeg_generator(infer)` — [`camera.py`](../camera.py) — salida a cliente
 
 Generador que FastAPI convierte en `StreamingResponse`. `add_client(mode)` al
 entrar, `remove_client(mode)` en `finally`. Bucle: espera en `_cond.wait_for`
@@ -494,13 +546,13 @@ relee `cfg.default_infer` en cada frame → cambio en caliente sin reconectar),
 y hace `yield` de la parte multipart (`--frame`, `Content-Type`,
 `Content-Length`, bytes).
 
-### `snapshot(infer)` — [`main.py:991`](../main.py#L991)
+### `snapshot(infer)` — [`camera.py`](../camera.py)
 
 Devuelve bajo `_cond` el último JPEG anotado o crudo (según `infer` o
 `cfg.default_infer`). Sin bloqueo largo — puede devolver `None` si aún no hay
 frame.
 
-### `status()` — [`main.py:996`](../main.py#L996)
+### `status()` — [`camera.py`](../camera.py)
 
 Dict de diagnóstico para `/status`: running, `explicit_start`, los tres
 contadores, últimas métricas, `last_error`, `esphome_connected`, el `status()`
@@ -528,7 +580,7 @@ consumidores que la sesión tenga registrados en `self._consumers`.
 
 **Todos los métodos corren en el hilo de proceso (`yolo-<camera_id>`), en el
 camino crítico del vídeo: no deben bloquear.** Para hablar con la placa hay que
-usar algo asíncrono como `EsphomeController.move_servo()`, que solo encola la
+usar algo asíncrono como `EsphomeController.llamar_servicio()`, que solo encola la
 orden en otro hilo.
 
 `CameraSession` los invoca siempre a través de `_avisar_consumidores(metodo,
@@ -567,7 +619,7 @@ Primer consumidor: mueve una torreta pan/tilt para centrar un objetivo.
 **Contrato con el firmware:** servicio `set_servo_position` con variables
 `pan` y `tilt` en el rango **-1.0 a 1.0** (lo que espera `servo.write` de
 ESPHome). El nombre se busca literal en `_try_connect_once`, así que renombrarlo
-en el YAML deja el seguimiento mudo sin dar ningún error; `has_servo_service` lo
+en el YAML deja el seguimiento mudo sin dar ningún error; `tiene_servicio()` lo
 expone en `/status` justamente para poder descartar eso de un vistazo. Firmware
 de referencia: [`esphome/esp32-s3-cam-servo.yaml`](../../esphome/esp32-s3-cam-servo.yaml).
 
@@ -576,7 +628,7 @@ ni ESP32 (placa de mentira que apunta las órdenes recibidas).
 
 ---
 
-## 7. Registro de cámaras (persistencia) — [`main.py:1018-1063`](../main.py#L1018-L1063)
+## 7. Registro de cámaras (persistencia) — [`registro.py`](../registro.py)
 
 `CAMERAS: dict[str, CameraSession]` protegido por `_cameras_lock`.
 
@@ -605,14 +657,14 @@ de la LAN.
 | --- | --- | --- |
 | `GET /health` | `health` | `{status, cameras}` — vivo y lista de IDs. |
 | `GET /config` | `get_config` | Devuelve `GLOBAL_CONFIG`. |
-| `POST /config/keepalive` | `set_global_keepalive` | Cambia `enabled` / `interval_sec` globales (modelo `KeepaliveConfig`). |
+| `POST /config/keepalive` | `set_global_keepalive` | Keep-alive de GPU global: `enabled`, `interval_sec` (0,05 s) e `idle_limit_sec` (3 s), por formulario y con los valores por defecto ya puestos. |
 
 ### Gestión de cámaras
 
 | Método / ruta | Función | Qué hace |
 | --- | --- | --- |
 | `GET /cameras` | `list_cameras` | `status()` de todas. |
-| `POST /cameras` | `add_camera` | `register_camera(cfg)` con un `CameraConfig` en el body. |
+| `POST /cameras` | `add_camera` | Alta por **formulario** (cada campo con su descripción y su defecto, en vez de un JSON a mano). `classes` va como texto separado por comas y lo traduce `_parse_classes`. **No pide servos**: se montan después con `/config/servo`. |
 | `DELETE /cameras/{id}` | `remove_camera` | Saca de `CAMERAS`, `await asyncio.to_thread(session.shutdown)`, persiste. Va en un hilo porque `shutdown()` bloquea hasta ~4 s y congelaba el event loop entero (y con él todos los streams). |
 | `GET /cameras/{id}/status` | `camera_status` | `status()` de una. |
 | `POST /cameras/{id}/esphome/awake` | `esphome_awake` | La placa lo llama al obtener IP → `session.esphome.notify_awake()`. 400 si no tiene `noise_psk`. |
@@ -622,23 +674,31 @@ de la LAN.
 
 | Método / ruta | Función | Qué hace |
 | --- | --- | --- |
-| `POST /cameras/{id}/inference/config` | `set_inference_config` | Cambia `confidence` / `imgsz` / `classes` (modelo `InferenceConfig`), persiste. Efecto inmediato (se releen por frame). |
-| `POST /cameras/{id}/config/keepalive` | `set_camera_keepalive` | Override de keep-alive por cámara. |
-| `POST /cameras/{id}/stream/config` | `set_stream_default` | Cambia `default_infer` (modelo `StreamDefaultConfig`); los streams en modo "follow" cambian en caliente. |
+Todos van por **formulario** (no JSON) y cuelgan de `/config/`, para que
+Swagger enseñe cada campo en su casilla con su descripción y su valor por
+defecto.
+
+| `POST /cameras/{id}/config/inference` | `set_inference_config` | `confidence` / `imgsz` / `always_infer` / `classes` se releen por frame, así que se aplican al instante y **siempre** con lo que traiga el formulario. `model_name` y `device` son opcionales (vacío = no tocar) porque `_process_loop` los resuelve una sola vez al arrancar: cambiarlos valida y precarga el modelo (400 si no existe) y luego llama a `session.restart()`. Devuelve `relanzada`. |
+| `POST /cameras/{id}/config/keepalive` | `set_camera_keepalive` | Override de `enabled` por cámara. El intervalo y el tiempo de reposo son globales, en `POST /config/keepalive`. |
+| `POST /cameras/{id}/config/stream` | `set_stream_default` | Cambia `default_infer`; los streams en modo "follow" cambian en caliente. |
+| `POST /cameras/{id}/config/servo` | `set_servo_config` | Toda la `ServoConfig`. **Es donde se le ponen servos a una cámara**: el alta no los pide, así que la primera llamada crea el `ServoTracker` y lo enchufa como consumidor. 400 sin `noise_psk`. |
 
 ### Servos (variantes con torreta)
 
 | Método / ruta | Función | Qué hace |
 | --- | --- | --- |
 | `POST /cameras/{id}/servo` | `move_servo` | Control manual: `{"pan": p, "tilt": t}` en `[-1, 1]`. Salta el rate limit del seguimiento, para poder verificar el hardware sin depender de que haya detecciones. |
-| `POST /cameras/{id}/servo/tracking` | `set_servo_tracking` | `{"enabled": bool}` — activa/desactiva el seguimiento automático sin quitar el control manual. Persiste. |
+
+El seguimiento se activa/desactiva con el campo `enabled` de
+`POST /cameras/{id}/config/servo`, junto al resto de ajustes; `/servo` a secas
+queda solo para el movimiento manual, que es una acción y no configuración.
 
 Ambos pasan por `get_servo_tracker(camera_id)`, que distingue los tres motivos
 por los que la torreta puede no responder: **400** si la cámara no tiene sección
 `servo` (o le falta `noise_psk`), **503** si no hay conexión con la placa, y
 **503** con mensaje propio si la placa está conectada pero **no publica
 `set_servo_position`** (firmware sin servos) — el caso que más despista, porque
-`move_servo()` falla en silencio.
+la llamada al servicio falla en silencio.
 
 ### Consumo de vídeo
 
@@ -651,9 +711,14 @@ por los que la torreta puede no responder: **400** si la cámara no tiene secci�
 
 | Método / ruta | Función | Qué hace |
 | --- | --- | --- |
-| `POST /detect` | `detect` | Descarga una imagen por URL (`ImageRequest`), `get_default_model().predict()`, devuelve detecciones (label, conf, box, centro) filtradas por confianza + `inference_ms`. |
-| `POST /detect-file` | `detect_file` | Igual con fichero subido (`multipart/form-data`), eligiendo `model_name` / `confidence` / `imgsz`. Devuelve JSON. |
-| `POST /detect-file/annotated` | `detect_file_annotated` | Igual pero devuelve la imagen con las cajas dibujadas (`results.plot()` → JPEG). |
+| `POST /detect-file` | `detect_file` | Fichero subido (`multipart/form-data`), eligiendo `model_name` / `confidence` / `imgsz`. Una sola inferencia, dos empaquetados según el campo `annotated`: `false` → JSON con `model`, `inference_ms` y detecciones (label, conf, box, centro); `true` → la imagen con las cajas de `results.plot()` más un overlay de modelo / ms / nº de detecciones, que es la única forma de ver esos números cuando la respuesta es una imagen. |
+
+El overlay se escala con el tamaño de la imagen usando la misma fórmula que
+`Annotator` de ultralytics (grosor a partir de `(alto+ancho)/2*0.003`,
+`fontScale = grosor/3`): la imagen la sube quien llama y puede ser una
+miniatura o una foto de 4000 px, y con una escala fija el texto salía ilegible
+al lado de las cajas. Lleva fondo sólido porque el color fijo del stream se
+pierde sobre una imagen clara.
 
 ---
 
@@ -664,7 +729,7 @@ por los que la torreta puede no responder: **400** si la cámara no tiene secci�
 servidor. Cada cámara son dos hilos daemon; FastAPI solo orquesta.
 
 **Objetos nuevos por generación de hilos**
-([`main.py:618-629`](../main.py#L618-L629)). `start()` no hace
+([`camera.py`](../camera.py)). `start()` no hace
 `_stop_event.clear()` sobre el mismo objeto: crea uno nuevo. Si se reciclara,
 un hilo viejo bloqueado en `queue.get()` que aún no vio el `stop()` anterior
 despertaría, vería el evento ya limpio y seguiría corriendo → dos generaciones
@@ -751,6 +816,7 @@ classDiagram
         +int imgsz
         +list~int~ classes
         +bool default_infer
+        +bool always_infer
         +str noise_psk
         +str esphome_state_object_id
     }
@@ -795,7 +861,7 @@ classDiagram
         -AbstractEventLoop _loop
         +is_connected() bool
         +notify_awake()
-        +move_servo(pan, tilt)
+        +llamar_servicio(nombre, args)$([char]10)        +tiene_servicio(nombre) bool
         +shutdown()
         -_reconnect_loop()
         -_try_connect_once() bool

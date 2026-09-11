@@ -143,7 +143,11 @@ def main():
     streams = []
     parar_lectores = threading.Event()  # definido aquí porque el finally lo usa
     try:
-        shutil.copy(DETECT / "main.py", tmp / "main.py")
+        # Todos los módulos del servicio, no solo main.py: importa a sus
+        # vecinos (detections, servo_tracker) y en el temporal no está el
+        # directorio original en sys.path.
+        for modulo in DETECT.glob("*.py"):
+            shutil.copy(modulo, tmp / modulo.name)
         # Copiamos los pesos si los hay, para que ultralytics no se los baje
         # otra vez dentro del temporal en cada ejecución.
         pesos = DETECT / f"{MODELO}.pt"
@@ -193,10 +197,11 @@ def main():
         print("uvicorn arrancado")
 
         for i in (1, 2):
-            r = requests.post(f"{base}/cameras", json={
+            # El alta va por formulario, no por JSON
+            r = requests.post(f"{base}/cameras", data={
                 "camera_id": f"cam{i}",
                 "stream_url": f"http://127.0.0.1:{puerto_cam}/",
-                "model_name": MODELO, "device": "cpu", "default_infer": False,
+                "model_name": MODELO, "device": "cpu", "default_infer": "false",
             }, timeout=60)
             assert r.ok, f"alta de cam{i} falló: {r.status_code} {r.text}"
             # explicit_start=True, que es como quedan las cámaras de verdad

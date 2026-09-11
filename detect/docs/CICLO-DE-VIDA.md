@@ -64,15 +64,24 @@ de milisegundos. Sin ese límite, una cámara desaparecida dejaba el hilo de
 proceso lanzando 20 inferencias por segundo indefinidamente: medido con
 `nvidia-smi`, **29 % de una GTX 1080 con cero frames entrando**, para siempre.
 
+Tampoco tiene sentido **si no va a haber ninguna inferencia real que
+proteger**: con `always_infer` a `false`, nadie mirando el stream y ningún
+consumidor pidiéndolo, `model.track()` no llega a ejecutarse, así que calentar
+la GPU no protege nada. Eran ~10 puntos de GPU gastados en reposo con la cámara
+despierta. Por eso `_toca_keepalive()` recibe también `hay_inferencia`.
+
 Ahora, pasados `keepalive_idle_limit_sec` (3 s, configurable en
 `GLOBAL_CONFIG` y por `POST /config/keepalive`) sin un frame real, el
 keep-alive se pausa y el `queue.get()` pasa a esperar 1 s en vez de 0,05 s, así
 que el hilo queda de verdad en reposo. Medido: **29 % → 2 %**, con el reposo
 del sistema en 4 %.
 
-Al volver los frames se lanza **una** dummy antes de la primera inferencia
+Al salir del reposo se lanza **una** dummy justo antes de la primera inferencia
 real, para recalentar: así se conserva la garantía del workaround de P-state,
-que es justo lo que el keep-alive protege. Medido: vuelve a 29 %.
+que es justo lo que el keep-alive protege. Va ahí, y no al recibir el frame,
+porque cubre de una vez los dos motivos de haberse enfriado (sin frames o sin
+inferencia pedida) y no calienta por un frame que no se va a inferir. Medido:
+vuelve a 29 %.
 
 La decisión vive en `_toca_keepalive()`, una función pura precisamente para
 poder probarla sin GPU.

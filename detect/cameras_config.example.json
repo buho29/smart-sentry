@@ -11,11 +11,13 @@
     ],
     "keepalive_enabled": true,
     "default_infer": true,
+    "_comentario_always_infer": "always_infer: correr YOLO aunque nadie mire el stream, para que la cámara siga detectando con el navegador cerrado. No es lo mismo que default_infer, que solo decide si /stream y /snapshot devuelven anotado o crudo. A false ahorra GPU en una cámara que solo sirva vídeo.",
+    "always_infer": true,
     "noise_psk": "",
     "esphome_state_object_id": "huerta_estado"
   },
   {
-    "_comentario": "Variante con torreta pan/tilt (firmware esphome/esp32-s3-cam-servo.yaml). La sección 'servo' es opcional: sin ella la cámara no mueve nada. Necesita noise_psk, porque las órdenes van por la API nativa de la placa. Todos los campos de 'servo' tienen valor por defecto; se listan aquí para saber qué se puede tocar.",
+    "_comentario": "Variante con torreta pan/tilt (firmware esphome/esp32-s3-cam-servo.yaml). La sección 'servo' es opcional: sin ella la cámara no mueve nada. Necesita noise_psk, porque las órdenes van por la API nativa de la placa. Normalmente no hace falta escribirla a mano: se configura con POST /cameras/{camera_id}/config/servo y se guarda aquí sola. Todos sus campos tienen valor por defecto; se listan para saber qué se puede tocar.",
     "camera_id": "torreta",
     "stream_url": "http://CAMERA_IP:8080/",
     "model_name": "yolo26m",

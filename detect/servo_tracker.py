@@ -35,6 +35,10 @@ class ServoConfig(BaseModel):
     """
 
     enabled: bool = True
+    # Cómo se llama en el YAML de esta placa el servicio que mueve la torreta.
+    # Va en la config y no cableado en el código para que una variante pueda
+    # nombrarlo distinto sin tocar nada.
+    service: str = "set_servo_position"
     # Fracción del error que se corrige en cada envío. Más alto = más rápido
     # pero con riesgo de sobrepasar el objetivo y oscilar.
     gain: float = 0.25
@@ -76,7 +80,8 @@ class ServoTracker:
 
     def __init__(self, cfg: ServoConfig, esphome, camera_id: str = ""):
         # `esphome` es un EsphomeController, pero aquí solo se le piden
-        # move_servo() y has_servo_service: cualquier doble sirve para los tests.
+        # llamar_servicio() y tiene_servicio(): cualquier doble sirve para los
+        # tests.
         self.cfg = cfg
         self._esphome = esphome
         self._camera_id = camera_id
@@ -141,7 +146,7 @@ class ServoTracker:
         self.tilt = _clamp(tilt)
         self._last_send = ahora
         self._sends += 1
-        self._esphome.move_servo(self.pan, self.tilt)
+        self._esphome.llamar_servicio(self.cfg.service, pan=self.pan, tilt=self.tilt)
         return True
 
     def move_to(self, pan: float, tilt: float):
@@ -201,9 +206,10 @@ class ServoTracker:
             "target_id": self.target_id,
             "sends": self._sends,
             # Lo que de verdad se quiere saber cuando "no se mueve": si la placa
-            # llegó a publicar el servicio. Sin esto, move_servo falla en
+            # llegó a publicar el servicio. Sin esto la llamada falla en
             # silencio y no hay forma de distinguirlo de un error de puntería.
-            "servo_service": getattr(self._esphome, "has_servo_service", None),
+            "service": self.cfg.service,
+            "servo_service": self._esphome.tiene_servicio(self.cfg.service),
         }
 
     def shutdown(self) -> None:

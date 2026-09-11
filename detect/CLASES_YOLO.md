@@ -5,7 +5,7 @@ están entrenados sobre el dataset **COCO**, que tiene **80 clases**.
 
 El índice de la izquierda es el que se pasa en el campo `classes` de la config
 de la cámara (`CameraConfig.classes: list[int]`) y en el endpoint
-`POST /cameras/{camera_id}/inference/config`. `null` / omitirlo = detectar todas
+`POST /cameras/{camera_id}/config/inference`. `null` / omitirlo = detectar todas
 las clases.
 
 Ejemplo: para detectar solo personas, perros y gatos:

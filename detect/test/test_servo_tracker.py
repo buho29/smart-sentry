@@ -1,7 +1,7 @@
 """Comprueba la lógica de seguimiento con servos, sin GPU ni ESP32 delante.
 
 ServoTracker solo depende de objetos `Detection` planos y de algo con
-`move_servo()`, así que aquí se le dan detecciones a mano y una placa de mentira
+`llamar_servicio()`, así que aquí se le dan detecciones a mano y una placa de mentira
 que apunta lo que recibe. Eso permite probar la puntería, la zona muerta, el
 rate limit y el bloqueo de objetivo en milisegundos, en vez de mirando si la
 torreta tiembla.
@@ -31,14 +31,26 @@ def check(nombre, cond, extra=""):
 
 
 class PlacaFalsa:
-    """Doble de EsphomeController: solo apunta las órdenes recibidas."""
+    """Doble de EsphomeController: solo apunta las llamadas recibidas."""
 
-    def __init__(self, has_servo_service=True):
-        self.has_servo_service = has_servo_service
+    def __init__(self, has_servo_service=True, servicio="set_servo_position"):
+        self._servicios = {servicio} if has_servo_service else set()
         self.ordenes: list[tuple[float, float]] = []
+        # Nombre del servicio de cada llamada, para poder comprobar que se
+        # llama al que dice la config y no a uno cableado en el código.
+        self.llamadas: list[str] = []
 
-    def move_servo(self, pan, tilt):
-        self.ordenes.append((pan, tilt))
+    def tiene_servicio(self, nombre):
+        return nombre in self._servicios
+
+    @property
+    def servicios(self):
+        return tuple(self._servicios)
+
+    def llamar_servicio(self, nombre, /, **args):
+        self.llamadas.append(nombre)
+        self.ordenes.append((args["pan"], args["tilt"]))
+        return True
 
 
 def det(cx, cy, track_id=1, label="person", ancho=40, alto=80):
@@ -167,6 +179,23 @@ t.on_detections([det(cx=W * 0.9, cy=H / 2)], W, H)
 check("no se mueve", placa.ordenes == [])
 check("y no pide inferencia (no calienta la GPU para nada)", t.wants_inference() is False)
 
+print("\n=== 10b. El servicio se coge de la config, no está cableado ===")
+# Lo que permite que la pistola (relé de disparo) sea un consumidor nuevo sin
+# tocar esphome_api.py: el nombre del servicio lo pone cada variante.
+t, placa = nuevo()
+t.on_detections([det(cx=W * 0.9, cy=H / 2)], W, H)
+check("por defecto llama a set_servo_position",
+      placa.llamadas == ["set_servo_position"], f"({placa.llamadas})")
+
+placa_otra = PlacaFalsa(servicio="mover_torreta")
+t_otra = ServoTracker(ServoConfig(service="mover_torreta", min_interval_sec=0.0),
+                      placa_otra, camera_id="test")
+t_otra.on_detections([det(cx=W * 0.9, cy=H / 2)], W, H)
+check("con otro nombre en la config, llama a ese",
+      placa_otra.llamadas == ["mover_torreta"], f"({placa_otra.llamadas})")
+check("y lo reconoce como publicado", t_otra.status()["servo_service"] is True)
+check("el status dice a cuál llama", t_otra.status()["service"] == "mover_torreta")
+
 print("\n=== 11. status() dice si la placa publica el servicio ===")
 cfg = ServoConfig()
 t_sin = ServoTracker(cfg, PlacaFalsa(has_servo_service=False), "test")
@@ -200,7 +229,9 @@ import http.server  # noqa: E402
 import socketserver  # noqa: E402
 import threading  # noqa: E402
 
+import camera  # noqa: E402
 import main  # noqa: E402
+import registro  # noqa: E402
 
 
 class Espia:
@@ -264,11 +295,16 @@ def servidor_mjpeg_local():
 
 
 srv, puerto = servidor_mjpeg_local()
-cfg_cam = main.CameraConfig(
+cfg_cam = camera.CameraConfig(
     camera_id="pipeline", stream_url=f"http://127.0.0.1:{puerto}/",
     device="cpu", model_name="yolo11n",
+    # A false a propósito: así lo ÚNICO que puede estar manteniendo viva la
+    # inferencia es el consumidor, que es justo lo que se quiere comprobar. Con
+    # el valor por defecto (true) la sesión inferiría igual y el test pasaría
+    # aunque el enganche del consumidor estuviera roto.
+    always_infer=False,
 )
-sesion = main.CameraSession(cfg_cam)
+sesion = camera.CameraSession(cfg_cam)
 espia = Espia()
 sesion._consumers.append(espia)
 sesion.start(explicit=True)
@@ -288,42 +324,59 @@ srv.shutdown()
 
 print("\n=== 15. Sin consumidores, el pipeline se comporta igual que antes ===")
 srv2, puerto2 = servidor_mjpeg_local()
-cfg_sola = main.CameraConfig(
+cfg_sola = camera.CameraConfig(
     camera_id="camara-sola", stream_url=f"http://127.0.0.1:{puerto2}/",
     device="cpu", model_name="yolo11n",
+    # Con always_infer a false, lo único que podría encender la inferencia son
+    # los clientes o los consumidores, y aquí no hay ni unos ni otros.
+    # (El caso always_infer=True lo cubre test_cierre.py, caso 3d.)
+    always_infer=False,
 )
-sesion2 = main.CameraSession(cfg_sola)
+sesion2 = camera.CameraSession(cfg_sola)
 check("una cámara sin sección 'servo' no crea consumidores", sesion2._consumers == [])
 check("ni tracker", sesion2.servo_tracker is None)
 sesion2.start(explicit=True)
 time.sleep(2.0)
-check("sin clientes ni consumidores no se ejecuta inferencia",
+check("con always_infer=false, sin clientes ni consumidores no hay inferencia",
       sesion2.last_inference_ms is None, f"({sesion2.last_inference_ms})")
-check("pero el frame crudo se sigue publicando (para /snapshot)",
-      sesion2.snapshot(infer=False) is not None)
+check("y sin nadie que lo lea tampoco se codifica ningún JPEG",
+      sesion2.snapshot(infer=False) is None, f"({sesion2.snapshot(infer=False) is None})")
+# Antes aquí se comprobaba lo contrario ("el frame crudo se sigue publicando
+# para /snapshot"): se codificaba un JPEG por frame aunque no lo leyera nadie.
+# Ahora /snapshot se registra como cliente y fuerza uno recién hecho, que es lo
+# que cubre el caso 3d-bis de test_cierre.py.
 sesion2.shutdown()
 srv2.shutdown()
 
 print("\n=== 16. Los endpoints distinguen POR QUÉ no se mueve la torreta ===")
 # El caso que más despista es "todo conectado pero el firmware no tiene servos":
-# move_servo() falla en silencio y desde fuera es idéntico a apuntar mal. Cada
-# motivo tiene que dar un error distinto.
+# llamar a un servicio que la placa no publica falla en silencio, y desde fuera
+# es idéntico a apuntar mal. Cada motivo tiene que dar un error distinto.
 from fastapi import HTTPException  # noqa: E402
 
 
 class EsphomeFalso:
-    def __init__(self, is_connected=True, has_servo_service=True):
+    def __init__(self, is_connected=True, has_servo_service=True,
+                 servicio="set_servo_position"):
         self.is_connected = is_connected
-        self.has_servo_service = has_servo_service
+        self._servicios = {servicio} if has_servo_service else set()
         self.ordenes = []
 
-    def move_servo(self, pan, tilt):
-        self.ordenes.append((pan, tilt))
+    def tiene_servicio(self, nombre):
+        return nombre in self._servicios
+
+    @property
+    def servicios(self):
+        return tuple(self._servicios)
+
+    def llamar_servicio(self, nombre, /, **args):
+        self.ordenes.append((args["pan"], args["tilt"]))
+        return True
 
 
 def sesion_falsa(camera_id, con_servo=True, **kw_placa):
     """Sesión registrada en CAMERAS pero SIN arrancar hilos ni tocar el disco."""
-    cfg = main.CameraConfig(
+    cfg = camera.CameraConfig(
         camera_id=camera_id, stream_url="http://192.0.2.1:8080/",
         device="cpu", model_name="yolo11n",
         servo=ServoConfig() if con_servo else None,
@@ -333,12 +386,12 @@ def sesion_falsa(camera_id, con_servo=True, **kw_placa):
     # esperado). Se los ponemos a mano con dobles, que es justo lo que queremos
     # controlar aquí; con un noise_psk de verdad arrancaría un hilo intentando
     # conectar contra una IP muerta.
-    s = main.CameraSession(cfg)
+    s = camera.CameraSession(cfg)
     if con_servo:
         s.esphome = EsphomeFalso(**kw_placa)
         s.servo_tracker = ServoTracker(cfg.servo, s.esphome, camera_id)
         s._consumers = [s.servo_tracker]
-    main.CAMERAS[camera_id] = s  # a mano: register_camera persistiría a disco
+    registro.CAMERAS[camera_id] = s  # a mano: register_camera persistiría a disco
     return s
 
 
@@ -369,11 +422,19 @@ check("y la orden llega a la placa", s_ok.esphome.ordenes == [(0.25, -0.25)],
 check("cámara inexistente -> 404", codigo_de("no-existe") == 404)
 
 rutas = {r.path for r in main.app.routes}
-check("las rutas nuevas están registradas",
-      {"/cameras/{camera_id}/servo", "/cameras/{camera_id}/servo/tracking"} <= rutas)
+# La config del servo vive bajo /config/ como el resto de ajustes; /servo a
+# secas es el movimiento manual, que es una acción y no configuración.
+check("las rutas del servo están registradas",
+      {"/cameras/{camera_id}/servo", "/cameras/{camera_id}/config/servo"} <= rutas)
+check("todos los ajustes cuelgan de /config/",
+      {"/cameras/{camera_id}/config/inference", "/cameras/{camera_id}/config/keepalive",
+       "/cameras/{camera_id}/config/stream", "/cameras/{camera_id}/config/servo"} <= rutas)
+check("y ya no quedan las rutas viejas",
+      not ({"/cameras/{camera_id}/inference/config", "/cameras/{camera_id}/stream/config",
+            "/cameras/{camera_id}/servo/tracking"} & rutas))
 
 for cid in ("sin-servo", "desconectada", "sin-firmware", "torreta-ok"):
-    main.CAMERAS.pop(cid, None)
+    registro.CAMERAS.pop(cid, None)
 
 print("\n" + ("TODO OK" if not fallos else f"FALLOS: {fallos}"))
 sys.exit(1 if fallos else 0)

@@ -57,7 +57,7 @@ python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_
 
 Debería imprimir `True` y el nombre de la tarjeta (p. ej. `NVIDIA GeForce GTX 1080`).
 
-> **Nota GTX 1080 (Pascal):** `main.py` fuerza `torch.backends.cudnn.enabled = False`
+> **Nota GTX 1080 (Pascal):** `camera.py` fuerza `torch.backends.cudnn.enabled = False`
 > para evitar el error `CUDA misaligned address` con cuDNN en esta GPU.
 
 ### Resto de dependencias
@@ -104,20 +104,38 @@ Los dos están explicados en
 
 ## Registrar una cámara
 
+El alta va por **formulario**, así que desde Swagger (recomendado) sale cada
+campo en su casilla, con su descripción y su valor por defecto, en vez de un
+JSON que editar a mano:
+
 ```powershell
-curl -X POST http://localhost:8080/cameras -H "Content-Type: application/json" -d '{
-  "camera_id": "huerta",
-  "stream_url": "http://192.168.1.50:8080/",
-  "model_name": "yolo26m",
-  "device": "cuda",
-  "confidence": 0.5,
-  "classes": [0],
-  "noise_psk": "<api.encryption.key del YAML de la placa>"
-}'
+curl -X POST http://localhost:8080/cameras `
+  -F "camera_id=huerta" `
+  -F "stream_url=http://192.168.1.50:8080/" `
+  -F "model_name=yolo26m" -F "device=cuda" `
+  -F "confidence=0.5" -F "classes=0" `
+  -F "noise_psk=<api.encryption.key del YAML de la placa>"
 ```
 
-También se puede registrar desde Swagger (recomendado) con el mismo JSON.
-Ver `cameras_config.example.json` para todos los campos disponibles.
+`classes` son los IDs de clase COCO separados por comas (`0` = personas,
+`16` = pájaros); vacío significa todas. Ver
+[`CLASES_YOLO.md`](CLASES_YOLO.md) para la lista.
+
+**Los servos no se configuran aquí**: si la placa lleva torreta, se monta
+después con `POST /cameras/{camera_id}/config/servo`, que necesita que la
+cámara ya exista y tenga `noise_psk`.
+
+Todo lo de arriba se puede cambiar luego sin dar de baja la cámara, desde los
+endpoints `/config/…` (ver más abajo) — incluidos el modelo y el device, que
+relanzan la sesión solos porque son lo único que el pipeline resuelve una sola
+vez al arrancar.
+
+> **`always_infer`** (por defecto `true`): la cámara corre YOLO aunque nadie
+> esté mirando el stream, así que **sigue detectando con el navegador
+> cerrado** — y por tanto ocupa GPU mientras esté despierta (medido, una cámara
+> con `yolo26m` ≈ 29 % de una GTX 1080). Ponlo a `false` en una cámara que solo
+> quieras usar como vídeo. No es lo mismo que `default_infer`, que solo decide
+> si `/stream` y `/snapshot` devuelven anotado o crudo.
 
 La configuración se guarda automáticamente en `cameras_config.json` (mismo
 directorio) y se recarga sola en el siguiente arranque; no hace falta
@@ -149,12 +167,18 @@ falta llamar a `/start` a mano.
   [`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md))
 - `GET /cameras`, `POST /cameras`, `DELETE /cameras/{camera_id}` — alta/baja
 - `POST /cameras/{camera_id}/esphome/awake` — forzar "despierto"
-- `POST /cameras/{camera_id}/inference/config` — cambiar confidence, clases, imgsz…
-- `POST /cameras/{camera_id}/config/keepalive`
-- `POST /cameras/{camera_id}/stream/config`
-- `POST /detect` — detección puntual sobre una imagen por URL
-- `POST /detect-file` — íd. sobre un fichero subido
-- `POST /detect-file/annotated` — íd. devolviendo la imagen con las cajas
+
+Todos los ajustes de una cámara cuelgan de `/config/`, y van por formulario:
+
+- `POST /cameras/{camera_id}/config/inference` — `confidence`, `imgsz`,
+  `classes`, `always_infer`, y también el `model_name` y el `device`
+- `POST /cameras/{camera_id}/config/keepalive` — override del keep-alive
+- `POST /cameras/{camera_id}/config/stream` — `default_infer`
+- `POST /cameras/{camera_id}/config/servo` — la torreta pan/tilt
+- `POST /detect-file` — prueba puntual sobre una imagen subida, eligiendo
+  modelo/confianza/resolución. Devuelve JSON con las detecciones, o con
+  `annotated=true` la imagen con las cajas pintadas y un overlay de
+  modelo / ms / número de detecciones
 
 ---
 
@@ -198,7 +222,7 @@ falta llamar a `/start` a mano.
 
 | Fichero | Qué cubre |
 | --- | --- |
-| [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md) | Qué hace cada clase, método y endpoint de `main.py`, con diagramas (UML, flujo, secuencia). |
+| [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md) | El reparto por módulos y qué hace cada clase, método y endpoint, con diagramas (UML, flujo, secuencia). |
 | [`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md) | Cuánto vive cada instancia, quién la destruye y cómo se cierran los sockets cuando la placa se duerme. |
 
 ---
@@ -231,4 +255,4 @@ El resto de scripts de `test/` son pruebas manuales que sí necesitan la placa.
 
 Las notas sobre los P-states de la GTX 1080 y sobre por qué el filtrado de
 confianza / ByteTrack **no** era la causa de los cuelgues están en los
-comentarios de `_process_loop` dentro de `main.py`.
+comentarios de `_process_loop` dentro de `camera.py`.
