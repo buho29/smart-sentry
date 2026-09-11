@@ -203,31 +203,41 @@ async def start_all_cameras():
     pero de golpe). Las que ya estaban en marcha no se tocan."""
     sessions = list(CAMERAS.values())
     for session in sessions:
-        session.start(explicit=True)
+        session.manual_start()
+    save_cameras_to_disk()
     return [s.status() for s in sessions]
 
 
 @app.post("/cameras/stop")
 async def stop_all_cameras():
-    """Para todas las cámaras registradas, aunque tengan clientes mirando.
-    No bloquea: solo avisa a los hilos, que mueren solos en un momento."""
+    """Para todas las cámaras registradas, aunque tengan clientes mirando, y
+    las deja paradas hasta el siguiente start: ni el awake=on de la placa al
+    despertar/reconectar las rearranca, ni un reinicio del servicio (se guarda
+    en cameras_config.json). No bloquea: solo avisa a los hilos."""
     sessions = list(CAMERAS.values())
     for session in sessions:
-        session.stop(explicit=True)
+        session.manual_stop()
+    save_cameras_to_disk()
     return [s.status() for s in sessions]
 
 
 @app.post("/cameras/{camera_id}/start")
 async def start_camera(camera_id: str):
+    """Arranca la cámara a mano y levanta la parada manual de POST /stop."""
     session = get_camera(camera_id)
-    session.start(explicit=True)
+    session.manual_start()
+    save_cameras_to_disk()
     return session.status()
 
 
 @app.post("/cameras/{camera_id}/stop")
 async def stop_camera(camera_id: str):
+    """Para la cámara y la deja parada hasta POST /start: ni el awake=on de la
+    placa al despertar/reconectar ni un cliente nuevo la rearrancan, y la
+    parada sobrevive a un reinicio del servicio (va a cameras_config.json)."""
     session = get_camera(camera_id)
-    session.stop(explicit=True)
+    session.manual_stop()
+    save_cameras_to_disk()
     return session.status()
 
 

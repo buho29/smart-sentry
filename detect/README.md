@@ -159,6 +159,11 @@ Con `noise_psk` configurado, la cámara arranca y para sola siguiendo el estado
 real del PIR de la placa (`huerta_awake` on/off); en el uso normal no hace
 falta llamar a `/start` a mano.
 
+`/stop` es una **parada manual definitiva**: la cámara se queda parada hasta
+el siguiente `/start`, aunque la placa despierte o reconecte y republique
+`awake=on`, y aunque se reinicie el servicio (`manual_stop` se guarda en
+`cameras_config.json` y sale en `/status`).
+
 ### Otros endpoints
 
 - `GET /health` — vivo / no vivo

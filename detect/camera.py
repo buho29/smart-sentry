@@ -263,6 +263,13 @@ class CameraConfig(BaseModel):
     # A false, una variante que solo sirva vídeo no gasta GPU.
     always_infer: bool = True
 
+    # Parada manual (POST /stop): la cámara se queda parada hasta el siguiente
+    # POST /start, aunque la placa republique awake=on al reconectar o al
+    # despertar, o llegue un cliente nuevo. Va en la config (y no como estado
+    # de la sesión) para que sobreviva a un reinicio del servicio: si no, al
+    # reiniciar el primer awake=on la arrancaba otra vez.
+    manual_stop: bool = False
+
     # Si se rellena, la sesión abre también una conexión a la API nativa de
     # ESPHome (puerto 6053) de la misma placa (host sacado de stream_url), y
     # usa el binary_sensor indicado (object_id, ON/OFF) para arrancar/parar la
@@ -391,6 +398,10 @@ class CameraSession:
         if value == self._last_esphome_state and value == self.is_running:
             return
         self._last_esphome_state = value
+        if value and self.cfg.manual_stop:
+            print(f"[{self.cfg.camera_id}] {self.cfg.esphome_state_object_id}=on, pero la cámara "
+                  f"está parada a mano -> no arranco (POST /start para reactivarla)")
+            return
         if value:
             print(f"[{self.cfg.camera_id}] {self.cfg.esphome_state_object_id}=on -> arrancando cámara")
             self.start(explicit=True)
@@ -457,6 +468,22 @@ class CameraSession:
         with self._cond:
             self._cond.notify_all()  # despierta YA a los generadores esperando, sin esperar al polling de 5s
         print(f"[{self.cfg.camera_id}] lectura detenida")
+
+    def manual_start(self):
+        """Arranque manual (POST /start): quita la parada manual y arranca.
+        Quien llama debe persistir la config (save_cameras_to_disk)."""
+        with self._lock:
+            self.cfg.manual_stop = False
+        self.start(explicit=True)
+
+    def manual_stop(self):
+        """Parada manual (POST /stop): para y marca cfg.manual_stop para que
+        ni el awake=on de la placa ni un cliente nuevo la rearranquen, ni
+        ahora ni tras reiniciar el servicio. Quien llama debe persistir la
+        config (save_cameras_to_disk)."""
+        with self._lock:
+            self.cfg.manual_stop = True
+        self.stop(explicit=True)
 
     def restart(self) -> bool:
         """Relanza los hilos, sin tocar el controller de ESPHome ni los consumidores.
@@ -549,8 +576,10 @@ class CameraSession:
                 self._raw_clients += 1
             else:
                 self._follow_clients += 1
-        if self.esphome is None:
-            # Arranque perezoso solo para cámaras SIN control ESPHome. Con
+        if self.esphome is None and not self.cfg.manual_stop:
+            # Arranque perezoso solo para cámaras SIN control ESPHome (y no
+            # paradas a mano: un POST /stop tiene que seguir valiendo aunque
+            # el navegador vuelva a abrir el stream). Con
             # ESPHome, arrancar aquí sin saber si la placa está despierta
             # provocaría un _read_loop reintentando en bucle contra una
             # cámara dormida -> stream congelado/en blanco para el cliente.
@@ -930,6 +959,7 @@ class CameraSession:
             "camera_id": self.cfg.camera_id,
             "running": self.is_running,
             "explicit_start": self.explicit_start,
+            "manual_stop": self.cfg.manual_stop,
             "raw_clients": self._raw_clients,
             "infer_clients": self._infer_clients,
             "follow_clients": self._follow_clients,

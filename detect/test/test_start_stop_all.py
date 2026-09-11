@@ -61,6 +61,30 @@ check("/cameras/a/start sigue yendo a la individual", r.status_code == 200 and r
 r = client.post("/cameras/noexiste/start")
 check("404 en la individual con id inexistente", r.status_code == 404)
 
+print("\n=== Parada manual: persiste y gana al awake=on de la placa ===")
+import json  # noqa: E402
+
+def on_disk(cid):
+    return {e["camera_id"]: e for e in json.loads(_registry.CAMERAS_CONFIG_FILE.read_text())}[cid]["manual_stop"]
+
+r = client.post("/cameras/a/stop")
+check("status devuelve manual_stop=true", r.json()["manual_stop"] is True)
+check("manual_stop=true en cameras_config.json", on_disk("a") is True)
+n_start = len(calls["start"])
+sessions[0]._on_esphome_state(True)
+check("awake=on con parada manual NO llama a start()", len(calls["start"]) == n_start, str(calls["start"][n_start:]))
+sessions[0].add_client(None)
+check("un cliente nuevo con parada manual NO llama a start()", len(calls["start"]) == n_start)
+sessions[0].remove_client("follow")
+
+r = client.post("/cameras/a/start")
+check("status devuelve manual_stop=false", r.json()["manual_stop"] is False)
+check("manual_stop=false en cameras_config.json", on_disk("a") is False)
+n_start = len(calls["start"])
+sessions[0]._last_esphome_state = None
+sessions[0]._on_esphome_state(True)
+check("awake=on sin parada manual SÍ llama a start()", len(calls["start"]) == n_start + 1)
+
 _registry.CAMERAS.clear()
 print()
 if failures:
