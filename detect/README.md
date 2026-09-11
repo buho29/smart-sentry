@@ -78,6 +78,26 @@ registrar la cámara.
 ## Arranque
 
 ```powershell
+venv\Scripts\python.exe supervisor.py
+```
+
+Esto lanza uvicorn en el `:8080` y deja un **supervisor** escuchando en el
+`:8081`, que es lo que permite parar, reiniciar y arrancar el servicio desde
+Swagger o desde Home Assistant (un proceso muerto no puede arrancarse solo; el
+supervisor es el que vive siempre). Si uvicorn se cae, lo relanza; si lo paras
+a mano, se queda parado hasta que le des a `start`.
+
+| Desde | Parar | Reiniciar | Arrancar | Estado |
+| --- | --- | --- | --- | --- |
+| Swagger del servicio `:8080/docs` | `POST /service/shutdown` | `POST /service/restart` | — (si responde, ya está arrancado) | `GET /service/status` |
+| Supervisor `:8081/docs` / Home Assistant | `POST /service/stop` | `POST /service/restart` | `POST /service/start` | `GET /service/status` |
+
+Opciones: `--port` (supervisor, 8081), `--service-port` (uvicorn, 8080),
+`--no-autostart`.
+
+Uvicorn a pelo, sin supervisor (entonces `/service/*` en el `:8080` devuelve 503):
+
+```powershell
 uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --timeout-graceful-shutdown 5
 ```
 
@@ -87,6 +107,33 @@ uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --timeout-graceful-shutd
   tiempo (los hilos de cámara hacen `join()` al apagar).
 
 Documentación interactiva (Swagger): <http://localhost:8080/docs>
+
+### Desde Home Assistant
+
+En `configuration.yaml`, contra el supervisor (`<host>` = la máquina del servicio):
+
+```yaml
+rest_command:
+  detect_start:
+    url: "http://<host>:8081/service/start"
+    method: post
+  detect_stop:
+    url: "http://<host>:8081/service/stop"
+    method: post
+  detect_restart:
+    url: "http://<host>:8081/service/restart"
+    method: post
+
+binary_sensor:
+  - platform: rest
+    name: detect_running
+    resource: "http://<host>:8081/service/status"
+    value_template: "{{ value_json.running }}"
+    scan_interval: 30
+```
+
+Luego `rest_command.detect_restart` sirve como acción en cualquier automatización
+o botón.
 
 ### Dos mensajes del log que son normales
 
@@ -257,6 +304,12 @@ Ninguno de los dos necesita el ESP32: simulan una placa dormida con
   directorio temporal (no toca tu `cameras_config.json`), abre dos streams y le
   manda un Ctrl+C. Comprueba que el apagado no se come el
   `--timeout-graceful-shutdown` ni suelta `CancelledError`. Tarda ~20 s.
+- **`test/test_start_stop_all.py`** — `POST /cameras/start|stop` (todas y
+  una), y que la parada manual (`manual_stop`) se guarda en disco y gana al
+  `awake=on` de la placa.
+- **`test/test_supervisor.py`** — `supervisor.py` con un hijo de mentira en
+  vez de uvicorn: start/stop/restart/status, el watchdog relanza un crash pero
+  no una parada manual, y si el hijo ignora la señal se mata el árbol entero.
 
 El resto de scripts de `test/` son pruebas manuales que sí necesitan la placa.
 

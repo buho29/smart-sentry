@@ -8,12 +8,15 @@ registry.py.
 from __future__ import annotations
 
 import asyncio
+import os
+import threading
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
 import cv2
 import numpy as np
+import requests
 import torch
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.openapi.utils import get_openapi
@@ -75,6 +78,69 @@ app = FastAPI(title="YOLO Camera Service", lifespan=lifespan)
 @app.get("/health")
 async def health():
     return {"status": "ok", "cameras": list(CAMERAS.keys())}
+
+
+# ---------------------------------------------------------------------------
+# Servicio: parar / reiniciar uvicorn desde este mismo Swagger
+# ---------------------------------------------------------------------------
+#
+# Este proceso no puede reiniciarse a sí mismo: lo hace supervisor.py, que
+# vive aparte (:8081) y es quien lanza y mata a uvicorn. Estos endpoints solo
+# reenvían allí, para no tener que cambiar de pestaña. Arrancar no tiene
+# sentido aquí (si esto responde, ya está arrancado): eso va en el :8081 o
+# desde Home Assistant.
+
+SUPERVISOR_URL = f"http://127.0.0.1:{os.environ.get('DETECT_SUPERVISOR_PORT', '8081')}"
+
+
+def _supervisor_status() -> dict:
+    try:
+        r = requests.get(f"{SUPERVISOR_URL}/service/status", timeout=2)
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException:
+        raise HTTPException(503, f"supervisor no disponible en {SUPERVISOR_URL}: "
+                                 f"arranca el servicio con `python supervisor.py` "
+                                 f"para poder pararlo/reiniciarlo desde aquí")
+
+
+def _supervisor_post_later(path: str):
+    """Manda la orden al supervisor con un pequeño retraso, desde otro hilo,
+    para que esta respuesta llegue al navegador antes de que uvicorn empiece a
+    morir. Si lo llamásemos en línea, el supervisor bloquearía hasta que este
+    proceso muriera, y este proceso no muere hasta responder: 5s de
+    timeout-graceful-shutdown y un CancelledError por nada."""
+    def fire():
+        try:
+            requests.post(f"{SUPERVISOR_URL}{path}", timeout=30)
+        except requests.RequestException as e:
+            print(f"supervisor: {path} falló: {e!r}")
+    threading.Timer(0.3, fire).start()
+
+
+@app.get("/service/status")
+async def service_status():
+    """Estado del proceso de uvicorn según el supervisor (:8081)."""
+    return await asyncio.to_thread(_supervisor_status)
+
+
+@app.post("/service/restart")
+async def service_restart():
+    """Reinicia uvicorn (parada ordenada + arranque). Las cámaras vuelven con
+    lo que haya en cameras_config.json, manual_stop incluido. Tarda lo que
+    tarde torch en cargar: mira /health hasta que responda."""
+    await asyncio.to_thread(_supervisor_status)
+    _supervisor_post_later("/service/restart")
+    return {"ok": True, "note": "reiniciando; /health responderá cuando vuelva"}
+
+
+@app.post("/service/shutdown")
+async def service_shutdown():
+    """Apaga uvicorn de forma ordenada y definitiva: el supervisor no lo relanza
+    hasta un POST /service/start en el :8081 (o desde Home Assistant)."""
+    await asyncio.to_thread(_supervisor_status)
+    _supervisor_post_later("/service/stop")
+    return {"ok": True, "note": f"apagando; para arrancar: POST {SUPERVISOR_URL}/service/start"}
 
 
 @app.get("/config")
