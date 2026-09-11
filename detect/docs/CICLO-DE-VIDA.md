@@ -13,7 +13,7 @@ Hay un test de regresión que cubre todo esto sin necesidad de la placa:
 
 ```powershell
 cd detect
-venv\Scripts\python.exe test\test_cierre.py
+venv\Scripts\python.exe test\test_shutdown.py
 ```
 
 ---
@@ -68,7 +68,7 @@ Tampoco tiene sentido **si no va a haber ninguna inferencia real que
 proteger**: con `always_infer` a `false`, nadie mirando el stream y ningún
 consumidor pidiéndolo, `model.track()` no llega a ejecutarse, así que calentar
 la GPU no protege nada. Eran ~10 puntos de GPU gastados en reposo con la cámara
-despierta. Por eso `_toca_keepalive()` recibe también `hay_inferencia`.
+despierta. Por eso `_should_keepalive()` recibe también `has_inference`.
 
 Ahora, pasados `keepalive_idle_limit_sec` (3 s, configurable en
 `GLOBAL_CONFIG` y por `POST /config/keepalive`) sin un frame real, el
@@ -83,7 +83,7 @@ porque cubre de una vez los dos motivos de haberse enfriado (sin frames o sin
 inferencia pedida) y no calienta por un frame que no se va a inferir. Medido:
 vuelve a 29 %.
 
-La decisión vive en `_toca_keepalive()`, una función pura precisamente para
+La decisión vive en `_should_keepalive()`, una función pura precisamente para
 poder probarla sin GPU.
 
 ### `lifespan`
@@ -194,7 +194,7 @@ su propio pie y **espera al hilo**; el hilo cierra el socket y el loop en
 > cierra. Por eso justo después del `clear()` hay un `if self._stopping: break`:
 > como `shutdown()` pone `_stopping` **antes** de programar el `set`, la ventana
 > queda cerrada por los dos lados (si ganó el `clear()`, lo ve el `if`; si no,
-> el `set` despierta al `wait`). Lo cazó el caso 4 de `test_cierre.py`.
+> el `set` despierta al `wait`). Lo cazó el caso 4 de `test_shutdown.py`.
 
 ---
 
@@ -436,7 +436,7 @@ cliente lento no acumula memoria, solo se salta frames.
   otra (§3).
 
 Los dos tests de `test/` cubren todo esto sin necesidad de las placas:
-`test_cierre.py` para las piezas sueltas y `test_apagado_e2e.py` para el
+`test_shutdown.py` para las piezas sueltas y `test_shutdown_e2e.py` para el
 apagado real de uvicorn con dos streams abiertos.
 
 ---

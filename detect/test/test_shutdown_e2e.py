@@ -11,11 +11,11 @@ llega hasta que el paso 2 se rinde por timeout:
     ERROR:    Cancel 2 running task(s), timeout graceful shutdown exceeded
     ...un CancelledError por cada cliente conectado...
 
-`test_cierre.py` (casos 6 y 7) cubre las piezas por separado; esto comprueba el
+`test_shutdown.py` (casos 6 y 7) cubre las piezas por separado; esto comprueba el
 camino real de uvicorn de punta a punta.
 
     cd detect
-    venv\\Scripts\\python.exe test\\test_apagado_e2e.py
+    venv\\Scripts\\python.exe test\\test_shutdown_e2e.py
 
 No necesita las placas: monta un servidor MJPEG local. Tampoco toca el
 `cameras_config.json` real, porque copia `main.py` a un directorio temporal y
@@ -45,25 +45,25 @@ PY = DETECT / "venv" / "Scripts" / "python.exe"
 if not PY.exists():  # fuera de Windows o sin venv
     PY = Path(sys.executable)
 
-MODELO = "yolo11n"
-ARRANQUE_TIMEOUT = 120  # el primer import de torch/ultralytics es lento
+MODEL = "yolo11n"
+STARTUP_TIMEOUT = 120  # el primer import de torch/ultralytics es lento
 
-fallos: list[str] = []
+failures: list[str] = []
 
 
-def check(nombre, cond, extra=""):
-    print(f"  {'PASS ' if cond else 'FALLO'}  {nombre} {extra}")
+def check(name, cond, extra=""):
+    print(f"  {'PASS ' if cond else 'FALLO'}  {name} {extra}")
     if not cond:
-        fallos.append(nombre)
+        failures.append(name)
 
 
-def puerto_libre() -> int:
+def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
 
-def servidor_mjpeg_local():
+def local_mjpeg_server():
     """Cámara de mentira que emite un JPEG **real** sin parar.
 
     Tiene que ser un JPEG válido: con bytes basura `cv2.imdecode` devuelve
@@ -74,7 +74,7 @@ def servidor_mjpeg_local():
     ok, buf = cv2.imencode(".jpg", np.zeros((48, 64, 3), dtype=np.uint8))
     assert ok, "no se pudo generar el JPEG de prueba"
     jpg = buf.tobytes()
-    parte = (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+    part = (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
              + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n")
 
     class H(http.server.BaseHTTPRequestHandler):
@@ -84,7 +84,7 @@ def servidor_mjpeg_local():
             self.end_headers()
             try:
                 while True:
-                    self.wfile.write(parte)
+                    self.wfile.write(part)
                     self.wfile.flush()
                     time.sleep(0.1)
             except Exception:
@@ -99,7 +99,7 @@ def servidor_mjpeg_local():
     return srv, srv.server_address[1]
 
 
-def abrir_stream(url, listo, parar, errores):
+def open_stream(url, ready, stop, errors):
     """Consume un stream MJPEG de verdad hasta que se le diga que pare.
 
     Tiene que seguir leyendo en bucle: si solo se pide un chunk y se suelta el
@@ -111,19 +111,19 @@ def abrir_stream(url, listo, parar, errores):
         r = requests.get(url, stream=True, timeout=30)
         it = r.iter_content(chunk_size=4096)
         next(it)  # confirmar que ya emite antes de dar el visto bueno
-        listo.set()
+        ready.set()
         try:
             for _ in it:
-                if parar.is_set():
+                if stop.is_set():
                     break
         finally:
             r.close()
     except Exception as e:
-        errores.append(f"{url}: {e!r}")
-        listo.set()
+        errors.append(f"{url}: {e!r}")
+        ready.set()
 
 
-def mandar_señal_de_parada(proc):
+def send_stop_signal(proc):
     """Lo más parecido a un Ctrl+C que se puede mandar a otro proceso.
 
     En Windows, CTRL_C_EVENT no se puede dirigir a un proceso concreto (va a
@@ -138,30 +138,30 @@ def mandar_señal_de_parada(proc):
 
 
 def main():
-    tmp = Path(tempfile.mkdtemp(prefix="e2e_apagado_"))
+    tmp = Path(tempfile.mkdtemp(prefix="e2e_shutdown_"))
     srv = proc = None
     streams = []
-    parar_lectores = threading.Event()  # definido aquí porque el finally lo usa
+    stop_readers = threading.Event()  # definido aquí porque el finally lo usa
     try:
         # Todos los módulos del servicio, no solo main.py: importa a sus
         # vecinos (detections, servo_tracker) y en el temporal no está el
         # directorio original en sys.path.
-        for modulo in DETECT.glob("*.py"):
-            shutil.copy(modulo, tmp / modulo.name)
+        for module in DETECT.glob("*.py"):
+            shutil.copy(module, tmp / module.name)
         # Copiamos los pesos si los hay, para que ultralytics no se los baje
         # otra vez dentro del temporal en cada ejecución.
-        pesos = DETECT / f"{MODELO}.pt"
-        if pesos.exists():
-            shutil.copy(pesos, tmp / pesos.name)
+        weights = DETECT / f"{MODEL}.pt"
+        if weights.exists():
+            shutil.copy(weights, tmp / weights.name)
         print(f"copia aislada de main.py en {tmp}")
 
-        srv, puerto_cam = servidor_mjpeg_local()
-        puerto_api = puerto_libre()
-        print(f"cámara falsa en :{puerto_cam}, API en :{puerto_api}")
+        srv, cam_port = local_mjpeg_server()
+        api_port = free_port()
+        print(f"cámara falsa en :{cam_port}, API en :{api_port}")
 
         proc = subprocess.Popen(
             [str(PY), "-m", "uvicorn", "main:app", "--host", "127.0.0.1",
-             "--port", str(puerto_api), "--workers", "1",
+             "--port", str(api_port), "--workers", "1",
              "--timeout-graceful-shutdown", "5"],
             cwd=tmp,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -175,16 +175,16 @@ def main():
                if sys.platform == "win32" else {}),
         )
 
-        salida: list[str] = []
+        output: list[str] = []
         threading.Thread(
-            target=lambda: [salida.append(l.rstrip()) for l in proc.stdout],
+            target=lambda: [output.append(l.rstrip()) for l in proc.stdout],
             daemon=True,
         ).start()
 
-        base = f"http://127.0.0.1:{puerto_api}"
-        for _ in range(ARRANQUE_TIMEOUT * 2):
+        base = f"http://127.0.0.1:{api_port}"
+        for _ in range(STARTUP_TIMEOUT * 2):
             if proc.poll() is not None:
-                print("el servidor murió al arrancar:\n" + "\n".join(salida))
+                print("el servidor murió al arrancar:\n" + "\n".join(output))
                 return 1
             try:
                 if requests.get(f"{base}/health", timeout=1).ok:
@@ -192,7 +192,7 @@ def main():
             except Exception:
                 time.sleep(0.5)
         else:
-            print("el servidor no arrancó a tiempo:\n" + "\n".join(salida))
+            print("el servidor no arrancó a tiempo:\n" + "\n".join(output))
             return 1
         print("uvicorn arrancado")
 
@@ -200,30 +200,30 @@ def main():
             # El alta va por formulario, no por JSON
             r = requests.post(f"{base}/cameras", data={
                 "camera_id": f"cam{i}",
-                "stream_url": f"http://127.0.0.1:{puerto_cam}/",
-                "model_name": MODELO, "device": "cpu", "default_infer": "false",
+                "stream_url": f"http://127.0.0.1:{cam_port}/",
+                "model_name": MODEL, "device": "cpu", "default_infer": "false",
             }, timeout=60)
             assert r.ok, f"alta de cam{i} falló: {r.status_code} {r.text}"
             # explicit_start=True, que es como quedan las cámaras de verdad
-            # cuando la placa publica `estado=on`. Sin esto, al salir el
+            # cuando la placa publica `awake=on`. Sin esto, al salir el
             # generador saltaría el autostop por quedarse sin clientes y el
             # log no se parecería al de producción.
             requests.post(f"{base}/cameras/cam{i}/start", timeout=30).raise_for_status()
 
-        errores: list[str] = []
+        errors: list[str] = []
         for i in (1, 2):
-            listo = threading.Event()
+            ready = threading.Event()
             h = threading.Thread(
-                target=abrir_stream,
+                target=open_stream,
                 args=(f"{base}/cameras/cam{i}/stream?infer=false",
-                      listo, parar_lectores, errores),
-                daemon=True, name=f"cliente-cam{i}",
+                      ready, stop_readers, errors),
+                daemon=True, name=f"client-cam{i}",
             )
             h.start()
             streams.append(h)
-            assert listo.wait(timeout=60), f"el stream de cam{i} no llegó a emitir"
+            assert ready.wait(timeout=60), f"el stream de cam{i} no llegó a emitir"
             print(f"  stream de cam{i} abierto y emitiendo")
-        assert not errores, f"errores abriendo streams: {errores}"
+        assert not errors, f"errores abriendo streams: {errors}"
 
         time.sleep(2)  # que el pipeline se asiente
         check("los dos clientes siguen conectados",
@@ -231,10 +231,10 @@ def main():
 
         print("\n>>> señal de parada con los dos streams abiertos...")
         t0 = time.perf_counter()
-        mandar_señal_de_parada(proc)
+        send_stop_signal(proc)
         proc.wait(timeout=60)
         dt = time.perf_counter() - t0
-        log = "\n".join(salida)
+        log = "\n".join(output)
 
         print(f">>> el proceso terminó en {dt:.2f}s\n")
         print("---------------- log del servidor ----------------")
@@ -255,7 +255,7 @@ def main():
         # --timeout-graceful-shutdown esperando a los generadores.
         check("no espera al timeout de gracia (< 3s)", dt < 3.0, f"({dt:.2f}s)")
     finally:
-        parar_lectores.set()
+        stop_readers.set()
         for h in streams:
             h.join(timeout=5)
         if proc is not None and proc.poll() is None:
@@ -264,8 +264,8 @@ def main():
             srv.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
 
-    print("\n" + ("E2E OK" if not fallos else f"FALLOS: {fallos}"))
-    return 1 if fallos else 0
+    print("\n" + ("E2E OK" if not failures else f"FALLOS: {failures}"))
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

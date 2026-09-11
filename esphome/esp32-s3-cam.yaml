@@ -81,7 +81,7 @@ esphome:
           }
 
           // Placa siempre encendida: dejamos el estado en ON por defecto.
-          id(estado).publish_state(true);
+          id(awake).publish_state(true);
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -112,8 +112,8 @@ logger:
 # API de ESPHome.
 # Canal de control con el cliente (servicio Python vía aioesphomeapi, o Home
 # Assistant): expone las entidades de la cámara y los sensores de diagnóstico.
-# Al conectar el cliente se publica el binary_sensor `estado`=ON. Esta placa
-# está siempre encendida, así que `estado` se mantiene siempre en ON (nunca
+# Al conectar el cliente se publica el binary_sensor `awake`=ON. Esta placa
+# está siempre encendida, así que `awake` se mantiene siempre en ON (nunca
 # pasa a OFF); el servicio Python (main3) lo usa igual que en `huerta.yaml`
 # para arrancar la lectura de la cámara.
 # -----------------------------------------------------------------------------
@@ -124,9 +124,9 @@ api:
     then:
       # delay de 100ms para que la API esté lista antes de enviar el estado
       - delay: 100ms
-      - logger.log: "api: client connected, sending estado ON"
+      - logger.log: "api: client connected, sending awake ON"
       - lambda: |-
-          id(estado).publish_state(true);
+          id(awake).publish_state(true);
 
 # -----------------------------------------------------------------------------
 # Actualizaciones inalámbricas (OTA - Over-The-Air).
@@ -243,12 +243,12 @@ safe_mode:
 # Igual que en `huerta.yaml`, pero esta placa está siempre encendida: el valor
 # se fija en ON en el arranque y al conectar el cliente, y nunca pasa a OFF.
 # El servicio Python (main3) vigila este binary_sensor por su object_id
-# `estado` para arrancar la lectura de la cámara.
+# `awake` para arrancar la lectura de la cámara.
 # -----------------------------------------------------------------------------
 binary_sensor:
   - platform: template
-    name: "Estado"
-    id: estado
+    name: "Awake"
+    id: awake
     device_class: running
     entity_category: diagnostic
 
@@ -392,7 +392,7 @@ select:
 # -----------------------------------------------------------------------------
 text:
   - platform: template
-    name: "URL aviso servidor"
+    name: "Server awake URL"
     id: server_awake_url
     entity_category: config
     mode: text

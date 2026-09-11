@@ -37,9 +37,9 @@ _SHUTTING_DOWN = False
 # Las mismas que captura uvicorn (server.py, HANDLED_SIGNALS): si nos
 # encadenáramos a menos, un Ctrl+Break apagaría el servidor sin que los
 # generadores se enteraran, que es justo el problema que esto arregla.
-_SEÑALES_APAGADO = (signal.SIGINT, signal.SIGTERM)
+_SHUTDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 if sys.platform == "win32":
-    _SEÑALES_APAGADO += (signal.SIGBREAK,)  # Ctrl+Break
+    _SHUTDOWN_SIGNALS += (signal.SIGBREAK,)  # Ctrl+Break
 
 
 def is_shutting_down() -> bool:
@@ -51,13 +51,13 @@ def _install_shutdown_signal_hook():
     if threading.current_thread() is not threading.main_thread():
         return  # signal.signal solo funciona desde el hilo principal
 
-    for sig in _SEÑALES_APAGADO:
+    for sig in _SHUTDOWN_SIGNALS:
         try:
-            previo = signal.getsignal(sig)
+            previous = signal.getsignal(sig)
         except (ValueError, OSError):
             continue
 
-        def handler(signum, frame, _previo=previo):
+        def handler(signum, frame, _previous=previous):
             # Ojo: esto corre dentro de un handler de señal. Una asignación a
             # un bool de módulo es atómica y segura aquí; un threading.Event
             # no lo sería del todo, porque set() coge un lock.
@@ -65,8 +65,8 @@ def _install_shutdown_signal_hook():
             _SHUTTING_DOWN = True
             # Delegamos en el handler de uvicorn (Server.handle_exit), que es
             # quien de verdad arranca el apagado ordenado.
-            if callable(_previo):
-                _previo(signum, frame)
+            if callable(_previous):
+                _previous(signum, frame)
 
         try:
             signal.signal(sig, handler)

@@ -61,7 +61,7 @@ class DetectionConsumer(Protocol):
     Todos los métodos se llaman desde el hilo de proceso de la sesión
     (`yolo-<camera_id>`), uno detrás de otro y sin lock: **no deben bloquear**.
     Para hablar con la placa hay que usar algo asíncrono como
-    `EsphomeController.llamar_servicio`, que solo encola la orden en otro hilo;
+    `EsphomeController.call_service`, que solo encola la orden en otro hilo;
     una llamada de red síncrona aquí frenaría el pipeline de vídeo entero.
     """
 

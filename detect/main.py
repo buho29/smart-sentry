@@ -2,7 +2,7 @@
 
 Este modulo es solo la API HTTP. El pipeline de video esta en camera.py, la
 conexion con las placas en esphome_api.py y el registro de camaras en
-registro.py.
+registry.py.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from apagado import _install_shutdown_signal_hook
+from shutdown import _install_shutdown_signal_hook
 from camera import (
     DEFAULT_DEVICE,
     GLOBAL_CONFIG,
@@ -28,12 +28,13 @@ from camera import (
     get_model,
 )
 from log import print
-from registro import (
+from registry import (
     CAMERAS,
     _cameras_lock,
     get_camera,
     load_cameras_from_disk,
     register_camera,
+    replace_camera,
     save_cameras_to_disk,
 )
 from servo_tracker import ServoConfig, ServoTracker
@@ -119,7 +120,7 @@ def _parse_classes(txt: Optional[str]) -> Optional[list[int]]:
                                  f"separados por comas (p.ej. '0,16'), no {txt!r}")
 
 
-def _validar_device(device: str) -> str:
+def _validate_device(device: str) -> str:
     device = device.strip().lower()
     if device.startswith("cuda") and not torch.cuda.is_available():
         raise HTTPException(400, "este equipo no tiene CUDA disponible; usa device='cpu'")
@@ -141,7 +142,7 @@ async def add_camera(
     always_infer: bool = Form(True, description="Correr YOLO aunque nadie mire el stream, para que la cámara siga detectando con el navegador cerrado. A false ahorra GPU en una cámara que solo sirva vídeo."),
     keepalive_enabled: Optional[bool] = Form(None, description="Override del keep-alive de GPU para esta cámara. Vacío = usar el global de /config/keepalive."),
     noise_psk: Optional[str] = Form(None, description="api.encryption.key del YAML de la placa. Si se rellena, la sesión abre además la API nativa de ESPHome y arranca/para siguiendo el sensor de estado."),
-    esphome_state_object_id: str = Form("estado", description="object_id del sensor de la placa que dice si está despierta."),
+    esphome_state_object_id: str = Form("awake", description="object_id del sensor de la placa que dice si está despierta."),
 ):
     """Da de alta una cámara.
 
@@ -151,7 +152,7 @@ async def add_camera(
     """
     cfg = CameraConfig(
         camera_id=camera_id, stream_url=stream_url,
-        model_name=model_name, device=_validar_device(device),
+        model_name=model_name, device=_validate_device(device),
         confidence=confidence, imgsz=imgsz, classes=_parse_classes(classes),
         keepalive_enabled=keepalive_enabled,
         default_infer=default_infer, always_infer=always_infer,
@@ -177,6 +178,111 @@ async def remove_camera(camera_id: str):
     await asyncio.to_thread(session.shutdown)
     save_cameras_to_disk()
     return {"removed": camera_id}
+
+
+@app.patch("/cameras/{camera_id}")
+async def update_camera(
+    camera_id: str,
+    new_camera_id: Optional[str] = Form(None, description="Renombrar la cámara. VACÍO = dejar el id. Ojo: la placa llama a /cameras/{id}/esphome/awake, así que habría que cambiar también el YAML."),
+    stream_url: Optional[str] = Form(None, description="URL del stream MJPEG del ESP32. VACÍO = dejar la que tiene. Cambiarla reconstruye la sesión."),
+    model_name: Optional[str] = Form(None, description="Pesos YOLO, sin el .pt. VACÍO = dejar el que tiene. Cambiarlo relanza la sesión."),
+    device: Optional[str] = Form(None, description="'cuda' o 'cpu'. VACÍO = dejar el que tiene. Cambiarlo relanza la sesión."),
+    confidence: Optional[float] = Form(None, ge=0.0, le=1.0, description="Confianza mínima. VACÍO = dejar la que tiene."),
+    imgsz: Optional[int] = Form(None, description="Lado al que YOLO reescala el frame. VACÍO = dejar el que tiene."),
+    classes: Optional[str] = Form(None, description="IDs de clase COCO separados por comas. VACÍO = dejar las que tiene; para volver a 'todas' usa clear_classes."),
+    clear_classes: bool = Form(False, description="Quitar el filtro de clases (detectar todas)."),
+    default_infer: Optional[bool] = Form(None, description="Qué devuelven /stream y /snapshot sin ?infer=. VACÍO = dejar como está."),
+    always_infer: Optional[bool] = Form(None, description="Correr YOLO aunque nadie mire. VACÍO = dejar como está."),
+    keepalive_enabled: Optional[bool] = Form(None, description="Override del keep-alive de GPU. VACÍO = dejar como está; para volver al global usa clear_keepalive."),
+    clear_keepalive: bool = Form(False, description="Quitar el override y seguir el keep-alive global."),
+    noise_psk: Optional[str] = Form(None, description="api.encryption.key de la placa. VACÍO = dejar la que tiene; para quitarla usa clear_noise_psk. Cambiarla reconstruye la sesión."),
+    clear_noise_psk: bool = Form(False, description="Quitar la API nativa de ESPHome de esta cámara (deja de arrancar/parar según la placa). Reconstruye la sesión."),
+    esphome_state_object_id: Optional[str] = Form(None, description="object_id del sensor que dice si la placa está despierta. VACÍO = dejar el que tiene. Cambiarlo reconstruye la sesión."),
+):
+    """Edita cualquier campo de una cámara; lo que no se envía se conserva.
+
+    Según lo que cambie, cuesta más o menos:
+    - `confidence`, `imgsz`, `classes`, `default_infer`, `always_infer` y
+      `keepalive_enabled` se releen en cada frame: cambian al instante.
+    - `model_name` y `device` solo se resuelven al arrancar los hilos: la
+      sesión se relanza sola.
+    - `stream_url`, `noise_psk`, `esphome_state_object_id` y el id van en el
+      constructor de la sesión (ahí se monta la conexión ESPHome): se
+      reconstruye entera, conservando la sección `servo` y el estado de
+      arranque manual. Si estaba parada, sigue parada.
+    """
+    session = get_camera(camera_id)
+    cfg = session.cfg
+
+    changes: dict = {}
+    if (new_camera_id or "").strip():
+        changes["camera_id"] = new_camera_id.strip()
+    if (stream_url or "").strip():
+        changes["stream_url"] = stream_url.strip()
+    if (model_name or "").strip():
+        changes["model_name"] = model_name.strip()
+    if (device or "").strip():
+        changes["device"] = _validate_device(device)
+    if confidence is not None:
+        changes["confidence"] = confidence
+    if imgsz is not None:
+        changes["imgsz"] = imgsz
+    if clear_classes:
+        changes["classes"] = None
+    elif (classes or "").strip():
+        changes["classes"] = _parse_classes(classes)
+    if default_infer is not None:
+        changes["default_infer"] = default_infer
+    if always_infer is not None:
+        changes["always_infer"] = always_infer
+    if clear_keepalive:
+        changes["keepalive_enabled"] = None
+    elif keepalive_enabled is not None:
+        changes["keepalive_enabled"] = keepalive_enabled
+    if clear_noise_psk:
+        changes["noise_psk"] = None
+    elif (noise_psk or "").strip():
+        changes["noise_psk"] = noise_psk.strip()
+    if (esphome_state_object_id or "").strip():
+        changes["esphome_state_object_id"] = esphome_state_object_id.strip()
+
+    # Quedarse solo con lo que de verdad cambia, para no relanzar ni
+    # reconstruir por reenviar el mismo valor.
+    changes = {k: v for k, v in changes.items() if getattr(cfg, k) != v}
+    if not changes:
+        return {"rebuilt": False, "relaunched": False, **session.status()}
+    new_cfg = cfg.model_copy(update=changes)
+
+    rebuild = bool(changes.keys() & {"camera_id", "stream_url", "noise_psk", "esphome_state_object_id"})
+    relaunch = bool(changes.keys() & {"model_name", "device"})
+
+    if relaunch:
+        # Mismo motivo que en set_inference_config: que unos pesos inventados
+        # salgan como 400 aquí y no revienten el hilo de proceso.
+        try:
+            await asyncio.to_thread(get_model, new_cfg.model_name, new_cfg.device)
+        except Exception as e:
+            raise HTTPException(400, f"no pude cargar el modelo: {e}")
+
+    if rebuild:
+        resume = session.is_running and session.explicit_start
+        old, session = replace_camera(camera_id, new_cfg)
+        # shutdown() bloquea (join de hilos): fuera del event loop, como en
+        # remove_camera.
+        await asyncio.to_thread(old.shutdown)
+        if resume:
+            session.start(explicit=True)
+        relaunched = False
+        print(f"[{camera_id}] sesión reconstruida"
+              f"{f' como {new_cfg.camera_id}' if new_cfg.camera_id != camera_id else ''}")
+    else:
+        # Sustituir el objeto entero es seguro: los hilos leen self.cfg.<campo>
+        # en cada frame, no guardan referencia al cfg viejo.
+        session.cfg = new_cfg
+        relaunched = await asyncio.to_thread(session.restart) if relaunch else False
+
+    save_cameras_to_disk()
+    return {"rebuilt": rebuild, "relaunched": relaunched, **session.status()}
 
 
 @app.get("/cameras/{camera_id}/status")
@@ -233,14 +339,14 @@ async def set_inference_config(
     # El modelo se carga aquí y no en el hilo de proceso para que un nombre
     # inventado salga como un 400 en vez de reventar la cámara por lo bajo. Va
     # en un hilo porque cargar y precalentar unos pesos tarda segundos.
-    nuevo_modelo = (model_name or "").strip() or None
-    nuevo_device = _validar_device(device) if (device or "").strip() else None
-    relanzar = ((nuevo_modelo is not None and nuevo_modelo != session.cfg.model_name)
-                or (nuevo_device is not None and nuevo_device != session.cfg.device))
-    if relanzar:
-        destino = nuevo_device or session.cfg.device
+    new_model = (model_name or "").strip() or None
+    new_device = _validate_device(device) if (device or "").strip() else None
+    relaunch = ((new_model is not None and new_model != session.cfg.model_name)
+                or (new_device is not None and new_device != session.cfg.device))
+    if relaunch:
+        target_device = new_device or session.cfg.device
         try:
-            await asyncio.to_thread(get_model, nuevo_modelo or session.cfg.model_name, destino)
+            await asyncio.to_thread(get_model, new_model or session.cfg.model_name, target_device)
         except Exception as e:
             raise HTTPException(400, f"no pude cargar el modelo: {e}")
 
@@ -248,14 +354,14 @@ async def set_inference_config(
     session.cfg.imgsz = imgsz
     session.cfg.always_infer = always_infer
     session.cfg.classes = _parse_classes(classes)
-    if nuevo_modelo is not None:
-        session.cfg.model_name = nuevo_modelo
-    if nuevo_device is not None:
-        session.cfg.device = nuevo_device
+    if new_model is not None:
+        session.cfg.model_name = new_model
+    if new_device is not None:
+        session.cfg.device = new_device
 
-    relanzada = await asyncio.to_thread(session.restart) if relanzar else False
+    relaunched = await asyncio.to_thread(session.restart) if relaunch else False
     save_cameras_to_disk()
-    return {"relanzada": relanzada, **session.status()}
+    return {"relaunched": relaunched, **session.status()}
 
 
 @app.post("/cameras/{camera_id}/config/keepalive")
@@ -289,13 +395,13 @@ def get_servo_tracker(camera_id: str) -> ServoTracker:
                                  f"(falta la sección 'servo' y/o noise_psk)")
     if session.esphome is not None and not session.esphome.is_connected:
         raise HTTPException(503, f"sin conexión con la placa de '{camera_id}'")
-    servicio = session.servo_tracker.cfg.service
-    if session.esphome is not None and not session.esphome.tiene_servicio(servicio):
+    service = session.servo_tracker.cfg.service
+    if session.esphome is not None and not session.esphome.has_service(service):
         # El caso que más despista: todo conectado, pero el firmware no expone
         # el servicio, así que la llamada no haría absolutamente nada.
         raise HTTPException(503, f"la placa de '{camera_id}' no publica el servicio "
-                                 f"'{servicio}' (¿firmware sin servos?). Publica: "
-                                 f"{', '.join(session.esphome.servicios) or 'ninguno'}")
+                                 f"'{service}' (¿firmware sin servos?). Publica: "
+                                 f"{', '.join(session.esphome.services) or 'ninguno'}")
     return session.servo_tracker
 
 
@@ -331,8 +437,8 @@ async def set_servo_config(
     van por la API nativa de la placa.
     """
     session = get_camera(camera_id)
-    primera_vez = session.servo_tracker is None
-    if not session.configurar_servo(ServoConfig(
+    first_time = session.servo_tracker is None
+    if not session.configure_servo(ServoConfig(
         enabled=enabled, service=service, gain=gain, deadzone=deadzone,
         min_interval_sec=min_interval_sec,
         invert_pan=invert_pan, invert_tilt=invert_tilt,
@@ -342,7 +448,7 @@ async def set_servo_config(
     )):
         raise HTTPException(400, f"la cámara '{camera_id}' no tiene noise_psk, así que no "
                                  f"hay API de ESPHome por la que mover unos servos")
-    if primera_vez:
+    if first_time:
         print(f"[{camera_id}] torreta configurada, seguimiento "
               f"{'activado' if enabled else 'desactivado'}")
     save_cameras_to_disk()
@@ -385,15 +491,15 @@ async def snapshot_camera(camera_id: str, infer: Optional[bool] = Query(None)):
     # desde que se fue el último: hay que esperar a uno recién hecho. Cada
     # imencode devuelve un bytes nuevo, así que comparar por identidad es
     # exactamente "lo han vuelto a codificar desde que miré".
-    viejo = session.snapshot(infer)
+    old = session.snapshot(infer)
     session.add_client(mode)
     try:
         deadline = time.time() + 2.0
         jpg = None
         while time.time() < deadline:
-            actual = session.snapshot(infer)
-            if actual is not None and actual is not viejo:
-                jpg = actual
+            current = session.snapshot(infer)
+            if current is not None and current is not old:
+                jpg = current
                 break
             # await, no time.sleep(): esto corre en el event loop y un sleep
             # síncrono congelaba todos los demás streams cada vez que se pedía
@@ -404,7 +510,7 @@ async def snapshot_camera(camera_id: str, infer: Optional[bool] = Query(None)):
     if jpg is None:
         # No llegó ninguno nuevo a tiempo (cámara dormida o parada). Mejor
         # servir el último que se vio que un error, que es lo que hacía antes.
-        jpg = viejo
+        jpg = old
     if jpg is None:
         raise HTTPException(503, "Sin frame disponible todavía")
     return Response(content=jpg, media_type="image/jpeg")
@@ -456,29 +562,29 @@ async def detect_file(
             })
         return {"model": model_name, "detections": detections, "inference_ms": inference_ms}
 
-    salida = results.plot()  # numpy array (BGR) con las cajas ya pintadas
+    output = results.plot()  # numpy array (BGR) con las cajas ya pintadas
 
     # Mismo overlay que el stream de las cámaras. Aquí es además la única forma
     # de ver los ms y cuántas detecciones hubo, porque la respuesta es una
     # imagen y no hay JSON donde mirarlo. El modelo va delante porque este
     # endpoint existe justo para comparar modelos.
-    alto, ancho = salida.shape[:2]
+    height, width = output.shape[:2]
     # A diferencia del stream, que siempre es 640x480, aquí la imagen la sube
     # quien llama: puede ser una miniatura o una foto de 4000 px. Se usa la
     # misma escala que ultralytics para sus etiquetas (Annotator saca un grosor
     # del tamaño de la imagen y usa fontScale = grosor/3), o el overlay sale
     # ilegible al lado de las cajas que results.plot() acaba de pintar.
-    lw = max(round((alto + ancho) / 2 * 0.003), 2)
-    escala, grosor = lw / 3, max(lw - 1, 1)
-    texto = (f"{model_name} | {inference_ms:.0f} ms ({DEFAULT_DEVICE}) | "
-             f"{len(results.boxes)} detecciones")
-    (tw, th), base = cv2.getTextSize(texto, cv2.FONT_HERSHEY_SIMPLEX, escala, grosor)
+    lw = max(round((height + width) / 2 * 0.003), 2)
+    scale, thickness = lw / 3, max(lw - 1, 1)
+    text = (f"{model_name} | {inference_ms:.0f} ms ({DEFAULT_DEVICE}) | "
+            f"{len(results.boxes)} detecciones")
+    (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
     # Fondo sólido: el color fijo del stream se pierde sobre una imagen clara.
-    cv2.rectangle(salida, (0, 0), (tw + 2 * lw, th + base + 2 * lw), (0, 0, 0), -1)
-    cv2.putText(salida, texto, (lw, th + lw), cv2.FONT_HERSHEY_SIMPLEX,
-                escala, (255, 255, 0), grosor, cv2.LINE_AA)
+    cv2.rectangle(output, (0, 0), (tw + 2 * lw, th + base + 2 * lw), (0, 0, 0), -1)
+    cv2.putText(output, text, (lw, th + lw), cv2.FONT_HERSHEY_SIMPLEX,
+                scale, (255, 255, 0), thickness, cv2.LINE_AA)
 
-    ok, buf = cv2.imencode(".jpg", salida)
+    ok, buf = cv2.imencode(".jpg", output)
     if not ok:
         raise HTTPException(500, "No se pudo codificar la imagen anotada")
     return Response(content=buf.tobytes(), media_type="image/jpeg")

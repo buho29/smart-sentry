@@ -29,7 +29,7 @@
     ],
     "default_infer": true,
     "noise_psk": "LA_MISMA_QUE_api.encryption.key_DEL_YAML",
-    "esphome_state_object_id": "estado",
+    "esphome_state_object_id": "awake",
     "servo": {
       "enabled": true,
       "gain": 0.25,

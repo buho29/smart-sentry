@@ -155,7 +155,7 @@ contiene `noise_psk` e IPs de la LAN.
 | Arrancar / parar a mano | `POST /cameras/{camera_id}/start` \| `/stop` |
 
 Con `noise_psk` configurado, la cámara arranca y para sola siguiendo el estado
-real del PIR de la placa (`huerta_estado` on/off); en el uso normal no hace
+real del PIR de la placa (`huerta_awake` on/off); en el uso normal no hace
 falta llamar a `/start` a mano.
 
 ### Otros endpoints
@@ -166,9 +166,16 @@ falta llamar a `/start` a mano.
   cuales se deja de calentar la GPU, ver
   [`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md))
 - `GET /cameras`, `POST /cameras`, `DELETE /cameras/{camera_id}` — alta/baja
+- `PATCH /cameras/{camera_id}` — editar **cualquier** campo de la cámara
+  (`stream_url`, `noise_psk`, renombrar con `new_camera_id`, los de
+  inferencia...). Lo que no se envía se conserva; lo que se pueda se aplica en
+  caliente, cambiar `model_name`/`device` relanza los hilos y cambiar la URL,
+  la clave ESPHome o el id reconstruye la sesión conservando la sección
+  `servo`
 - `POST /cameras/{camera_id}/esphome/awake` — forzar "despierto"
 
-Todos los ajustes de una cámara cuelgan de `/config/`, y van por formulario:
+Los ajustes parciales de una cámara cuelgan de `/config/`, y van por
+formulario:
 
 - `POST /cameras/{camera_id}/config/inference` — `confidence`, `imgsz`,
   `classes`, `always_infer`, y también el `model_name` y el `device`
@@ -214,7 +221,7 @@ Todos los ajustes de una cámara cuelgan de `/config/`, y van por formulario:
 | **numpy** | La estructura numérica base sobre la que trabajan OpenCV y PyTorch/YOLO. Un frame es un array de numpy. |
 | **requests** | Cliente HTTP para el stream MJPEG del ESP32 (`requests.get(..., stream=True)` + `iter_content()`). |
 | **torch** (PyTorch) | El motor de deep learning bajo YOLO. Se usa directamente para mover el modelo a la GPU (`model.to("cuda")`) y para `torch.backends.cudnn.enabled = False` (bug de la GTX 1080). |
-| **aioesphomeapi** | Cliente de la API nativa de ESPHome (puerto 6053, no HTTP). Lo usa `EsphomeController` para suscribirse a `huerta_estado`. |
+| **aioesphomeapi** | Cliente de la API nativa de ESPHome (puerto 6053, no HTTP). Lo usa `EsphomeController` para suscribirse a `huerta_awake`. |
 
 ---
 
@@ -230,19 +237,19 @@ Todos los ajustes de una cámara cuelgan de `/config/`, y van por formulario:
 ## Tests
 
 ```powershell
-venv\Scripts\python.exe test\test_cierre.py
-venv\Scripts\python.exe test\test_apagado_e2e.py
+venv\Scripts\python.exe test\test_shutdown.py
+venv\Scripts\python.exe test\test_shutdown_e2e.py
 ```
 
 Ninguno de los dos necesita el ESP32: simulan una placa dormida con
 `192.0.2.1` (TEST-NET-1) y una despierta con un servidor MJPEG local.
 
-- **`test/test_cierre.py`** — al parar una cámara se cierran de verdad la
+- **`test/test_shutdown.py`** — al parar una cámara se cierran de verdad la
   conexión del stream, el socket de la API nativa y el event loop del
   `EsphomeController`, y ningún hilo se queda vivo ni muere con un traceback.
   También cubre que un generador MJPEG sale solo con la señal de apagado y que
   el hook de señal delega en el handler de uvicorn.
-- **`test/test_apagado_e2e.py`** — levanta un uvicorn **de verdad** en un
+- **`test/test_shutdown_e2e.py`** — levanta un uvicorn **de verdad** en un
   directorio temporal (no toca tu `cameras_config.json`), abre dos streams y le
   manda un Ctrl+C. Comprueba que el apagado no se come el
   `--timeout-graceful-shutdown` ni suelta `CancelledError`. Tarda ~20 s.

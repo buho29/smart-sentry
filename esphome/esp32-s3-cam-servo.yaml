@@ -85,7 +85,7 @@ esphome:
           }
 
           // Placa siempre encendida: dejamos el estado en ON por defecto.
-          id(estado).publish_state(true);
+          id(awake).publish_state(true);
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -142,7 +142,7 @@ servo:
 # -----------------------------------------------------------------------------
 # API de ESPHome.
 # Canal de control con el servicio Python (aioesphomeapi) y con Home Assistant.
-# Al conectar el cliente se publica `estado`=ON; esta placa está siempre
+# Al conectar el cliente se publica `awake`=ON; esta placa está siempre
 # encendida, así que nunca pasa a OFF.
 #
 # `set_servo_position` es el contrato con el lado Python: el nombre se busca
@@ -160,9 +160,9 @@ api:
     then:
       # delay de 100ms para que la API esté lista antes de enviar el estado
       - delay: 100ms
-      - logger.log: "api: client connected, sending estado ON"
+      - logger.log: "api: client connected, sending awake ON"
       - lambda: |-
-          id(estado).publish_state(true);
+          id(awake).publish_state(true);
   actions:
     - action: set_servo_position
       variables:
@@ -249,8 +249,8 @@ safe_mode:
 
 binary_sensor:
   - platform: template
-    name: "Estado"
-    id: estado
+    name: "Awake"
+    id: awake
     device_class: running
     entity_category: diagnostic
 
@@ -379,7 +379,7 @@ select:
 
 text:
   - platform: template
-    name: "URL aviso servidor"
+    name: "Server awake URL"
     id: server_awake_url
     entity_category: config
     mode: text
@@ -405,7 +405,7 @@ button:
     entity_category: config
 
   - platform: template
-    name: "Servos a reposo"
+    name: "Servos home"
     entity_category: config
     on_press:
       - servo.write:

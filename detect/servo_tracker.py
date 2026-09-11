@@ -80,7 +80,7 @@ class ServoTracker:
 
     def __init__(self, cfg: ServoConfig, esphome, camera_id: str = ""):
         # `esphome` es un EsphomeController, pero aquí solo se le piden
-        # llamar_servicio() y tiene_servicio(): cualquier doble sirve para los
+        # call_service() y has_service(): cualquier doble sirve para los
         # tests.
         self.cfg = cfg
         self._esphome = esphome
@@ -95,58 +95,58 @@ class ServoTracker:
 
     # -- elección de objetivo ------------------------------------------------
 
-    def _elegir_objetivo(self, dets: list[Detection], width: int, height: int) -> Optional[Detection]:
+    def _pick_target(self, dets: list[Detection], width: int, height: int) -> Optional[Detection]:
         """Mantiene el objetivo bloqueado si sigue ahí; si no, engancha otro.
 
         Solo se consideran cajas con track_id: sin ID confirmado, ByteTrack no
         garantiza que la caja de este frame sea el mismo objeto que la del
         anterior, y bloquearse a eso sería bloquearse a nada.
         """
-        con_id = [d for d in dets if d.track_id is not None]
+        with_id = [d for d in dets if d.track_id is not None]
 
         if self.target_id is not None:
-            actual = next((d for d in con_id if d.track_id == self.target_id), None)
-            if actual is not None:
+            current = next((d for d in with_id if d.track_id == self.target_id), None)
+            if current is not None:
                 self._last_seen = time.monotonic()
-                return actual
+                return current
             # Perdido, pero puede ser una oclusión de un par de frames: se le da
             # margen antes de soltarlo, para no cambiar de objetivo por un
             # parpadeo del detector.
             if time.monotonic() - self._last_seen < self.cfg.lost_target_sec:
                 return None
-            self._soltar_objetivo()
+            self._release_target()
 
-        if not con_id:
+        if not with_id:
             return None
 
         # Objetivo nuevo: el más cercano al centro, que es el que menos hay que
         # mover la torreta para atender.
         cx0, cy0 = width / 2, height / 2
-        nuevo = min(con_id, key=lambda d: (d.cx - cx0) ** 2 + (d.cy - cy0) ** 2)
-        self.target_id = nuevo.track_id
+        new_target = min(with_id, key=lambda d: (d.cx - cx0) ** 2 + (d.cy - cy0) ** 2)
+        self.target_id = new_target.track_id
         self._last_seen = time.monotonic()
-        print(f"[{self._camera_id}] servo: objetivo #{self.target_id} ({nuevo.label})")
-        return nuevo
+        print(f"[{self._camera_id}] servo: objetivo #{self.target_id} ({new_target.label})")
+        return new_target
 
-    def _soltar_objetivo(self):
+    def _release_target(self):
         if self.target_id is None:
             return
         print(f"[{self._camera_id}] servo: objetivo #{self.target_id} perdido")
         self.target_id = None
         if self.cfg.return_home_on_lost:
-            self._enviar(self.cfg.home_pan, self.cfg.home_tilt, forzar=True)
+            self._send(self.cfg.home_pan, self.cfg.home_tilt, force=True)
 
     # -- envío ---------------------------------------------------------------
 
-    def _enviar(self, pan: float, tilt: float, forzar: bool = False) -> bool:
-        ahora = time.monotonic()
-        if not forzar and (ahora - self._last_send) < self.cfg.min_interval_sec:
+    def _send(self, pan: float, tilt: float, force: bool = False) -> bool:
+        now = time.monotonic()
+        if not force and (now - self._last_send) < self.cfg.min_interval_sec:
             return False
         self.pan = _clamp(pan)
         self.tilt = _clamp(tilt)
-        self._last_send = ahora
+        self._last_send = now
         self._sends += 1
-        self._esphome.llamar_servicio(self.cfg.service, pan=self.pan, tilt=self.tilt)
+        self._esphome.call_service(self.cfg.service, pan=self.pan, tilt=self.tilt)
         return True
 
     def move_to(self, pan: float, tilt: float):
@@ -155,7 +155,7 @@ class ServoTracker:
         Quien mueve la torreta a mano quiere que se mueva ya, y además así se
         puede verificar el hardware sin esperar a que haya detecciones.
         """
-        self._enviar(pan, tilt, forzar=True)
+        self._send(pan, tilt, force=True)
 
     # -- interfaz DetectionConsumer -----------------------------------------
 
@@ -163,29 +163,29 @@ class ServoTracker:
         if not self.cfg.enabled or width <= 0 or height <= 0:
             return
 
-        objetivo = self._elegir_objetivo(dets, width, height)
-        if objetivo is None:
+        target = self._pick_target(dets, width, height)
+        if target is None:
             return
 
         # Error normalizado a [-1, 1]: independiente de la resolución, así que
         # cambiar imgsz o la resolución de la cámara no descalibra la ganancia.
-        ex = (objetivo.cx - width / 2) / (width / 2)
-        ey = (objetivo.cy - height / 2) / (height / 2)
+        ex = (target.cx - width / 2) / (width / 2)
+        ey = (target.cy - height / 2) / (height / 2)
 
         if abs(ex) < self.cfg.deadzone and abs(ey) < self.cfg.deadzone:
             return  # ya está centrado: no gastar movimiento ni ancho de banda
 
-        paso_pan = self.cfg.gain * ex
-        paso_tilt = self.cfg.gain * ey
+        step_pan = self.cfg.gain * ex
+        step_tilt = self.cfg.gain * ey
         if self.cfg.invert_pan:
-            paso_pan = -paso_pan
+            step_pan = -step_pan
         if self.cfg.invert_tilt:
-            paso_tilt = -paso_tilt
+            step_tilt = -step_tilt
 
         # El signo por defecto asume una torreta que mira hacia delante: si el
         # objetivo aparece a la derecha de la imagen, la cámara tiene que girar
         # hacia ese lado, lo que en el montaje de referencia es restar pan.
-        self._enviar(self.pan - paso_pan, self.tilt + paso_tilt)
+        self._send(self.pan - step_pan, self.tilt + step_tilt)
 
     def on_idle(self) -> None:
         # Sin frames no hay detecciones, y el objetivo caduca igual que si la
@@ -193,7 +193,7 @@ class ServoTracker:
         # torreta seguiría enganchada a un ID que ByteTrack ya no reconoce.
         if self.target_id is not None and \
                 time.monotonic() - self._last_seen >= self.cfg.lost_target_sec:
-            self._soltar_objetivo()
+            self._release_target()
 
     def wants_inference(self) -> bool:
         return self.cfg.enabled
@@ -209,13 +209,13 @@ class ServoTracker:
             # llegó a publicar el servicio. Sin esto la llamada falla en
             # silencio y no hay forma de distinguirlo de un error de puntería.
             "service": self.cfg.service,
-            "servo_service": self._esphome.tiene_servicio(self.cfg.service),
+            "servo_service": self._esphome.has_service(self.cfg.service),
         }
 
     def shutdown(self) -> None:
         # A reposo antes de que se cierre la conexión: si no, el servo se queda
         # donde estuviera apuntando hasta el próximo arranque.
         try:
-            self._enviar(self.cfg.home_pan, self.cfg.home_tilt, forzar=True)
+            self._send(self.cfg.home_pan, self.cfg.home_tilt, force=True)
         except Exception as e:
             print(f"[{self._camera_id}] servo: fallo al volver a reposo:", repr(e))

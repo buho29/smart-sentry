@@ -29,7 +29,7 @@ La placa `huerta` ofrece dos canales:
 
 - **Stream MJPEG por HTTP** (`:8080`) y snapshot (`:8081`) — el vídeo.
 - **API nativa de ESPHome** (`:6053`) — control y estado. Expone un
-  `binary_sensor` `estado`: `ON` = despierta (PIR), `OFF` = a punto de dormir.
+  `binary_sensor` `awake`: `ON` = despierta (PIR), `OFF` = a punto de dormir.
 
 El servicio de `detect/` consume los dos: el vídeo por HTTP (con `requests` +
 OpenCV) y el estado por la API nativa (con `aioesphomeapi` y la
@@ -45,7 +45,7 @@ y hace de multiplexor.
 ESP32-S3-CAM (huerta)                 detect/ (FastAPI, 1 proceso)          Clientes
 ─────────────────────                 ───────────────────────────          ────────
 stream MJPEG  :8080  ──HTTP stream──►  hilo lector → cola → hilo YOLO  ──►  Home Assistant
-API nativa    :6053  ──estado on/off──►  EsphomeController → start/stop      Navegador / VLC
+API nativa    :6053  ──awake on/off──►  EsphomeController → start/stop      Navegador / VLC
         ▲
         └──────────  POST /cameras/huerta/esphome/awake  (al obtener IP)
 ```
@@ -56,7 +56,7 @@ La placa duerme casi todo el tiempo, así que cada vez que el PIR la despierta
 tiene que rehacer toda la pila de red desde cero. El primer coste es fijo e
 inevitable: **reasociar el WiFi y coger IP cuesta unos 3-4 s**. A eso hay que
 sumarle el tiempo que tarde el servicio de `detect/` en reconectar su API
-nativa y volver a suscribirse al `estado`.
+nativa y volver a suscribirse al `awake`.
 
 Ese segundo tramo es el que se puede recortar. Si se deja que `aioesphomeapi`
 lo resuelva "solo" —descubrimiento mDNS de la placa más su reconexión con
@@ -84,7 +84,7 @@ Para eliminar ese tramo, la placa **avisa activamente** en cuanto tiene red:
    timeout (por eso cada intento está acotado a `connect_attempt_timeout_sec`,
    1 s, en lugar de los ~10 s por defecto de la librería) y reintenta ya.
 
-Resultado: la API nativa queda suscrita y con el `estado` fluyendo **~0,1 s
+Resultado: la API nativa queda suscrita y con el `awake` fluyendo **~0,1 s
 después de que la placa tenga IP**, sin depender de mDNS ni del backoff interno
 de la librería. El tiempo total "PIR dispara → sistema operativo" lo domina
 entonces la reconexión del WiFi (esos 3-4 s), no el software.

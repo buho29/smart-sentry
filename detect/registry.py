@@ -64,6 +64,27 @@ def register_camera(cfg: CameraConfig, persist: bool = True) -> CameraSession:
     return session
 
 
+def replace_camera(old_id: str, new_cfg: CameraConfig) -> tuple[CameraSession, CameraSession]:
+    """Sustituye la sesión `old_id` por una nueva construida con `new_cfg`.
+
+    Hace falta cuando cambia algo que CameraSession solo resuelve en su
+    constructor (stream_url, noise_psk, esphome_state_object_id) o el propio
+    id, que es la clave del registro. Devuelve (vieja, nueva): el shutdown()
+    de la vieja lo hace quien llama, porque bloquea varios segundos y aquí
+    estamos bajo el lock. Tampoco persiste: el endpoint guarda al final.
+    """
+    with _cameras_lock:
+        old = CAMERAS.get(old_id)
+        if old is None:
+            raise HTTPException(404, f"Cámara '{old_id}' no registrada")
+        if new_cfg.camera_id != old_id and new_cfg.camera_id in CAMERAS:
+            raise HTTPException(400, f"La cámara '{new_cfg.camera_id}' ya existe")
+        CAMERAS.pop(old_id)
+        new = CameraSession(new_cfg)
+        CAMERAS[new_cfg.camera_id] = new
+    return old, new
+
+
 def get_camera(camera_id: str) -> CameraSession:
     session = CAMERAS.get(camera_id)
     if session is None:

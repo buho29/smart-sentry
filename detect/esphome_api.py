@@ -8,7 +8,7 @@ Lo del hardware es a proposito. Aqui llego a haber un move_servo() cableado a
 `set_servo_position`, y con la siguiente variante (el rele de disparo de la
 pistola) habria hecho falta un fire_relay(), y luego otro, y otro. Los
 `api: services:` de ESPHome ya son genericos —nombre y argumentos con
-nombre—, asi que cada variante llama al suyo con llamar_servicio() y este
+nombre—, asi que cada variante llama al suyo con call_service() y este
 modulo no se entera. Quien decide CUANDO llamar es un DetectionConsumer (ver
 detections.py), no esto.
 """
@@ -30,11 +30,11 @@ from log import print
 # sin bloquearlos.
 #
 # Cubre dos usos:
-#   - llamar_servicio(nombre, **args): llama a cualquiera de los
+#   - call_service(name, **args): llama a cualquiera de los
 #     `api: services:` que publique el YAML, sin bloquear a quien llama. Si la
 #     placa no publica ese servicio devuelve False en vez de fallar, que es lo
 #     que permite que un firmware sin ese hardware no rompa nada.
-#   - Vigila una entidad concreta (por object_id, p.ej. "estado", que en
+#   - Vigila una entidad concreta (por object_id, p.ej. "awake", que en
 #     el YAML de la placa es un binary_sensor) y llama a on_state_value(bool)
 #     cada vez que cambia. Así una CameraSession puede arrancar/parar en
 #     función del estado real del hardware (PIR + deep sleep) en vez de solo
@@ -87,7 +87,7 @@ class EsphomeController:
         self._stopping = False
         # Se marca cuando el hilo ya ha cerrado el socket y el event loop.
         # Sirve para que shutdown() sea idempotente y para que notify_awake()/
-        # llamar_servicio() no intenten programar nada en un loop ya cerrado.
+        # call_service() no intenten programar nada en un loop ya cerrado.
         self._closed = threading.Event()
 
         # Creados aquí, se usan dentro del loop propio de este controller.
@@ -272,7 +272,7 @@ class EsphomeController:
     def _on_state(self, state):
         # Llamado en el hilo/loop propio de este controller.
         if self._watch_key is not None and getattr(state, "key", None) == self._watch_key:
-            # 'estado' es un binary_sensor: state.state es un bool. Antes de la
+            # 'awake' es un binary_sensor: state.state es un bool. Antes de la
             # primera publicación, aioesphomeapi marca missing_state=True y
             # state.state no significa nada -> lo tratamos como "sin valor".
             if getattr(state, "missing_state", False):
@@ -288,20 +288,20 @@ class EsphomeController:
     # -- servicios de la placa -------------------------------------------
 
     @property
-    def servicios(self) -> tuple[str, ...]:
+    def services(self) -> tuple[str, ...]:
         """Los `api: services:` que publica el YAML de esta placa."""
         return tuple(self._services)
 
-    def tiene_servicio(self, nombre: str) -> bool:
+    def has_service(self, name: str) -> bool:
         """Si la placa publica ese servicio.
 
         Es lo que de verdad se quiere saber cuando algo "no se mueve": llamar a
         un servicio que el firmware no expone falla en silencio, y desde fuera
         es indistinguible de un error de puntería o de un relé mal cableado.
         """
-        return nombre in self._services
+        return name in self._services
 
-    def llamar_servicio(self, nombre: str, /, **args) -> bool:
+    def call_service(self, name: str, /, **args) -> bool:
         """Encola una llamada a un servicio de la placa. Devuelve si se encoló.
 
         **No bloquea**: solo deja la orden en el event loop propio de este
@@ -309,27 +309,27 @@ class EsphomeController:
         proceso de una cámara (ver `DetectionConsumer` en detections.py) sin
         frenar el pipeline de vídeo.
 
-        `nombre` va posicional-only para que un argumento del servicio que se
-        llamara `nombre` no choque con él.
+        `name` va posicional-only para que un argumento del servicio que se
+        llamara `name` no choque con él.
         """
         if not self._connected.is_set() or self._closed.is_set():
             return False
-        servicio = self._services.get(nombre)
-        if servicio is None:
+        service = self._services.get(name)
+        if service is None:
             return False
         try:
             asyncio.run_coroutine_threadsafe(
-                self._ejecutar_servicio(nombre, servicio, args), self._loop)
+                self._execute_service(name, service, args), self._loop)
         except RuntimeError:
             return False  # el loop se cerró entre el check y esta llamada
         return True
 
-    async def _ejecutar_servicio(self, nombre: str, servicio, args: dict):
+    async def _execute_service(self, name: str, service, args: dict):
         try:
-            self._client.execute_service(servicio, args)
+            self._client.execute_service(service, args)
         except Exception as e:
             print(f"EsphomeController[{self.address}]: error llamando a "
-                  f"'{nombre}':", repr(e))
+                  f"'{name}':", repr(e))
 
     # -- apagado ---------------------------------------------------------
 

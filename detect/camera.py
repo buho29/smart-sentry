@@ -22,7 +22,7 @@ import torch
 from pydantic import BaseModel
 from ultralytics import YOLO
 
-from apagado import is_shutting_down
+from shutdown import is_shutting_down
 from detections import Detection, DetectionConsumer
 from esphome_api import EsphomeController
 from log import print
@@ -68,40 +68,40 @@ def _iter_jpegs(chunks: Iterable[bytes], max_buffer: int = 2_000_000) -> Iterato
     """
     buffer = b""
     # None = esperando la cabecera de la siguiente parte; int = bytes de JPEG
-    # que todavía faltan por leer de la parte actual.
-    faltan: Optional[int] = None
+    # que todavía remaining por leer de la parte actual.
+    remaining: Optional[int] = None
 
     for chunk in chunks:
         buffer += chunk
-        avanzando = True
-        while avanzando:
-            avanzando = False
-            if faltan is None:
+        advanced = True
+        while advanced:
+            advanced = False
+            if remaining is None:
                 idx = buffer.find(b"\r\n\r\n")
                 if idx != -1:
                     m = _CONTENT_LENGTH_RE.search(buffer[:idx])
                     buffer = buffer[idx + 4:]
                     if m:
-                        faltan = int(m.group(1))
+                        remaining = int(m.group(1))
                     # Si el bloque no traía Content-Length (p.ej. era solo la
                     # línea del boundary suelta) no se fija nada y se reintenta
                     # con el siguiente \r\n\r\n que aparezca.
-                    avanzando = True
-            elif len(buffer) >= faltan:
-                yield buffer[:faltan]
-                buffer = buffer[faltan:]
-                faltan = None
-                avanzando = True
+                    advanced = True
+            elif len(buffer) >= remaining:
+                yield buffer[:remaining]
+                buffer = buffer[remaining:]
+                remaining = None
+                advanced = True
 
         # Salvavidas: si el stream viene corrupto y nunca cuadra una parte, el
         # buffer crecería sin fin. Se tira y se resincroniza con la siguiente
         # cabecera que llegue.
         if len(buffer) > max_buffer:
             buffer = b""
-            faltan = None
+            remaining = None
 
 
-def _motivo(e: BaseException, max_len: int = 90) -> str:
+def _reason(e: BaseException, max_len: int = 90) -> str:
     """Resumen corto de una excepción para el log.
 
     Los errores de urllib3 anidan MaxRetryError/HTTPConnectionPool/... y su
@@ -129,7 +129,7 @@ def _force_close_response(resp: "requests.Response", tag: str = ""):
     cuando el hilo lector está dentro de un recv() sobre ese mismo socket: en
     Windows, cerrar el objeto fichero no interrumpe la lectura en curso. Como
     stop() se llama desde el event loop de EsphomeController (cuando la placa
-    publica `estado=off` justo antes de dormirse) y desde endpoints async,
+    publica `awake=off` justo antes de dormirse) y desde endpoints async,
     quedarse bloqueado ahí congelaba la API entera durante esos segundos.
 
     Lo que sí desbloquea al lector al instante (~0.1 ms medidos) es un
@@ -195,20 +195,20 @@ class GlobalConfig:
 GLOBAL_CONFIG = GlobalConfig()
 
 
-def _toca_keepalive(is_cuda: bool, activo: bool, segundos_sin_frame: float,
-                    limite: float, hay_inferencia: bool) -> bool:
+def _should_keepalive(is_cuda: bool, enabled: bool, seconds_since_frame: float,
+                      idle_limit: float, has_inference: bool) -> bool:
     """¿Hay que lanzar una inferencia dummy para que la GPU no baje de P-state?
 
     Separado en una función pura para poder probar la lógica sin GPU. Ver el
     comentario largo sobre el bug de P-state de la GTX 1080 encima de
     _process_loop.
 
-    `hay_inferencia` es lo que evita calentar para nada: el workaround protege
+    `has_inference` es lo que evita calentar para nada: el workaround protege
     a las inferencias REALES de salir corruptas, así que si no va a haber
     ninguna (always_infer a false, nadie mirando y ningún consumidor), tener la
     GPU ocupada no protege nada.
     """
-    return is_cuda and activo and hay_inferencia and segundos_sin_frame < limite
+    return is_cuda and enabled and has_inference and seconds_since_frame < idle_limit
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +269,7 @@ class CameraConfig(BaseModel):
     # lectura en vez de depender solo de que haya clientes HTTP mirando el
     # stream.
     noise_psk: Optional[str] = None  # api.encryption.key del YAML de la placa
-    esphome_state_object_id: Optional[str] = "estado"
+    esphome_state_object_id: Optional[str] = "awake"
 
     # Hardware opcional de esta placa. None = esta variante no lo lleva, y
     # entonces la sesión ni siquiera crea el consumidor correspondiente. Va como
@@ -322,7 +322,7 @@ class CameraSession:
 
         # Conexión opcional a la API nativa de ESPHome de la misma placa,
         # para arrancar/parar la sesión según el estado real del hardware
-        # (binary_sensor `estado`: ON = despierto / OFF = dormido) en vez de
+        # (binary_sensor `awake`: ON = despierto / OFF = dormido) en vez de
         # solo por clientes HTTP.
         self.esphome: Optional[EsphomeController] = None
         self._last_esphome_state: Optional[bool] = None
@@ -343,7 +343,7 @@ class CameraSession:
         # que así se comporta exactamente igual que antes de que esto existiera.
         self._consumers: list[DetectionConsumer] = []
         self.servo_tracker: Optional[ServoTracker] = None
-        if cfg.servo is not None and not self.configurar_servo(cfg.servo):
+        if cfg.servo is not None and not self.configure_servo(cfg.servo):
             # Los servos van por la API nativa de la placa, que solo se levanta
             # con noise_psk. Sin ella no hay por dónde enviar nada, y arrancar
             # el seguimiento igualmente solo serviría para forzar inferencia
@@ -351,7 +351,7 @@ class CameraSession:
             print(f"[{cfg.camera_id}] servo configurado pero sin noise_psk: "
                   f"no hay API de ESPHome por la que mover nada, lo ignoro")
 
-    def configurar_servo(self, cfg: ServoConfig) -> bool:
+    def configure_servo(self, cfg: ServoConfig) -> bool:
         """Monta o reconfigura la torreta. Devuelve si se pudo.
 
         Único sitio que sabe enchufar un ServoTracker: lo usan tanto el alta de
@@ -376,7 +376,7 @@ class CameraSession:
         return True
 
     def _on_esphome_state(self, value: Optional[bool]):
-        # `estado` es un binary_sensor en el YAML de la placa, así que el valor
+        # `awake` es un binary_sensor en el YAML de la placa, así que el valor
         # llega como bool (True = despierto, False = dormido). None = todavía
         # sin publicar.
         if value is None:
@@ -525,9 +525,9 @@ class CameraSession:
                 # Si ya estaba marcado no hay nada que anunciar: es el caso del
                 # apagado, donde stop() ya logueó "lectura detenida" y luego
                 # cada generador pasa por aquí al soltar su cliente.
-                ya_parada = self._stop_event.is_set()
+                already_stopped = self._stop_event.is_set()
                 self._stop_event.set()
-                if not ya_parada:
+                if not already_stopped:
                     print(f"[{self.cfg.camera_id}] sin clientes, lectura detenida automáticamente")
 
     # -- suscripción de clientes -----------------------------------------
@@ -554,7 +554,7 @@ class CameraSession:
             # ESPHome, arrancar aquí sin saber si la placa está despierta
             # provocaría un _read_loop reintentando en bucle contra una
             # cámara dormida -> stream congelado/en blanco para el cliente.
-            # El propio estado="on" ya llama a start() cuando toca;
+            # El propio awake="on" ya llama a start() cuando toca;
             # el generador solo se queda esperando frames hasta entonces.
             self.start(explicit=False)
 
@@ -632,13 +632,13 @@ class CameraSession:
                 # Si esta sesión la gobierna ESPHome y también hemos perdido la
                 # API nativa, la placa está dormida (o fuera de cobertura): no
                 # tiene sentido machacar el stream HTTP cada segundo contra una
-                # IP muerta. Paramos; el siguiente `estado=on` nos rearranca
+                # IP muerta. Paramos; el siguiente `awake=on` nos rearranca
                 # (ver la nota sobre repeticiones en _on_esphome_state).
                 if self.esphome is not None and not self.esphome.is_connected:
-                    print(f"[{self.cfg.camera_id}] stream caído ({_motivo(e)}) y API de ESPHome "
+                    print(f"[{self.cfg.camera_id}] stream caído ({_reason(e)}) y API de ESPHome "
                           f"desconectada -> la placa parece dormida, dejo de reintentar")
                     break
-                print(f"[{self.cfg.camera_id}] stream interrumpido ({_motivo(e)}), "
+                print(f"[{self.cfg.camera_id}] stream interrumpido ({_reason(e)}), "
                       f"reconectando en {GLOBAL_CONFIG.reconnect_delay_sec}s...")
                 time.sleep(GLOBAL_CONFIG.reconnect_delay_sec)
                 continue
@@ -683,7 +683,7 @@ class CameraSession:
             if span > 0:
                 self.pipeline_fps = (len(fps_window) - 1) / span
 
-    def _avisar_consumidores(self, metodo: str, *args):
+    def _notify_consumers(self, method: str, *args):
         """Llama a un método de cada consumidor sin dejar que uno tumbe el resto.
 
         Esto corre en el hilo de proceso, en el camino crítico del vídeo: un
@@ -692,12 +692,12 @@ class CameraSession:
         """
         for c in self._consumers:
             try:
-                getattr(c, metodo)(*args)
+                getattr(c, method)(*args)
             except Exception as e:
                 self.last_error = repr(e)
-                print(f"[{self.cfg.camera_id}] {type(c).__name__}.{metodo} falló:", repr(e))
+                print(f"[{self.cfg.camera_id}] {type(c).__name__}.{method} falló:", repr(e))
 
-    def _que_hace_falta(self) -> tuple[bool, bool, bool]:
+    def _work_needed(self) -> tuple[bool, bool, bool]:
         """Qué trabajo pide este frame: (dibujar, inferir, publicar crudo).
 
         Se recalcula en cada vuelta del bucle, y ahí está la gracia: cambiar
@@ -708,16 +708,16 @@ class CameraSession:
         # porque un consumidor (los servos) necesita las detecciones pero no el
         # dibujo: sin clientes, pintar cajas y recodificar el JPEG sería trabajo
         # tirado en cada frame.
-        dibujar = self._infer_clients > 0 or (self._follow_clients > 0 and self.cfg.default_infer)
+        want_draw = self._infer_clients > 0 or (self._follow_clients > 0 and self.cfg.default_infer)
         # always_infer manda: la cámara sigue detectando con el navegador
         # cerrado. Los consumidores también piden inferencia, o el seguimiento
         # se apagaría al cerrar el navegador.
-        inferir = (self.cfg.always_infer or dibujar
-                   or self._consumidores_quieren_inferencia())
-        crudo = self._raw_clients > 0 or (self._follow_clients > 0 and not self.cfg.default_infer)
-        return dibujar, inferir, crudo
+        want_infer = (self.cfg.always_infer or want_draw
+                      or self._consumers_want_inference())
+        want_raw = self._raw_clients > 0 or (self._follow_clients > 0 and not self.cfg.default_infer)
+        return want_draw, want_infer, want_raw
 
-    def _consumidores_quieren_inferencia(self) -> bool:
+    def _consumers_want_inference(self) -> bool:
         for c in self._consumers:
             try:
                 if c.wants_inference():
@@ -738,14 +738,14 @@ class CameraSession:
         model = get_model(self.cfg.model_name, self.cfg.device)
         is_cuda = self.cfg.device.startswith("cuda")
 
-        def calentar():
+        def warm_up():
             try:
                 model.predict(np.zeros((640, 640, 3), dtype=np.uint8), imgsz=640, verbose=False)
             except Exception as e:
                 print(f"[{self.cfg.camera_id}] keep-alive de GPU falló:", repr(e))
 
-        ultimo_frame = time.monotonic()
-        en_reposo = False
+        last_frame = time.monotonic()
+        idle = False
 
         while not stop_event.is_set():
             keepalive_on = (
@@ -759,35 +759,35 @@ class CameraSession:
             # permite tocar default_infer o always_infer por API y que los
             # streams ya abiertos cambien sin reconectar.
             #
-            want_draw, want_infer, want_raw = self._que_hace_falta()
+            want_draw, want_infer, want_raw = self._work_needed()
 
-            limite = GLOBAL_CONFIG.keepalive_idle_limit_sec
-            calentando = _toca_keepalive(is_cuda, keepalive_on,
-                                         time.monotonic() - ultimo_frame, limite,
-                                         want_infer)
+            idle_limit = GLOBAL_CONFIG.keepalive_idle_limit_sec
+            warming = _should_keepalive(is_cuda, keepalive_on,
+                                        time.monotonic() - last_frame, idle_limit,
+                                        want_infer)
             # Si ya no toca calentar, esperar 1s en vez de 50ms: así el hilo
             # queda de verdad en reposo en lugar de girar a 20 Hz sin hacer nada.
-            wait_timeout = GLOBAL_CONFIG.keepalive_interval_sec if calentando else 1.0
+            wait_timeout = GLOBAL_CONFIG.keepalive_interval_sec if warming else 1.0
 
-            if is_cuda and keepalive_on and not calentando and not en_reposo:
-                en_reposo = True
-                motivo = ("nadie pide inferencia" if not want_infer
-                          else f"{limite:.0f}s sin frames")
-                print(f"[{self.cfg.camera_id}] {motivo} -> keep-alive de GPU en pausa")
+            if is_cuda and keepalive_on and not warming and not idle:
+                idle = True
+                reason = ("nadie pide inferencia" if not want_infer
+                          else f"{idle_limit:.0f}s sin frames")
+                print(f"[{self.cfg.camera_id}] {reason} -> keep-alive de GPU en pausa")
 
             try:
                 frame = raw_queue.get(timeout=wait_timeout)
             except queue.Empty:
                 # Sin frame: que los consumidores puedan caducar su objetivo en
                 # vez de quedarse apuntando a algo que ya no se ve.
-                self._avisar_consumidores("on_idle")
-                if calentando:
-                    calentar()
+                self._notify_consumers("on_idle")
+                if warming:
+                    warm_up()
                 if stop_event.is_set():
                     break
                 continue
 
-            ultimo_frame = time.monotonic()
+            last_frame = time.monotonic()
 
             self._update_fps(fps_window)
 
@@ -796,16 +796,16 @@ class CameraSession:
 
             if want_infer:
                 try:
-                    if en_reposo:
+                    if idle:
                         # Veníamos de dejar enfriar la GPU (sin frames, o sin
                         # nadie que pidiera inferencia). Una dummy justo antes
                         # de la primera de verdad conserva la garantía del
                         # workaround de P-state: la buena no sale corrupta.
                         # Aquí y no al recibir el frame, para no calentar por un
                         # frame que no se va a inferir.
-                        en_reposo = False
+                        idle = False
                         print(f"[{self.cfg.camera_id}] keep-alive de GPU reanudado")
-                        calentar()
+                        warm_up()
                     t0 = time.time()
                     results = model.track(
                         frame, persist=True, conf=self.cfg.confidence,
@@ -849,7 +849,7 @@ class CameraSession:
                     self.last_inference_ms = inference_ms
 
                     h, w = frame.shape[:2]
-                    self._avisar_consumidores("on_detections", dets, w, h)
+                    self._notify_consumers("on_detections", dets, w, h)
                 except Exception as e:
                     self.last_error = repr(e)
                     print(f"[{self.cfg.camera_id}] error en track/dibujo:", repr(e))

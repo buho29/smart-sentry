@@ -21,13 +21,13 @@
 #
 # 4) Integración con Python/servicio de inferencia
 #    - Tu servicio puede leer el stream HTTP directamente (puerto 8080).
-#    - Tiene un binary_sensor `estado` en la API de ESPHome (ON/OFF)
+#    - Tiene un binary_sensor `awake` en la API de ESPHome (ON/OFF)
 #      para saber si la cámara está activa o dormida.
 #    - Para controlar servos/actuadores en el ESP desde Python, usa la API de ESPHome
 #      (`aioesphomeapi`) y la clave `api.encryption.key` definida abajo.
 #
 # 6) Ajustes operativos desde Home Assistant
-#    - `Tiempo despierto (s)`: tiempo en segundos que el dispositivo queda despierto
+#    - `Awake time (s)`: tiempo en segundos que el dispositivo queda despierto
 #      tras una detección (cámbialo según batería/solar).
 #    - `Cam Resolution`, `Cam JPEG Quality`, `Cam Max Framerate`, `Cam AE Level`,
 #      `Cam AGC Gain Ceiling`, `Cam XCLK (MHz)`: parámetros ajustables en runtime.
@@ -123,7 +123,7 @@ logger:
 # -----------------------------------------------------------------------------
 # API de ESPHome: sirve para comunicar el estado del dispositivo con el cliente
 # (servicio Python vía aioesphomeapi, o Home Assistant). Cuando el cliente final
-# conecta, se publica el binary_sensor estado=ON para indicar que el ESP
+# conecta, se publica el binary_sensor awake=ON para indicar que el ESP
 # está despierto y operativo.
 # -----------------------------------------------------------------------------
 api:
@@ -133,9 +133,9 @@ api:
     then:
       # delay de 100ms para que la API esté lista antes de enviar el estado
       - delay: 100ms
-      - logger.log: "api: client connected, sending estado ON"
+      - logger.log: "api: client connected, sending awake ON"
       - lambda: |-
-          id(estado).publish_state(true);
+          id(awake).publish_state(true);
 
 # -----------------------------------------------------------------------------
 # Actualizaciones inalámbricas (OTA - Over-The-Air).
@@ -295,8 +295,8 @@ binary_sensor:
   # cliente Python que mantiene la conexión ese instante.
   # ---------------------------------------------------------------------------
   - platform: template
-    name: "Estado"
-    id: estado
+    name: "Awake"
+    id: awake
     device_class: running
     entity_category: diagnostic
 
@@ -310,7 +310,7 @@ number:
   # Cuanto mayor sea este valor, más tiempo estará activa la cámara antes de volver
   # a dormir.
   - platform: template
-    name: "Tiempo despierto (s)"
+    name: "Awake time (s)"
     id: awake_duration
     min_value: 10
     max_value: 600
@@ -432,7 +432,7 @@ select:
 # -----------------------------------------------------------------------------
 text:
   - platform: template
-    name: "URL aviso servidor"
+    name: "Server awake URL"
     id: server_awake_url
     entity_category: config
     mode: text
@@ -470,11 +470,11 @@ switch:
 # -----------------------------------------------------------------------------
 button:
   - platform: template
-    name: "Ir a dormir"
+    name: "Go to sleep"
     entity_category: config
     on_press:
       - lambda: |-
-          id(estado).publish_state(false);
+          id(awake).publish_state(false);
       - delay: 500ms
       - deep_sleep.enter: deep_sleep_1
 
@@ -518,11 +518,11 @@ sensor:
 # entra en deep sleep para ahorrar batería.
 # -----------------------------------------------------------------------------
 script:
-  - id: script_dormir_auto
+  - id: script_auto_sleep
     then:
-      - logger.log: "script_dormir_auto: sending estado OFF (reason: auto_timeout)"
+      - logger.log: "script_auto_sleep: sending awake OFF (reason: auto_timeout)"
       - lambda: |-
-          id(estado).publish_state(false);
+          id(awake).publish_state(false);
       # Esperamos 500 ms para que el evento llegue a HA antes de entrar en deep sleep
       - delay: 500ms
       - deep_sleep.enter: deep_sleep_1
@@ -550,7 +550,7 @@ interval:
             // Ponemos el contador altísimo para que no vuelva a entrar en 
             // este IF mientras el script retrasa el apagado medio segundo
             ultimo_movimiento = millis() + 9999999;
-            id(script_dormir_auto).execute();
+            id(script_auto_sleep).execute();
           }
 
 # -----------------------------------------------------------------------------
