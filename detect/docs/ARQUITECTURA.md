@@ -8,8 +8,9 @@ Para instalar y arrancar el servicio, ver [`README.md`](../README.md). Para
 cuánto vive cada instancia, qué la destruye y cómo se cierran los sockets
 cuando la placa se duerme, ver [`CICLO-DE-VIDA.md`](CICLO-DE-VIDA.md).
 
-> Los diagramas (clases UML, flujo de datos, ciclo de vida y secuencia) están
-> en la [§10](#10-diagramas). Se renderizan con
+> El diagrama de clases UML está en la [§3](#3-diagrama-de-clases-uml); el
+> resto (flujo de datos, ciclo de vida y secuencia) está en la
+> [§11](#11-diagramas). Se renderizan con
 > [Mermaid](https://mermaid.js.org/): GitHub los pinta solos y en VS Code hace
 > falta la extensión *Markdown Preview Mermaid Support*.
 
@@ -108,7 +109,167 @@ placa y hace de multiplexor hacia Home Assistant, el navegador, VLC, etc.
 
 ---
 
-## 3. Utilidades y estado global
+## 3. Diagrama de clases (UML)
+
+Relaciones entre las clases del servicio: [`camera.py`](../camera.py),
+[`esphome_api.py`](../esphome_api.py), [`servo_tracker.py`](../servo_tracker.py)
+y [`detections.py`](../detections.py). `*--` = composición (la vida del hijo
+depende del padre), `o--` = agregación (referencia opcional), `..>` =
+dependencia de uso, `..|>` = implementación de un `Protocol`.
+
+```mermaid
+classDiagram
+    class GlobalConfig {
+        +bool keepalive_enabled
+        +float keepalive_interval_sec
+        +float reconnect_delay_sec
+        +as_dict() dict
+    }
+
+    class CameraConfig {
+        +str camera_id
+        +str stream_url
+        +str model_name
+        +str device
+        +float confidence
+        +int imgsz
+        +list~int~ classes
+        +bool default_infer
+        +bool always_infer
+        +str noise_psk
+        +str esphome_state_object_id
+        +ServoConfig servo
+    }
+
+    class ServoConfig {
+        +bool enabled
+        +str service
+        +float gain
+        +float deadzone
+        +float min_interval_sec
+        +bool invert_pan
+        +bool invert_tilt
+        +float lost_target_sec
+        +float home_pan
+        +float home_tilt
+        +bool return_home_on_lost
+    }
+
+    class CameraSession {
+        +CameraConfig cfg
+        +EsphomeController esphome
+        +bool explicit_start
+        +float pipeline_fps
+        -Queue _raw_queue
+        -Condition _cond
+        -bytes _latest_raw_jpeg
+        -bytes _latest_annotated_jpeg
+        -int _frame_seq
+        -int _infer_clients
+        -int _raw_clients
+        -int _follow_clients
+        -list _consumers
+        +is_running() bool
+        +client_count() int
+        +start(explicit)
+        +stop(explicit)
+        +shutdown()
+        +add_client(mode)
+        +remove_client(mode)
+        +mjpeg_generator(infer)
+        +snapshot(infer) bytes
+        +status() dict
+        -_read_loop()
+        -_process_loop()
+        -_update_fps(w)
+        -_on_esphome_state(value)
+        -_maybe_autostop()
+        -_notify_consumers(method, args)
+    }
+
+    class EsphomeController {
+        +str address
+        +int port
+        +str noise_psk
+        -APIClient _client
+        -Event _connected
+        -Thread _thread
+        -AbstractEventLoop _loop
+        +is_connected() bool
+        +notify_awake()
+        +call_service(name, args)
+        +has_service(nombre) bool
+        +shutdown()
+        -_reconnect_loop()
+        -_try_connect_once() bool
+        -_on_state(state)
+        -_on_stop(expected)
+    }
+
+    class YOLO {
+        <<ultralytics>>
+        +predict()
+        +track()
+    }
+
+    class Detection {
+        <<dataclass>>
+        +float x1
+        +float y1
+        +float x2
+        +float y2
+        +int cls
+        +str label
+        +float conf
+        +int track_id
+        +cx() float
+        +cy() float
+        +area() float
+    }
+
+    class DetectionConsumer {
+        <<Protocol>>
+        +on_detections(dets, width, height)
+        +on_idle()
+        +wants_inference() bool
+        +status() dict
+        +shutdown()
+    }
+
+    class ServoTracker {
+        +ServoConfig cfg
+        +float pan
+        +float tilt
+        +int target_id
+        +move_to(pan, tilt)
+        +on_detections(dets, width, height)
+        +on_idle()
+        +wants_inference() bool
+        +status() dict
+        +shutdown()
+        -_pick_target(dets, width, height) Detection
+        -_release_target()
+        -_send(pan, tilt, force) bool
+    }
+
+    CameraSession "1" *-- "1" CameraConfig : cfg
+    CameraSession "1" o-- "0..1" EsphomeController : esphome
+    CameraSession "1" o-- "0..*" DetectionConsumer : _consumers
+    CameraSession ..> YOLO : get_model, cache global
+    CameraSession ..> GlobalConfig : lee GLOBAL_CONFIG
+    CameraSession ..> Detection : _process_loop produce
+    CameraConfig "1" o-- "0..1" ServoConfig : servo
+    CameraConfig ..> GlobalConfig : hereda valores None
+    EsphomeController ..> CameraSession : callback on_state_value
+    ServoTracker "1" *-- "1" ServoConfig : cfg
+    ServoTracker ..|> DetectionConsumer
+    ServoTracker ..> EsphomeController : call_service, has_service
+    ServoTracker ..> Detection : consume
+```
+
+---
+
+## 4. Utilidades y estado global
 
 ### `print(*args, **kwargs)` — [`log.py`](../log.py)
 
@@ -189,7 +350,7 @@ por aquí, así que no se penaliza el arranque si solo se usan cámaras.
 
 ---
 
-## 4. `class EsphomeController` — [`esphome_api.py`](../esphome_api.py)
+## 5. `class EsphomeController` — [`esphome_api.py`](../esphome_api.py)
 
 Conexión persistente a la **API nativa de ESPHome** (puerto 6053) de **una**
 placa. Maneja `APIClient` de `aioesphomeapi` directamente, sin
@@ -319,7 +480,7 @@ defecto). El cierre real del socket y del loop lo hace el propio hilo en
 
 ---
 
-## 5. `class CameraConfig(BaseModel)` — [`camera.py`](../camera.py)
+## 6. `class CameraConfig(BaseModel)` — [`camera.py`](../camera.py)
 
 Modelo Pydantic con la config de una cámara. Se valida al registrarla y se
 serializa a `cameras_config.json`.
@@ -343,7 +504,7 @@ ejemplo completo.
 
 ---
 
-## 6. `class CameraSession` — [`camera.py`](../camera.py)
+## 7. `class CameraSession` — [`camera.py`](../camera.py)
 
 El corazón del servicio. Una instancia por cámara registrada. Encapsula los
 dos hilos, el estado compartido y la lógica de arranque/parada.
@@ -400,14 +561,14 @@ Suma de los tres contadores de clientes.
 
 Bajo `_lock`: si ya corre, no hace nada. Si no, **crea objetos nuevos** de
 `_stop_event`, `_raw_queue` y `_fps_window` (no los recicla — ver
-[§9](#9-decisiones-de-diseño-que-conviene-entender)), lanza los dos hilos
+[§10](#10-decisiones-de-diseño-que-conviene-entender)), lanza los dos hilos
 daemon y los arranca. `explicit=True` además fija `explicit_start`.
 
 ### `stop(explicit=False)` — [`camera.py`](../camera.py)
 
 Si quedan clientes y no es `explicit`, no para. Si no: marca `_stop_event`,
 cierra la conexión HTTP viva con `_force_close_response()` (fuera del lock, y
-a la fuerza: ver §3) y hace `_cond.notify_all()` para despertar ya a los
+a la fuerza: ver §4) y hace `_cond.notify_all()` para despertar ya a los
 generadores en vez de esperar su timeout de 5 s. `explicit=True` limpia
 `explicit_start`. Vuelve en ~0,01 s incluso con el stream activo, que es lo
 que permite llamarlo desde el loop de ESPHome.
@@ -447,7 +608,7 @@ Decrementa (con suelo en 0) y llama a `_maybe_autostop()`.
 ### `_read_loop()` — [`camera.py`](../camera.py) — hilo lector
 
 Toma referencias **locales** de `_stop_event` y `_raw_queue` (clave: ver
-[§9](#9-decisiones-de-diseño-que-conviene-entender)). Bucle:
+[§10](#10-decisiones-de-diseño-que-conviene-entender)). Bucle:
 
 1. `requests.get(stream_url, stream=True, timeout=(3, 15))`, guarda la
    respuesta en `_current_response` y comprueba `stop_event` por si nos
@@ -510,7 +671,7 @@ Referencias locales otra vez. Obtiene el modelo con `get_model()`. Bucle:
    gastaba en reposo.
 3. `raw_queue.get(timeout=wait_timeout)`.
 4. **Si salta `queue.Empty`** (no llegó frame): avisa a los consumidores con
-   `on_idle()` (ver §6.bis) para que puedan caducar su objetivo; y si toca
+   `on_idle()` (ver §7.bis) para que puedan caducar su objetivo; y si toca
    calentar, hace `model.predict()` sobre un frame negro. **Por qué:** la GTX
    1080 produce inferencias corruptas (confianzas fuera de 0-1) cuando el
    driver baja el P-state entre frames; las anomalías coinciden al segundo con
@@ -560,7 +721,7 @@ de cada consumidor bajo `consumers` y la config entera.
 
 ---
 
-## 6.bis Consumidores de detecciones — [`detections.py`](../detections.py)
+## 7.bis Consumidores de detecciones — [`detections.py`](../detections.py)
 
 El punto de extensión del pipeline. Existe porque el proyecto tiene **varias
 variantes de placa** (cámara sola, cámara+PIR, cámara+servos para seguimiento,
@@ -628,7 +789,7 @@ ni ESP32 (placa de mentira que apunta las órdenes recibidas).
 
 ---
 
-## 7. Registro de cámaras (persistencia) — [`registry.py`](../registry.py)
+## 8. Registro de cámaras (persistencia) — [`registry.py`](../registry.py)
 
 `CAMERAS: dict[str, CameraSession]` protegido por `_cameras_lock`.
 
@@ -649,7 +810,7 @@ de la LAN.
 
 ---
 
-## 8. Endpoints (FastAPI)
+## 9. Endpoints (FastAPI)
 
 ### Globales
 
@@ -723,7 +884,7 @@ pierde sobre una imagen clara.
 
 ---
 
-## 9. Decisiones de diseño que conviene entender
+## 10. Decisiones de diseño que conviene entender
 
 **Hilos y no `async` para el pipeline.** YOLO/PyTorch y
 `requests.iter_content()` bloquean; en el event loop congelarían todo el
@@ -788,103 +949,13 @@ no necesita la placa.
 
 ---
 
-## 10. Diagramas
+## 11. Diagramas
 
 Diagramas en Mermaid. GitHub los renderiza dentro del `.md`; en VS Code
-necesitas la extensión *Markdown Preview Mermaid Support* (o similar).
+necesitas la extensión *Markdown Preview Mermaid Support* (o similar). El
+diagrama de clases UML está en la [§3](#3-diagrama-de-clases-uml).
 
-### 10.1 Diagrama de clases (UML)
-
-Relaciones entre las clases de [`main.py`](../main.py). `*--` = composición
-(la vida del hijo depende del padre), `o--` = agregación (referencia
-opcional), `..>` = dependencia de uso.
-
-```mermaid
-classDiagram
-    class GlobalConfig {
-        +bool keepalive_enabled
-        +float keepalive_interval_sec
-        +float reconnect_delay_sec
-        +as_dict() dict
-    }
-
-    class CameraConfig {
-        +str camera_id
-        +str stream_url
-        +str model_name
-        +str device
-        +float confidence
-        +int imgsz
-        +list~int~ classes
-        +bool default_infer
-        +bool always_infer
-        +str noise_psk
-        +str esphome_state_object_id
-    }
-
-    class CameraSession {
-        +CameraConfig cfg
-        +EsphomeController esphome
-        +bool explicit_start
-        +float pipeline_fps
-        -Queue _raw_queue
-        -Condition _cond
-        -bytes _latest_raw_jpeg
-        -bytes _latest_annotated_jpeg
-        -int _frame_seq
-        -int _infer_clients
-        -int _raw_clients
-        -int _follow_clients
-        +is_running() bool
-        +client_count() int
-        +start(explicit)
-        +stop(explicit)
-        +shutdown()
-        +add_client(mode)
-        +remove_client(mode)
-        +mjpeg_generator(infer)
-        +snapshot(infer) bytes
-        +status() dict
-        -_read_loop()
-        -_process_loop()
-        -_update_fps(w)
-        -_on_esphome_state(value)
-        -_maybe_autostop()
-    }
-
-    class EsphomeController {
-        +str address
-        +int port
-        +str noise_psk
-        -APIClient _client
-        -Event _connected
-        -Thread _thread
-        -AbstractEventLoop _loop
-        +is_connected() bool
-        +notify_awake()
-        +call_service(name, args)$([char]10)        +has_service(nombre) bool
-        +shutdown()
-        -_reconnect_loop()
-        -_try_connect_once() bool
-        -_on_state(state)
-        -_on_stop(expected)
-    }
-
-    class YOLO {
-        <<ultralytics>>
-        +predict()
-        +track()
-    }
-
-    CameraSession "1" *-- "1" CameraConfig : cfg
-    CameraSession "1" o-- "0..1" EsphomeController : esphome
-    CameraSession ..> YOLO : get_model, cache global
-    CameraSession ..> GlobalConfig : lee GLOBAL_CONFIG
-    CameraConfig ..> GlobalConfig : hereda valores None
-    EsphomeController ..> CameraSession : callback on_state_value
-```
-
-### 10.2 Flujo de datos y componentes
+### 11.1 Flujo de datos y componentes
 
 Un proceso, tres zonas de concurrencia. Las flechas continuas son datos;
 la punteada es el webhook que dispara el ESP32 al arrancar.
@@ -924,7 +995,7 @@ flowchart LR
     ESP -.->|"POST /esphome/awake al obtener IP"| EC
 ```
 
-### 10.3 Ciclo de vida de una `CameraSession`
+### 11.2 Ciclo de vida de una `CameraSession`
 
 Qué la arranca y qué la para. El estado compuesto *Corriendo* muestra el
 bucle interno de `_process_loop`.
@@ -950,7 +1021,7 @@ stateDiagram-v2
     }
 ```
 
-### 10.4 Secuencia: un cliente pide `/stream`
+### 11.3 Secuencia: un cliente pide `/stream`
 
 ```mermaid
 sequenceDiagram
@@ -984,7 +1055,7 @@ sequenceDiagram
     S->>S: _maybe_autostop()
 ```
 
-### 10.5 Reconexión del `EsphomeController`
+### 11.4 Reconexión del `EsphomeController`
 
 Sin polling mientras está conectado; `notify_awake()` (webhook del ESP32)
 acorta la espera.
