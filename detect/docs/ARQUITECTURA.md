@@ -641,12 +641,6 @@ ni ESP32 (placa de mentira que apunta las órdenes recibidas).
 - **`register_camera(cfg, persist=True)`** — bajo lock: si el `camera_id` ya
   existe → `HTTPException(400)`; si no, crea la `CameraSession` (que a su vez
   puede crear el `EsphomeController`), la mete en `CAMERAS`, y persiste.
-- **`replace_camera(old_id, new_cfg)`** — bajo lock: saca `old_id` de
-  `CAMERAS` (404 si no está; 400 si se renombra a un id ya ocupado), crea una
-  `CameraSession` nueva con `new_cfg` y la mete bajo `new_cfg.camera_id`.
-  Devuelve `(vieja, nueva)`: el `shutdown()` de la vieja y el persistir los
-  hace el endpoint, porque el primero bloquea segundos y aquí se está bajo el
-  lock.
 - **`get_camera(camera_id)`** — busca en `CAMERAS` o lanza
   `HTTPException(404)`.
 
@@ -672,7 +666,6 @@ de la LAN.
 | `GET /cameras` | `list_cameras` | `status()` de todas. |
 | `POST /cameras` | `add_camera` | Alta por **formulario** (cada campo con su descripción y su defecto, en vez de un JSON a mano). `classes` va como texto separado por comas y lo traduce `_parse_classes`. **No pide servos**: se montan después con `/config/servo`. |
 | `DELETE /cameras/{id}` | `remove_camera` | Saca de `CAMERAS`, `await asyncio.to_thread(session.shutdown)`, persiste. Va en un hilo porque `shutdown()` bloquea hasta ~4 s y congelaba el event loop entero (y con él todos los streams). |
-| `PATCH /cameras/{id}` | `update_camera` | Edición completa por formulario: todos los campos opcionales, **lo que no se envía se conserva** (a diferencia de `/config/inference`). Construye `cfg.model_copy(update=...)` solo con lo que de verdad cambia y decide el coste: los campos que `_process_loop` relee por frame se aplican sustituyendo `session.cfg`; `model_name`/`device` precargan el modelo (400 si falla) y `session.restart()`; `stream_url`/`noise_psk`/`esphome_state_object_id`/`new_camera_id` van al constructor de `CameraSession` (ahí nace el `EsphomeController`), así que `replace_camera()` + `shutdown()` de la vieja en un hilo, y se vuelve a `start(explicit=True)` solo si estaba arrancada a mano. `clear_classes`/`clear_keepalive`/`clear_noise_psk` existen porque un campo vacío en un formulario no distingue "no tocar" de "poner a None". Devuelve `rebuilt` y `relaunched`. |
 | `GET /cameras/{id}/status` | `camera_status` | `status()` de una. |
 | `POST /cameras/{id}/esphome/awake` | `esphome_awake` | La placa lo llama al obtener IP → `session.esphome.notify_awake()`. 400 si no tiene `noise_psk`. |
 | `POST /cameras/{id}/start` \| `/stop` | `start_camera` / `stop_camera` | `session.start/stop(explicit=True)`. |
@@ -681,11 +674,11 @@ de la LAN.
 
 | Método / ruta | Función | Qué hace |
 | --- | --- | --- |
-Todos van por **formulario** (no JSON) y cuelgan de `/config/`, para que
+Cuelgan de `/config/`. Salvo `inference`, van por **formulario** (no JSON),
 Swagger enseñe cada campo en su casilla con su descripción y su valor por
 defecto.
 
-| `POST /cameras/{id}/config/inference` | `set_inference_config` | `confidence` / `imgsz` / `always_infer` / `classes` se releen por frame, así que se aplican al instante y **siempre** con lo que traiga el formulario. `model_name` y `device` son opcionales (vacío = no tocar) porque `_process_loop` los resuelve una sola vez al arrancar: cambiarlos valida y precarga el modelo (400 si no existe) y luego llama a `session.restart()`. Devuelve `relanzada`. |
+| `POST /cameras/{id}/config/inference` | `set_inference_config` | Body JSON (`InferenceConfig`), todos los campos opcionales: **lo que no se envía se conserva** (`model_dump(exclude_unset=True)`); `classes: null` = todas, `null`/vacío en el resto = no tocar. Va en JSON y no en formulario porque Swagger rellena los formularios con `"string"`/`0` y los envía tal cual; con JSON, `app.openapi` se sustituye por `_openapi_with_camera_examples`, que regenera el esquema en cada `/openapi.json` metiendo como `examples` del body los valores actuales de cada cámara, así que en Swagger se edita partiendo de lo real (recargar `/docs` tras cambiar algo). Se filtra lo que no cambia respecto a `session.cfg` (reenviar el ejemplo entero es un no-op) y se sustituye `session.cfg` por `cfg.model_copy(update=...)`: `confidence`/`imgsz`/`always_infer`/`classes` se releen por frame y cambian al instante; `model_name`/`device` los resuelve `_process_loop` una sola vez al arrancar, así que cambiarlos precarga el modelo (400 si no existe) y llama a `session.restart()`. Devuelve `relaunched`. |
 | `POST /cameras/{id}/config/keepalive` | `set_camera_keepalive` | Override de `enabled` por cámara. El intervalo y el tiempo de reposo son globales, en `POST /config/keepalive`. |
 | `POST /cameras/{id}/config/stream` | `set_stream_default` | Cambia `default_infer`; los streams en modo "follow" cambian en caliente. |
 | `POST /cameras/{id}/config/servo` | `set_servo_config` | Toda la `ServoConfig`. **Es donde se le ponen servos a una cámara**: el alta no los pide, así que la primera llamada crea el `ServoTracker` y lo enchufa como consumidor. 400 sin `noise_psk`. |

@@ -166,19 +166,17 @@ falta llamar a `/start` a mano.
   cuales se deja de calentar la GPU, ver
   [`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md))
 - `GET /cameras`, `POST /cameras`, `DELETE /cameras/{camera_id}` — alta/baja
-- `PATCH /cameras/{camera_id}` — editar **cualquier** campo de la cámara
-  (`stream_url`, `noise_psk`, renombrar con `new_camera_id`, los de
-  inferencia...). Lo que no se envía se conserva; lo que se pueda se aplica en
-  caliente, cambiar `model_name`/`device` relanza los hilos y cambiar la URL,
-  la clave ESPHome o el id reconstruye la sesión conservando la sección
-  `servo`
 - `POST /cameras/{camera_id}/esphome/awake` — forzar "despierto"
 
-Los ajustes parciales de una cámara cuelgan de `/config/`, y van por
-formulario:
+Los ajustes de una cámara cuelgan de `/config/`:
 
 - `POST /cameras/{camera_id}/config/inference` — `confidence`, `imgsz`,
-  `classes`, `always_infer`, y también el `model_name` y el `device`
+  `classes`, `always_infer`, y también el `model_name` y el `device`. Va en
+  JSON: en Swagger el desplegable **Examples** del body lista cada cámara
+  con sus valores actuales, así que eliges la tuya, tocas lo que quieras y
+  envías (recarga `/docs` para ver cambios recientes). Lo que no se envía se
+  conserva, `classes: null` = todas las clases, y cambiar `model_name` o
+  `device` relanza los hilos solo. El resto van por formulario:
 - `POST /cameras/{camera_id}/config/keepalive` — override del keep-alive
 - `POST /cameras/{camera_id}/config/stream` — `default_infer`
 - `POST /cameras/{camera_id}/config/servo` — la torreta pan/tilt

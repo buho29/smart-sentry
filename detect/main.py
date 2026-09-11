@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 import torch
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -34,7 +35,6 @@ from registry import (
     get_camera,
     load_cameras_from_disk,
     register_camera,
-    replace_camera,
     save_cameras_to_disk,
 )
 from servo_tracker import ServoConfig, ServoTracker
@@ -180,111 +180,6 @@ async def remove_camera(camera_id: str):
     return {"removed": camera_id}
 
 
-@app.patch("/cameras/{camera_id}")
-async def update_camera(
-    camera_id: str,
-    new_camera_id: Optional[str] = Form(None, description="Renombrar la cámara. VACÍO = dejar el id. Ojo: la placa llama a /cameras/{id}/esphome/awake, así que habría que cambiar también el YAML."),
-    stream_url: Optional[str] = Form(None, description="URL del stream MJPEG del ESP32. VACÍO = dejar la que tiene. Cambiarla reconstruye la sesión."),
-    model_name: Optional[str] = Form(None, description="Pesos YOLO, sin el .pt. VACÍO = dejar el que tiene. Cambiarlo relanza la sesión."),
-    device: Optional[str] = Form(None, description="'cuda' o 'cpu'. VACÍO = dejar el que tiene. Cambiarlo relanza la sesión."),
-    confidence: Optional[float] = Form(None, ge=0.0, le=1.0, description="Confianza mínima. VACÍO = dejar la que tiene."),
-    imgsz: Optional[int] = Form(None, description="Lado al que YOLO reescala el frame. VACÍO = dejar el que tiene."),
-    classes: Optional[str] = Form(None, description="IDs de clase COCO separados por comas. VACÍO = dejar las que tiene; para volver a 'todas' usa clear_classes."),
-    clear_classes: bool = Form(False, description="Quitar el filtro de clases (detectar todas)."),
-    default_infer: Optional[bool] = Form(None, description="Qué devuelven /stream y /snapshot sin ?infer=. VACÍO = dejar como está."),
-    always_infer: Optional[bool] = Form(None, description="Correr YOLO aunque nadie mire. VACÍO = dejar como está."),
-    keepalive_enabled: Optional[bool] = Form(None, description="Override del keep-alive de GPU. VACÍO = dejar como está; para volver al global usa clear_keepalive."),
-    clear_keepalive: bool = Form(False, description="Quitar el override y seguir el keep-alive global."),
-    noise_psk: Optional[str] = Form(None, description="api.encryption.key de la placa. VACÍO = dejar la que tiene; para quitarla usa clear_noise_psk. Cambiarla reconstruye la sesión."),
-    clear_noise_psk: bool = Form(False, description="Quitar la API nativa de ESPHome de esta cámara (deja de arrancar/parar según la placa). Reconstruye la sesión."),
-    esphome_state_object_id: Optional[str] = Form(None, description="object_id del sensor que dice si la placa está despierta. VACÍO = dejar el que tiene. Cambiarlo reconstruye la sesión."),
-):
-    """Edita cualquier campo de una cámara; lo que no se envía se conserva.
-
-    Según lo que cambie, cuesta más o menos:
-    - `confidence`, `imgsz`, `classes`, `default_infer`, `always_infer` y
-      `keepalive_enabled` se releen en cada frame: cambian al instante.
-    - `model_name` y `device` solo se resuelven al arrancar los hilos: la
-      sesión se relanza sola.
-    - `stream_url`, `noise_psk`, `esphome_state_object_id` y el id van en el
-      constructor de la sesión (ahí se monta la conexión ESPHome): se
-      reconstruye entera, conservando la sección `servo` y el estado de
-      arranque manual. Si estaba parada, sigue parada.
-    """
-    session = get_camera(camera_id)
-    cfg = session.cfg
-
-    changes: dict = {}
-    if (new_camera_id or "").strip():
-        changes["camera_id"] = new_camera_id.strip()
-    if (stream_url or "").strip():
-        changes["stream_url"] = stream_url.strip()
-    if (model_name or "").strip():
-        changes["model_name"] = model_name.strip()
-    if (device or "").strip():
-        changes["device"] = _validate_device(device)
-    if confidence is not None:
-        changes["confidence"] = confidence
-    if imgsz is not None:
-        changes["imgsz"] = imgsz
-    if clear_classes:
-        changes["classes"] = None
-    elif (classes or "").strip():
-        changes["classes"] = _parse_classes(classes)
-    if default_infer is not None:
-        changes["default_infer"] = default_infer
-    if always_infer is not None:
-        changes["always_infer"] = always_infer
-    if clear_keepalive:
-        changes["keepalive_enabled"] = None
-    elif keepalive_enabled is not None:
-        changes["keepalive_enabled"] = keepalive_enabled
-    if clear_noise_psk:
-        changes["noise_psk"] = None
-    elif (noise_psk or "").strip():
-        changes["noise_psk"] = noise_psk.strip()
-    if (esphome_state_object_id or "").strip():
-        changes["esphome_state_object_id"] = esphome_state_object_id.strip()
-
-    # Quedarse solo con lo que de verdad cambia, para no relanzar ni
-    # reconstruir por reenviar el mismo valor.
-    changes = {k: v for k, v in changes.items() if getattr(cfg, k) != v}
-    if not changes:
-        return {"rebuilt": False, "relaunched": False, **session.status()}
-    new_cfg = cfg.model_copy(update=changes)
-
-    rebuild = bool(changes.keys() & {"camera_id", "stream_url", "noise_psk", "esphome_state_object_id"})
-    relaunch = bool(changes.keys() & {"model_name", "device"})
-
-    if relaunch:
-        # Mismo motivo que en set_inference_config: que unos pesos inventados
-        # salgan como 400 aquí y no revienten el hilo de proceso.
-        try:
-            await asyncio.to_thread(get_model, new_cfg.model_name, new_cfg.device)
-        except Exception as e:
-            raise HTTPException(400, f"no pude cargar el modelo: {e}")
-
-    if rebuild:
-        resume = session.is_running and session.explicit_start
-        old, session = replace_camera(camera_id, new_cfg)
-        # shutdown() bloquea (join de hilos): fuera del event loop, como en
-        # remove_camera.
-        await asyncio.to_thread(old.shutdown)
-        if resume:
-            session.start(explicit=True)
-        relaunched = False
-        print(f"[{camera_id}] sesión reconstruida"
-              f"{f' como {new_cfg.camera_id}' if new_cfg.camera_id != camera_id else ''}")
-    else:
-        # Sustituir el objeto entero es seguro: los hilos leen self.cfg.<campo>
-        # en cada frame, no guardan referencia al cfg viejo.
-        session.cfg = new_cfg
-        relaunched = await asyncio.to_thread(session.restart) if relaunch else False
-
-    save_cameras_to_disk()
-    return {"rebuilt": rebuild, "relaunched": relaunched, **session.status()}
-
-
 @app.get("/cameras/{camera_id}/status")
 async def camera_status(camera_id: str):
     return get_camera(camera_id).status()
@@ -316,52 +211,94 @@ async def stop_camera(camera_id: str):
     return session.status()
 
 
+class InferenceConfig(BaseModel):
+    """Body de POST /cameras/{id}/config/inference. Todo opcional: lo que no
+    venga se conserva. `classes: null` = todas las clases."""
+    confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Confianza mínima para dar una detección por buena.")
+    imgsz: Optional[int] = Field(None, gt=0, description="Lado al que YOLO reescala el frame antes de inferir. Más grande ve objetos más pequeños, pero cuesta más GPU.")
+    always_infer: Optional[bool] = Field(None, description="Correr YOLO aunque nadie mire el stream, para seguir detectando con el navegador cerrado.")
+    classes: Optional[list[int]] = Field(None, description="IDs de clase COCO (0 = personas, 16 = pájaros). null = todas las clases.")
+    model_name: Optional[str] = Field(None, description="Pesos YOLO, sin el .pt. Cambiarlo relanza la sesión.")
+    device: Optional[str] = Field(None, description="'cuda' o 'cpu'. Cambiarlo relanza la sesión.")
+
+
 @app.post("/cameras/{camera_id}/config/inference")
-async def set_inference_config(
-    camera_id: str,
-    confidence: float = Form(0.5, ge=0.0, le=1.0, description="Confianza mínima para dar una detección por buena. Por defecto 0.5."),
-    imgsz: int = Form(640, description="Lado al que YOLO reescala el frame antes de inferir. Más grande ve objetos más pequeños, pero cuesta más GPU. Por defecto 640."),
-    always_infer: bool = Form(True, description="Correr YOLO aunque nadie mire el stream, para seguir detectando con el navegador cerrado."),
-    classes: Optional[str] = Form(None, description="IDs de clase COCO separados por comas (0 = personas, 16 = pájaros). Vacío = todas las clases."),
-    model_name: Optional[str] = Form(None, description="Cambiar los pesos YOLO, sin el .pt. VACÍO = dejar el que ya tiene. Cambiarlo relanza la sesión."),
-    device: Optional[str] = Form(None, description="Cambiar dónde corre: 'cuda' o 'cpu'. VACÍO = dejar el que ya tiene. Cambiarlo relanza la sesión."),
-):
+async def set_inference_config(camera_id: str, body: InferenceConfig):
     """Ajustes de la detección de una cámara.
 
-    `confidence`, `imgsz`, `always_infer` y `classes` se releen en cada frame,
-    así que el cambio se nota al instante y **se aplican siempre** con lo que
-    traiga el formulario. `model_name` y `device`, en cambio, solo se resuelven
-    al arrancar los hilos: se dejan vacíos si no se quieren tocar, y cuando se
-    cambian la sesión se relanza sola.
+    En Swagger, el desplegable **Examples** del body lista cada cámara
+    registrada con sus valores actuales: elige la que vas a editar, toca lo
+    que quieras y envía. Lo que no se envía se conserva, y reenviar valores
+    iguales no cuesta nada.
+
+    `confidence`, `imgsz`, `always_infer` y `classes` se releen en cada
+    frame, así que el cambio se nota al instante. `model_name` y `device`,
+    en cambio, solo se resuelven al arrancar los hilos: cuando cambian la
+    sesión se relanza sola.
     """
     session = get_camera(camera_id)
+    cfg = session.cfg
 
-    # El modelo se carga aquí y no en el hilo de proceso para que un nombre
-    # inventado salga como un 400 en vez de reventar la cámara por lo bajo. Va
-    # en un hilo porque cargar y precalentar unos pesos tarda segundos.
-    new_model = (model_name or "").strip() or None
-    new_device = _validate_device(device) if (device or "").strip() else None
-    relaunch = ((new_model is not None and new_model != session.cfg.model_name)
-                or (new_device is not None and new_device != session.cfg.device))
+    changes = body.model_dump(exclude_unset=True)
+    # Solo classes admite null; en el resto, null o vacío = no tocar.
+    for k in ("confidence", "imgsz", "always_infer", "model_name", "device"):
+        if k in changes:
+            v = changes[k]
+            if v is None or (isinstance(v, str) and not v.strip()):
+                changes.pop(k)
+    if "model_name" in changes:
+        changes["model_name"] = changes["model_name"].strip()
+    if "device" in changes:
+        changes["device"] = _validate_device(changes["device"])
+    # Quedarse solo con lo que de verdad cambia: el ejemplo de Swagger trae
+    # la config entera y no hay que relanzar por reenviar el mismo modelo.
+    changes = {k: v for k, v in changes.items() if getattr(cfg, k) != v}
+    relaunch = bool(changes.keys() & {"model_name", "device"})
+
     if relaunch:
-        target_device = new_device or session.cfg.device
+        # El modelo se carga aquí y no en el hilo de proceso para que un
+        # nombre inventado salga como un 400 en vez de reventar la cámara por
+        # lo bajo. Va en un hilo porque cargar y precalentar unos pesos tarda
+        # segundos.
         try:
-            await asyncio.to_thread(get_model, new_model or session.cfg.model_name, target_device)
+            await asyncio.to_thread(get_model,
+                                    changes.get("model_name", cfg.model_name),
+                                    changes.get("device", cfg.device))
         except Exception as e:
             raise HTTPException(400, f"no pude cargar el modelo: {e}")
 
-    session.cfg.confidence = confidence
-    session.cfg.imgsz = imgsz
-    session.cfg.always_infer = always_infer
-    session.cfg.classes = _parse_classes(classes)
-    if new_model is not None:
-        session.cfg.model_name = new_model
-    if new_device is not None:
-        session.cfg.device = new_device
-
+    # Sustituir el objeto entero es seguro: los hilos leen self.cfg.<campo>
+    # en cada frame, no guardan referencia al cfg viejo.
+    session.cfg = cfg.model_copy(update=changes)
     relaunched = await asyncio.to_thread(session.restart) if relaunch else False
-    save_cameras_to_disk()
+    if changes:
+        save_cameras_to_disk()
     return {"relaunched": relaunched, **session.status()}
+
+
+def _openapi_with_camera_examples():
+    """Esquema OpenAPI regenerado en cada petición a /openapi.json, para que
+    el body de /config/inference lleve como ejemplos los valores actuales de
+    cada cámara registrada. Swagger los muestra en un desplegable, y así se
+    edita partiendo de lo real en vez de los "string"/0 que inventa por
+    defecto. Basta recargar /docs tras cambiar algo.
+    """
+    schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+    fields = list(InferenceConfig.model_fields)
+    examples = {}
+    with _cameras_lock:
+        for cid, s in CAMERAS.items():
+            examples[cid] = {"summary": cid, "value": s.cfg.model_dump(include=set(fields))}
+    if examples:
+        try:
+            content = schema["paths"]["/cameras/{camera_id}/config/inference"]["post"]["requestBody"]["content"]
+            content["application/json"]["examples"] = examples
+        except KeyError:
+            pass
+    return schema
+
+
+app.openapi = _openapi_with_camera_examples
 
 
 @app.post("/cameras/{camera_id}/config/keepalive")
