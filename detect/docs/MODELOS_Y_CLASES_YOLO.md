@@ -1,4 +1,46 @@
-# Clases de detección de YOLO (dataset COCO)
+# Modelos y clases de detección de YOLO
+
+## Modelos disponibles
+
+### En este repo
+
+`model_name` es un string libre (`CameraConfig.model_name`, y el parámetro
+`model_name` de los endpoints de `/detect-file` y `/config/inference`):
+`get_model()` simplemente hace `YOLO(f"{model_name}.pt")`, así que basta con
+poner el nombre para usarlo — se descarga solo la primera vez si no hay un
+`.pt` local con ese nombre.
+
+| Modelo | Familia | Notas |
+|--------|---------|-------|
+| `yolo11n` | YOLO11 nano | usado en tests, más ligero/rápido |
+| `yolo11m` | YOLO11 medium | valor por defecto de `CameraConfig.model_name` |
+| `yolo26m` | YOLO26 medium | ejemplo en README: ≈ 29 % de una GTX 1080 por cámara |
+| `yolo26n` | YOLO26 nano | fichero presente en `detect/`, pero no referenciado en código/tests/README |
+| `rtdetr-l` | RT-DETR large | ver nota más abajo |
+
+### Modelos de Ultralytics descargables
+
+Como `model_name` no está restringido a los `.pt` que ya hay en el repo,
+también se puede usar cualquier modelo de detección que ofrezca Ultralytics
+poniendo su nombre — se descarga automáticamente la primera vez. El sufijo
+de tamaño es común a casi todas las familias: **n**ano < **s**mall <
+**m**edium < **l**arge < **x**-large (a más grande, más preciso y más
+lento).
+
+| Familia | Tamaños | Documentación |
+|---------|---------|---------------|
+| YOLO11 | n, s, m, l, x | https://docs.ultralytics.com/models/yolo11/ |
+| YOLO26 | n, s, m, l, x | https://docs.ultralytics.com/models/yolo26/ |
+| YOLOv8 | n, s, m, l, x | https://docs.ultralytics.com/models/yolov8/ |
+| RT-DETR | l, x | https://docs.ultralytics.com/models/rtdetr/ |
+
+Referencias generales:
+- Índice de todos los modelos soportados por Ultralytics:
+  https://docs.ultralytics.com/models/
+- Tabla comparativa de tamaño/mAP/velocidad de los modelos de detección:
+  https://docs.ultralytics.com/tasks/detect/#models
+
+## Dataset COCO
 
 Los modelos que usa este servicio (`yolo11n`, `yolo11m`, `yolo26m`, `rtdetr-l`)
 están entrenados sobre el dataset **COCO**, que tiene **80 clases**.

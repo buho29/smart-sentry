@@ -669,6 +669,7 @@ de la LAN.
 | `GET /cameras/{id}/status` | `camera_status` | `status()` de una. |
 | `POST /cameras/{id}/esphome/awake` | `esphome_awake` | La placa lo llama al obtener IP → `session.esphome.notify_awake()`. 400 si no tiene `noise_psk`. |
 | `POST /cameras/{id}/start` \| `/stop` | `start_camera` / `stop_camera` | `session.start/stop(explicit=True)`. |
+| `POST /cameras/start` \| `/stop` | `start_all_cameras` / `stop_all_cameras` | Lo mismo sobre todas las registradas; devuelve la lista de `status()`. No bloquea: `stop()` solo avisa a los hilos. |
 
 ### Config en runtime
 

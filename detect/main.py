@@ -197,6 +197,26 @@ async def esphome_awake(camera_id: str):
     return {"ok": True}
 
 
+@app.post("/cameras/start")
+async def start_all_cameras():
+    """Arranca a mano todas las cámaras registradas (como `/cameras/{id}/start`
+    pero de golpe). Las que ya estaban en marcha no se tocan."""
+    sessions = list(CAMERAS.values())
+    for session in sessions:
+        session.start(explicit=True)
+    return [s.status() for s in sessions]
+
+
+@app.post("/cameras/stop")
+async def stop_all_cameras():
+    """Para todas las cámaras registradas, aunque tengan clientes mirando.
+    No bloquea: solo avisa a los hilos, que mueren solos en un momento."""
+    sessions = list(CAMERAS.values())
+    for session in sessions:
+        session.stop(explicit=True)
+    return [s.status() for s in sessions]
+
+
 @app.post("/cameras/{camera_id}/start")
 async def start_camera(camera_id: str):
     session = get_camera(camera_id)

@@ -119,7 +119,7 @@ curl -X POST http://localhost:8080/cameras `
 
 `classes` son los IDs de clase COCO separados por comas (`0` = personas,
 `16` = pájaros); vacío significa todas. Ver
-[`CLASES_YOLO.md`](CLASES_YOLO.md) para la lista.
+[`docs/MODELOS_Y_CLASES_YOLO.md`](docs/MODELOS_Y_CLASES_YOLO.md) para la lista.
 
 **Los servos no se configuran aquí**: si la placa lleva torreta, se monta
 después con `POST /cameras/{camera_id}/config/servo`, que necesita que la
@@ -153,6 +153,7 @@ contiene `noise_psk` e IPs de la LAN.
 | Snapshot suelto | `GET /cameras/{camera_id}/snapshot` |
 | Estado / diagnóstico | `GET /cameras/{camera_id}/status` |
 | Arrancar / parar a mano | `POST /cameras/{camera_id}/start` \| `/stop` |
+| Arrancar / parar todas | `POST /cameras/start` \| `/stop` |
 
 Con `noise_psk` configurado, la cámara arranca y para sola siguiendo el estado
 real del PIR de la placa (`huerta_awake` on/off); en el uso normal no hace
