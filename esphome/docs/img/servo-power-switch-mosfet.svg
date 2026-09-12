@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 560" font-family="Consolas, Menlo, monospace" font-size="15">
+  <rect x="0" y="0" width="920" height="560" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="20" y="30" font-size="18" font-weight="bold" fill="#111">Corte de alimentacion de los servos con IRLZ44N (interruptor de bajo lado)</text>
+
+  <!-- +5V rail -->
+  <line x1="60" y1="70" x2="860" y2="70" stroke="#111" stroke-width="2"/>
+  <text x="20" y="75" fill="#111">+5V</text>
+  <text x="740" y="60" fill="#555">(TPS63020 / MT3608, ver docs)</text>
+
+  <!-- Drop to servo block -->
+  <line x1="260" y1="70" x2="260" y2="140" stroke="#111" stroke-width="2"/>
+
+  <!-- Servo block -->
+  <rect x="180" y="140" width="220" height="110" fill="#f5f5f5" stroke="#111" stroke-width="2"/>
+  <text x="210" y="180" fill="#111" font-weight="bold">Servo pan / tilt</text>
+  <text x="210" y="205" fill="#333">V+  GND  señal</text>
+  <text x="210" y="230" fill="#555" font-size="13">(motor DC interno,</text>
+  <text x="210" y="248" fill="#555" font-size="13">carga inductiva)</text>
+
+  <!-- Flyback diode across V+/GND of servo -->
+  <line x1="430" y1="140" x2="430" y2="70" stroke="#111" stroke-width="2"/>
+  <line x1="430" y1="140" x2="430" y2="250" stroke="#111" stroke-width="2"/>
+  <!-- diode symbol (triangle + bar), pointing up toward +5V (cathode up) -->
+  <polygon points="415,195 445,195 430,165" fill="#fff" stroke="#111" stroke-width="2"/>
+  <line x1="415" y1="165" x2="445" y2="165" stroke="#111" stroke-width="3"/>
+  <text x="450" y="175" fill="#111">1N5401 / 1N5819</text>
+  <text x="450" y="195" fill="#111">(flyback, catodo hacia +5V)</text>
+
+  <!-- Servo GND to MOSFET drain -->
+  <line x1="260" y1="250" x2="260" y2="330" stroke="#111" stroke-width="2"/>
+  <text x="270" y="300" fill="#555" font-size="13">GND servo -&gt; drenador</text>
+
+  <!-- MOSFET symbol -->
+  <rect x="220" y="330" width="90" height="90" fill="#f5f5f5" stroke="#111" stroke-width="2"/>
+  <text x="232" y="360" font-weight="bold" fill="#111">IRLZ44N</text>
+  <text x="238" y="380" fill="#333" font-size="13">D</text>
+  <text x="238" y="405" fill="#333" font-size="13">S</text>
+  <line x1="265" y1="330" x2="265" y2="345" stroke="#111" stroke-width="2"/>
+  <line x1="265" y1="405" x2="265" y2="420" stroke="#111" stroke-width="2"/>
+  <!-- gate line to the left -->
+  <line x1="220" y1="375" x2="160" y2="375" stroke="#111" stroke-width="2"/>
+  <text x="225" y="368" fill="#333" font-size="13">G</text>
+
+  <!-- Source to common GND -->
+  <line x1="260" y1="420" x2="260" y2="490" stroke="#111" stroke-width="2"/>
+  <line x1="60" y1="490" x2="860" y2="490" stroke="#111" stroke-width="2"/>
+  <text x="20" y="495" fill="#111">GND comun</text>
+
+  <!-- Gate resistor -->
+  <rect x="110" y="360" width="50" height="30" fill="#fff" stroke="#111" stroke-width="2"/>
+  <text x="95" y="405" fill="#111" font-size="13">R 220ohm</text>
+  <line x1="110" y1="375" x2="60" y2="375" stroke="#111" stroke-width="2"/>
+
+  <!-- GPIO line -->
+  <rect x="20" y="355" width="40" height="40" fill="#e8f0ff" stroke="#111" stroke-width="2"/>
+  <text x="24" y="378" fill="#111" font-size="12">GPIO</text>
+
+  <!-- Pulldown resistor from gate node to GND -->
+  <line x1="85" y1="375" x2="85" y2="430" stroke="#111" stroke-width="2"/>
+  <rect x="70" y="430" width="30" height="50" fill="#fff" stroke="#111" stroke-width="2"/>
+  <text x="105" y="460" fill="#111" font-size="13">R 10k (pull-down)</text>
+  <line x1="85" y1="480" x2="85" y2="490" stroke="#111" stroke-width="2"/>
+
+  <!-- Signal line note (existing PWM to servo, unrelated to power switch) -->
+  <line x1="430" y1="205" x2="620" y2="205" stroke="#888" stroke-width="2" stroke-dasharray="6,4"/>
+  <rect x="620" y="185" width="180" height="40" fill="#fff8e6" stroke="#a88" stroke-width="1.5"/>
+  <text x="630" y="202" fill="#663" font-size="13">Señal PWM (ya existente,</text>
+  <text x="630" y="218" fill="#663" font-size="13">desde otro GPIO)</text>
+
+  <!-- Order note -->
+  <rect x="440" y="330" width="420" height="150" fill="#eef7ee" stroke="#3a6" stroke-width="1.5"/>
+  <text x="455" y="355" fill="#153" font-weight="bold" font-size="14">Orden correcto al apagar:</text>
+  <text x="455" y="380" fill="#153" font-size="13">1) ESPHome deja de mandar PWM</text>
+  <text x="455" y="400" fill="#153" font-size="13">   (auto_detach_time: 2s, ya en el YAML)</text>
+  <text x="455" y="425" fill="#153" font-size="13">2) Solo entonces, GPIO de este</text>
+  <text x="455" y="445" fill="#153" font-size="13">   interruptor pasa a 0 -&gt; corta GND</text>
+  <text x="455" y="465" fill="#153" font-size="13">   del servo (IRLZ44N en corte)</text>
+
+  <text x="20" y="530" fill="#555" font-size="13">GPIO a nivel alto -&gt; IRLZ44N conduce -&gt; servo alimentado. GPIO a nivel bajo (o pull-down si el pin flota) -&gt; servo sin GND -&gt; sin corriente.</text>
+</svg>
