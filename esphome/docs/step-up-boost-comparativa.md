@@ -69,37 +69,46 @@ mA según el equilibrio mecánico de la torreta).
 
 Con 10A de switch y hasta ~30W (~6A a 5V) según el datasheet TI, el
 TPS61088 tiene de sobra corriente nominal para alimentar a la vez la
-ESP32-S3-CAM y los servos desde un único módulo. Aun así, **no conviene
-fusionarlo todo en un solo riel**, por dos motivos que no desaparecen solo
-por tener más amperios disponibles:
+ESP32-S3-CAM y los servos desde un único módulo a 5V. Hay dos formas de
+plantearlo, y solo una es viable:
 
-1. **Problema de topología, no de corriente:** si el mismo TPS61088
-   alimentase tanto a la ESP32 como a los servos, cortar ese riel para
-   ahorrar el consumo de los servos en deep sleep cortaría también la
-   alimentación de la propia ESP32 — que es quien tiene que llevar el pin
-   `EN` a nivel alto para volver a encenderlo. La placa no puede apagar la
-   fuente que la alimenta a sí misma y esperar seguir viva para
-   despertarla luego. Esto es justo lo que ya obligaba a
-   [`tps63020-buck-boost.md`](tps63020-buck-boost.md#notas-de-integración-con-el-proyecto)
-   a mantener la lógica en un riel aparte del de los servos.
-2. **Sag transitorio bajo stall, independiente de la corriente media:**
-   [`servos-pan-tilt.md`](servos-pan-tilt.md#el-pico-de-consumo-real-por-qué-los-servos-no-comparten-regulador-con-la-cámara)
-   y [`tps63020-buck-boost.md`](tps63020-buck-boost.md) documentan que compartir
-   riel entre servos y lógica causa brownouts porque un servo forzando
-   contra un tope hunde momentáneamente la tensión de salida del mismo
-   lazo de realimentación que alimenta a la ESP32 — un problema de
-   respuesta transitoria y condensador de salida compartido, no solo de
-   cuántos amperios de media soporta el chip. El "10A" del datasheet no
-   garantiza por sí solo que no haya ese sag; habría que validarlo en
-   banco si algún día se quisiera compartir de todas formas.
+### Variante A: un solo riel, sin nada más — descartada
 
-**Recomendación:** mantener dos etapas de potencia separadas. Como
-variante de las combinaciones de arriba, sí tiene sentido usar **dos
-TPS61088** (uno fijo para lógica, otro con `EN` conmutado para servos) en
-vez de TPS63020+XL6009 o TPS63020+TPS61088 — unifica el catálogo de
-piezas a un solo componente y da más margen de corriente que cualquiera de
-las otras combinaciones, sin caer en el problema de auto-apagado descrito
-arriba.
+Cortar el TPS61088 por `EN` para ahorrar el consumo de los servos en deep
+sleep cortaría también la alimentación de la propia ESP32, que es quien
+tiene que volver a poner `EN` a nivel alto. La placa no puede apagar la
+fuente que la alimenta a sí misma y esperar seguir viva para despertarla
+luego. Es un problema de topología, no de corriente.
+
+### Variante B: un solo TPS61088 siempre encendido + [IRLZ44N](irlz44n-mosfet.md) cortando solo la rama de servos
+
+Aquí el TPS61088 queda fijo a 5V y alimenta:
+
+- la ESP32-S3-CAM por su pin `5V` (pasando por el AMS1117-3.3 de a bordo), y
+- los servos a través de un interruptor de bajo lado con IRLZ44N gobernado
+  por un GPIO — el mismo esquema ya documentado en
+  [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo)
+  para el motor de la pistola.
+
+Esto **resuelve el problema de auto-apagado** de la variante A: la ESP32
+nunca se queda sin tensión, y el corte de servos en reposo sigue existiendo
+(vía MOSFET en vez de vía `EN`). A cambio:
+
+| | Un TPS61088 + IRLZ44N (variante B) | TPS63020 a 3.3V + TPS61088 a 5V (elegida) |
+| --- | --- | --- |
+| Reguladores | 1 | 2 |
+| Componentes extra | IRLZ44N + R gate + R pull-down + diodo flyback | Ninguno (`EN` del TPS61088 a un GPIO) |
+| Sag por stall de servos | **Compartido** con la lógica: un servo forzando hunde el mismo lazo y condensador de salida que alimenta la ESP32 → riesgo de brownout (ver [`servos-pan-tilt.md`](servos-pan-tilt.md#el-pico-de-consumo-real-por-qué-los-servos-no-comparten-regulador-con-la-cámara)). El "10A" del datasheet no lo evita por sí solo; habría que validarlo en banco con un condensador grande cerca de la placa | Aislado: cada riel tiene su propio lazo |
+| Eficiencia en lógica | 1S → boost a 5V → AMS1117 lineal a 3.3V: dos etapas, la segunda disipa (5−3.3)×I en calor | 1S → buck-boost directo a 3.3V por el pin `3V3`, una sola etapa |
+| Consumo en reposo (servos cortados) | TPS61088 habilitado (~100-250µA) + AMS1117 (~5mA de Iq típico, **dominante**) | TPS63020 en Power Save (~25µA) + TPS61088 apagado (1-3µA) |
+| Flasheo por USB | Sin precaución especial (el 5V del USB y el del TPS61088 se juntan en la entrada del AMS1117, como con cualquier fuente externa de 5V) | Hay que bajar `EN` del TPS63020 antes de enchufar USB |
+
+**Recomendación:** la variante B es válida y más barata en módulos, pero
+paga en autonomía (el AMS1117 solo ya consume más en reposo que los dos
+reguladores de la opción elegida juntos) y en robustez ante el stall de los
+servos. Para un nodo a batería con deep sleep, se mantiene la decisión de
+**dos etapas separadas** (TPS63020 a 3.3V + TPS61088 a 5V). La variante B
+queda como plan de respaldo si solo se dispone de un TPS61088
 
 ---
 
