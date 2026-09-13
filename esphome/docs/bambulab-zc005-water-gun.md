@@ -75,6 +75,11 @@ control propia que haya que respetar ni "hablar" con protocolo alguno.
   recarga automática, esa pieza vendría del "Kit 01" (u otra solución aparte),
   no de este componente.
 
+El esquema de este interruptor (mismo circuito que para los servos) está en
+[`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-con-un-mosfet-ahorro-en-reposo)
+como SVG y también editable en
+[KiCad](diagrams/mosfet-load-switch/mosfet-load-switch.kicad_pro).
+
 ---
 
 *Documento de referencia de hardware, sin foto propia adjunta en este

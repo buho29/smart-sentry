@@ -172,6 +172,43 @@ Wi-Fi o una captura de cámara.
   (1000-2200µF) cerca de los servos ayuda a amortiguar picos cortos, pero no
   sustituye a dimensionar la fuente para la corriente de stall real.
 
+## Consumo si no se corta la alimentación durante el deep sleep
+
+Las cifras de arriba son el pico de stall — lo que hay que presupuestar para
+la fuente. Pero para decidir si merece la pena cortar la alimentación de los
+servos en deep sleep (ver sección siguiente), importa otro número distinto:
+cuánto consumen los servos **en reposo, con alimentación puesta pero sin
+moverse**.
+
+| Servo | Idle/reposo según fabricante (banco, sin carga) |
+| --- | --- |
+| **MG90S** | ~5-6mA con la electrónica en reposo sin corregir posición; sube a ~70-90mA en cuanto corrige activamente sin carga externa ([fuente](https://www.kpower.com/insight_bldc/7870.html/)) |
+| **DS3218MG / DS3225MG** | ~4-5mA "detenido" (idle), según datasheet DSSERVO, medido en banco sin carga externa |
+| Blue Arrow D03012 / Arced D531BB, E-max ES9051 / DSM44 | Sin cifra de idle publicada por el fabricante; sub-micro/pico de clase similar a otros analógicos de 9g, previsiblemente entre unas pocas mA y unas pocas decenas de mA en reposo sin carga |
+
+**El matiz importante:** esa cifra de datasheet es de banco, sin carga
+externa — no es lo que va a consumir el servo sujetando de verdad el peso de
+la torreta (cámara y mecanismo, y en la variante pesada también la pistola
+de agua) contra la gravedad. Si el conjunto no está bien equilibrado, el
+motor tiene que corregir de forma continua para no ceder, y el consumo real
+de "reposo con alimentación puesta" puede acercarse al rango de movimiento
+normal ya documentado arriba (120-250mA en el caso del MG90S) en vez de
+quedarse en los pocos mA del datasheet — depende del equilibrio mecánico de
+la torreta, no solo del servo.
+
+**Impacto en la autonomía si no se corta la alimentación:** incluso en el
+mejor caso (servos bien equilibrados, consumo cercano al idle de datasheet),
+dos servos sin cortar suponen del orden de **8-10mA continuos** solo por
+estar encendidos — y si tienen que corregir contra el peso de la torreta,
+eso puede subir con facilidad a **decenas o unos pocos cientos de mA**. Comparado
+con el consumo de deep sleep de una ESP32 (decenas de µA), la diferencia es
+de **3-4 órdenes de magnitud**: dejar los servos alimentados domina por
+completo el consumo del nodo durante el sueño, sin importar cuánto se
+optimice el resto del circuito (incluido el propio regulador boost, ver
+[`xl6009-boost-converter.md`](xl6009-boost-converter.md#rol-previsto-xl6009-como-riel-de-servos-cortado-por-un-irlz44n)).
+Es la justificación práctica de cortar la alimentación de los servos en vez
+de solo despertar/dormir el regulador.
+
 ## Cortar la alimentación de los servos con un MOSFET (ahorro en reposo)
 
 Además de separar el riel, se puede cortar del todo la corriente a los
@@ -196,6 +233,20 @@ Puntos clave del esquema:
   solo después bajar el GPIO de este interruptor. Cortar la alimentación
   mientras el pin de señal todavía manda PWM puede alimentar el servo a
   medias a través de sus diodos de protección internos.
+
+También disponible como esquema editable de KiCad: abre
+[`diagrams/mosfet-load-switch/mosfet-load-switch.kicad_pro`](diagrams/mosfet-load-switch/mosfet-load-switch.kicad_pro)
+(el proyecto va en su propia carpeta, con `.kicad_pro`/`.kicad_sch`/`.kicad_pcb`
+a juego, que es como KiCad espera encontrarlo) — con símbolos propios (R,
+diodo, MOSFET, carga) definidos dentro del propio archivo, sin depender de
+ninguna librería oficial de KiCad. Verificado con `kicad-cli` (exporta a PDF
+sin errores y con las conexiones correctas).
+
+Se intentó primero como archivo de Fritzing (`fritzing/mosfet-load-switch.fz`,
+sigue en el repo) y como diagrama de draw.io, pero se descartaron: Fritzing
+por su formato interno propenso a errores de parseo, y draw.io porque el
+layout automático quedaba con cables cruzados y sin símbolos eléctricos
+reales.
 
 ## Qué necesita el proyecto a nivel de firmware
 
