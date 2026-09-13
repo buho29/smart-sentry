@@ -1,10 +1,12 @@
 # Módulo elevador de tensión TPS61088 (10A)
 
 Ficha de referencia del módulo boost basado en el chip **TPS61088**
-(Texas Instruments), propuesto como alternativa al [MT3608](mt3608-boost-converter.md)
-y al [XL6009](xl6009-boost-converter.md) para el riel de servos de la
-torreta. A diferencia de esos dos, hay módulos reales en venta que sí sacan
-el pin `EN` a un pad — por ejemplo
+(Texas Instruments), **elegido como riel de 5V de los servos** de la torreta
+en lugar del [MT3608](mt3608-boost-converter.md) y el
+[XL6009](xl6009-boost-converter.md) (ver
+[`step-up-boost-comparativa.md`](step-up-boost-comparativa.md)). A
+diferencia de esos dos, hay módulos reales en venta que sí sacan el pin `EN`
+a un pad — por ejemplo
 [este de AliExpress](https://es.aliexpress.com/item/1005009535413093.html)
 ("TPS61088 Boost Module 5V/9V/12V 10A 1MHz").
 
@@ -17,6 +19,9 @@ el pin `EN` a un pad — por ejemplo
 - **Entrada:** 2.7-12V (encaja con la batería 1S 3.0-4.2V de este proyecto).
   **Salida:** 4.5-12.6V, ajustable por resistencias (los módulos comerciales
   suelen traer jumpers/soldaduras para 5V/9V/12V, igual que el TPS63020).
+  En este proyecto se fija a **5V**: es el único paso válido para los servos,
+  porque el siguiente (9V) ya supera el máximo de los MG90S (6V) y también el
+  de los DS3218MG (6.8V) de [`servos-pan-tilt.md`](servos-pan-tilt.md).
 - **Frecuencia de conmutación:** ajustable 200kHz-2.2MHz por resistencia
   externa (el módulo típico viene fijado a 1MHz de fábrica).
 - **Modo de luz de carga:** seleccionable entre PFM (más eficiente, pin
@@ -53,8 +58,19 @@ típico).
 
 ## Rol en el proyecto
 
-Como alternativa al XL6009 para el riel de servos:
+Riel de **5V dedicado a los servos**, separado del riel de 3.3V que el
+[TPS63020](tps63020-buck-boost.md) da a la ESP32-S3-CAM. Ambos módulos
+cuelgan en paralelo de la misma batería 1S y comparten **`GND` con la
+placa** — obligatorio, no opcional: la señal PWM de los servos sale de un
+GPIO del ESP32 y necesita la misma referencia de masa que el riel que los
+alimenta.
 
+- **Presupuesto de corriente de entrada:** al ser boost, la corriente que
+  pide a la batería es mayor que la que entrega. Dos MG90S en stall a la vez
+  son ~1.4-1.8A a 5V (ver [`servos-pan-tilt.md`](servos-pan-tilt.md)); con
+  ~85% de eficiencia y la celda a 3.3V eso son **~2.5-3A de entrada** en el
+  peor caso. La batería y su cableado tienen que aguantarlo, no solo el
+  módulo.
 - **Sin necesitar el MOSFET [IRLZ44N](irlz44n-mosfet.md)**: al tener el
   módulo un pin `EN` real y funcional, un GPIO de la ESP32 puede controlar
   directamente el encendido/apagado del regulador (con las mismas
@@ -82,6 +98,13 @@ Como alternativa al XL6009 para el riel de servos:
   distinta a la fotografiada en el anuncio), la alternativa de respaldo es
   la misma que para el XL6009: cortar la línea de entrada con un MOSFET
   externo.
+- Poner un condensador electrolítico de **1000-2200µF** en la salida, lo más
+  cerca posible de los servos, para amortiguar los picos cortos de stall (ya
+  recomendado en [`servos-pan-tilt.md`](servos-pan-tilt.md)); no sustituye
+  a dimensionar la fuente, pero evita que un golpe de corriente hunda el riel.
+- Respetar el orden de apagado de [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo):
+  primero dejar que ESPHome suelte la señal PWM (`auto_detach_time`), después
+  bajar `EN`.
 
 ---
 

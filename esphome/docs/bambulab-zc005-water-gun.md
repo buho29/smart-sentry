@@ -61,10 +61,10 @@ control propia que haya que respetar ni "hablar" con protocolo alguno.
   1S del nodo (3.0-4.2V) descrita en
   [`cn3791-mppt-charger.md`](cn3791-mppt-charger.md). Lo más simple es
   alimentar este motor **directamente desde la batería principal**, en
-  paralelo con la entrada del [TPS63020](tps63020-buck-boost.md)/
-  [MT3608](mt3608-boost-converter.md), en vez de sacarlo de la salida ya
-  regulada a 5V — así no se añade esta carga al presupuesto de corriente ya
-  ajustado que usan la cámara y los servos.
+  paralelo con la entrada del [TPS63020](tps63020-buck-boost.md) y del
+  [TPS61088](tps61088-boost-converter.md), en vez de sacarlo de una salida
+  ya regulada — así no se añade esta carga al presupuesto de corriente de
+  los rieles de la cámara (3.3V) ni de los servos (5V).
 - **Batería:** se puede prescindir de la 18650 propia del kit y alimentar el
   motor desde la batería única del nodo, o mantenerla como una segunda
   batería dedicada solo al disparo si se prefiere aislar esa carga por
@@ -76,7 +76,7 @@ control propia que haya que respetar ni "hablar" con protocolo alguno.
   no de este componente.
 
 El esquema de este interruptor (mismo circuito que para los servos) está en
-[`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-con-un-mosfet-ahorro-en-reposo)
+[`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo)
 como SVG y también editable en
 [KiCad](diagrams/mosfet-load-switch/mosfet-load-switch.kicad_pro).
 

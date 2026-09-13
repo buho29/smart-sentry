@@ -1,10 +1,15 @@
 # Comparativa de convertidores step-up (boost) para el nodo solar
 
-Tabla resumen de los módulos/chips step-up considerados para elevar la
-tensión de la batería Li-ion 1S (3.0-4.2V) a 5V en el nodo autónomo
-("water-tower-defense", ver [`README.md`](../../README.md)). Cada fila tiene
-su propia ficha con el detalle completo; este documento es solo para
-comparar de un vistazo y decidir qué va en cada riel.
+Tabla resumen de los módulos/chips step-up considerados para regular la
+tensión de la batería Li-ion 1S (3.0-4.2V) en el nodo autónomo
+("water-tower-defense", ver [`README.md`](../../README.md)): **3.3V** para
+la lógica/cámara y **5V** para los servos. Cada fila tiene su propia ficha
+con el detalle completo; este documento es solo para comparar de un vistazo
+y decidir qué va en cada riel.
+
+**Decisión adoptada:** [TPS63020](tps63020-buck-boost.md) puenteado a
+`3V3` → pin `3V3` de la ESP32-S3-CAM, y [TPS61088](tps61088-boost-converter.md)
+fijado a 5V → servos MG90S, con `GND` común (combinación 3 más abajo).
 
 ## Tabla comparativa
 
@@ -12,7 +17,7 @@ comparar de un vistazo y decidir qué va en cada riel.
 | --- | --- | --- | --- | --- | --- | --- |
 | **[MT3608](mt3608-boost-converter.md)** | Boost puro | ~0.8-1A sostenidos (el "2A" del rótulo es optimista) | 100-200µA en PFM (carga ligera) a 1.6-2.2mA en PWM | No aplica — el chip no tiene pin EN | No | Riel de servos **pico/MG90S** si no se necesita cortar la alimentación por software |
 | **[XL6009](xl6009-boost-converter.md)** | Boost/buck-boost/inversor | ~1-1.5A con módulo genérico (aunque el rótulo diga 4A) | **2.5-5mA** — el peor de los tres módulos "de trimpot" | 70-100µA con EN=0V, pero el breakout típico no saca ese pin a ningún pad | No (chip sí tiene EN, el módulo no lo expone) | Riel de servos **detrás de un MOSFET externo** ([IRLZ44N](irlz44n-mosfet.md)) que corte el consumo en deep sleep, ver la ficha del XL6009 |
-| **[TPS63020](tps63020-buck-boost.md)** | Buck-boost | ~1.5A real (el "2A" del datasheet es optimista con 1S descargada) | **~25µA** en modo Power Save | **<1µA** con EN a nivel bajo | Sí, normalmente como pad `EN` | Riel de **lógica/cámara** (ESP32-S3-CAM) — carga constante y predecible |
+| **[TPS63020](tps63020-buck-boost.md)** | Buck-boost | ~1.5A real (el "2A" del datasheet es optimista con 1S descargada) | **~25µA** en modo Power Save | **<1µA** con EN a nivel bajo | Sí, normalmente como pad `EN` | Riel de **lógica/cámara** a **3.3V**, directo al pin `3V3` de la ESP32-S3-CAM (saltando el AMS1117) — carga constante y predecible, y buck-boost en su rango ideal alrededor de 3.3V |
 | **[TPS61088](tps61088-boost-converter.md)** | Boost síncrono | **10A de switch** (mucho margen sobre los picos de servos, ~4.2A con dos DS3218MG) | **~100-250µA** (1-3µA por VIN + 110-250µA por el divisor de feedback en VOUT) | **1-3µA** con EN a nivel bajo | Sí — el chip tiene pull-down interno en EN (por defecto apagado si flota), así que el módulo *tiene* que exponerlo para poder funcionar; hay módulos reales en venta (p. ej. [este de AliExpress](https://es.aliexpress.com/item/1005009535413093.html)) | Mejor candidato para el riel de **servos** sin necesitar el MOSFET externo — sustituye a la combinación XL6009+IRLZ44N con un único componente |
 
 ## Cómo leer esta tabla
@@ -40,13 +45,17 @@ comparar de un vistazo y decidir qué va en cada riel.
    reutiliza el XL6009 que el usuario ya tiene, a cambio de añadir un
    MOSFET y su circuito de puerta (ya documentado en
    [`irlz44n-mosfet.md`](irlz44n-mosfet.md) y en
-   [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-con-un-mosfet-ahorro-en-reposo)).
-3. **TPS63020 (lógica) + TPS61088 (servos).** Sin MOSFET externo — el
-   propio módulo, si expone `EN` como anuncia el listado de AliExpress
-   citado en [`tps61088-boost-converter.md`](tps61088-boost-converter.md),
-   resuelve el apagado sin componentes extra y con más margen de corriente
-   (10A de switch) que el XL6009. Es la opción más simple de las tres si se
-   confirma que el módulo concreto que llegue trae ese pin accesible.
+   [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo)).
+3. **TPS63020 a 3.3V (lógica) + TPS61088 a 5V (servos) — ELEGIDA.** Sin
+   MOSFET externo — el propio módulo, si expone `EN` como anuncia el listado
+   de AliExpress citado en
+   [`tps61088-boost-converter.md`](tps61088-boost-converter.md), resuelve el
+   apagado sin componentes extra y con más margen de corriente (10A de
+   switch) que el XL6009. Es la opción más simple de las tres si se confirma
+   que el módulo concreto que llegue trae ese pin accesible. El TPS63020 va
+   puenteado a `3V3` y entra por el pin `3V3` de la placa, no por `5V`:
+   así trabaja en buck la mayor parte de la descarga y se evita el AMS1117
+   lineal de a bordo (detalle en su ficha).
 
 En cualquiera de los tres casos, según lo documentado en
 [`servos-pan-tilt.md`](servos-pan-tilt.md#consumo-si-no-se-corta-la-alimentación-durante-el-deep-sleep),
@@ -74,8 +83,8 @@ por tener más amperios disponibles:
    [`tps63020-buck-boost.md`](tps63020-buck-boost.md#notas-de-integración-con-el-proyecto)
    a mantener la lógica en un riel aparte del de los servos.
 2. **Sag transitorio bajo stall, independiente de la corriente media:**
-   [`tps63020-buck-boost.md`](tps63020-buck-boost.md#el-pico-de-consumo-real-dos-servos--cámara-en-el-mismo-tps63020)
-   y [`servos-pan-tilt.md`](servos-pan-tilt.md) documentan que compartir
+   [`servos-pan-tilt.md`](servos-pan-tilt.md#el-pico-de-consumo-real-por-qué-los-servos-no-comparten-regulador-con-la-cámara)
+   y [`tps63020-buck-boost.md`](tps63020-buck-boost.md) documentan que compartir
    riel entre servos y lógica causa brownouts porque un servo forzando
    contra un tope hunde momentáneamente la tensión de salida del mismo
    lazo de realimentación que alimenta a la ESP32 — un problema de

@@ -51,6 +51,10 @@ TPS63020 — datasheet TI (IQ ≈25µA en power save, EN=bajo = apagado).
 - **El MT3608 es intermedio**: en el mejor caso (PFM, sin carga) baja a
   100-200µA, mucho mejor que el XL6009, pero sigue siendo "siempre
   encendido" porque el chip no tiene forma de apagarse.
+- **Reparto final adoptado:** TPS63020 a 3.3V (lógica, por el pin `3V3`) +
+  [TPS61088](tps61088-boost-converter.md) a 5V (servos), ver
+  [`step-up-boost-comparativa.md`](step-up-boost-comparativa.md). El
+  XL6009+IRLZ44N queda como alternativa descartada.
 - **El TPS63020 sigue siendo la mejor opción para el riel que alimenta la
   lógica en un nodo con deep sleep** (como ya apuntaba
   [`tps63020-buck-boost.md`](tps63020-buck-boost.md#notas-de-integración-con-el-proyecto)

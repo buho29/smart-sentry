@@ -46,6 +46,11 @@ sostenidos, no más.
 
 ## Rol en el proyecto
 
+> **Alternativa descartada.** El reparto final adoptado es TPS63020 a 3.3V
+> para la lógica + [TPS61088](tps61088-boost-converter.md) a 5V para los
+> servos (ver [`step-up-boost-comparativa.md`](step-up-boost-comparativa.md)).
+> Lo que sigue se conserva como referencia de la opción con MT3608.
+
 Dado que ambos módulos ([TPS63020](tps63020-buck-boost.md) y este MT3608)
 rondan realísticamente el mismo techo de corriente utilizable (~1-1.5A),
 tiene sentido usarlos como **dos rieles de 5V independientes** en vez de

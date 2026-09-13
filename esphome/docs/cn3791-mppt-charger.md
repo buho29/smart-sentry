@@ -41,14 +41,17 @@ a las resistencias de sensado R1-R4 que fijan la corriente de carga.
 
 - Pensado para alimentar el nodo `huerta.yaml` (ESP32-S3 + cámara + PIR) de
   forma autónoma: panel solar → `CN3791` (MPPT) → batería 1S → regulador
-  **TPS63020** (ver [`tps63020-buck-boost.md`](tps63020-buck-boost.md)) → 5V
-  para la placa ESP32-S3-CAM.
+  **TPS63020** (ver [`tps63020-buck-boost.md`](tps63020-buck-boost.md)) →
+  3.3V al pin `3V3` de la placa ESP32-S3-CAM. Los servos cuelgan de la misma
+  batería por un [TPS61088](tps61088-boost-converter.md) a 5V.
 - La salida `CH` (estado de carga) podría leerse desde un GPIO libre del
   ESP32-S3 para exponer un sensor de diagnóstico "cargando/no cargando" en
   Home Assistant, si se decide instrumentarlo — no implementado todavía.
-- Al ser una celda 1S (3.7-4.2V), la tensión de batería no es directamente
-  utilizable por la placa ESP32-S3-CAM (necesita 5V vía USB-C/TTL o un
-  regulador a su entrada de 5V), de ahí la necesidad del buck-boost.
+- Al ser una celda 1S (3.0-4.2V), la tensión de batería no es directamente
+  utilizable por la placa ESP32-S3-CAM (necesita 3.3V regulados en `3V3`, o
+  5V en `5V`/USB): la celda pasa por encima y por debajo de 3.3V a lo largo
+  de la descarga, de ahí la necesidad de un buck-boost y no de un boost o
+  un LDO.
 
 ---
 

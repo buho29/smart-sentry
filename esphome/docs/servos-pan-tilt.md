@@ -74,13 +74,16 @@ servos "pico", no micro estándar:
 Estos sí son sustitutos "drop-in" en tamaño y peso del D03012/D531BB
 originales, con la ventaja de ser piezas actuales y no descatalogadas.
 
-## Compatibilidad de tensión: los alimenta el TPS63020 a 5V fijo
+## Compatibilidad de tensión: los alimenta el TPS61088 a 5V fijo
 
-En este proyecto los servos no cuelgan de una pila suelta: los alimenta el
-mismo [TPS63020](tps63020-buck-boost.md) que da los 5V a la placa
-ESP32-S3-CAM (puenteado a la salida `5V`, ver esa ficha). Eso fija la tensión
-de los servos en **5V constantes**, y ahí el D03012 original tiene un
-problema:
+En este proyecto los servos no cuelgan de una pila suelta ni del riel de la
+placa: tienen su propio regulador, un [TPS61088](tps61088-boost-converter.md)
+fijado a **5V**, separado del [TPS63020](tps63020-buck-boost.md) que da
+3.3V a la ESP32-S3-CAM (con `GND` común entre ambos). El plan original era
+usar los Arced D531BB directamente a 1S (3.0-4.2V), pero al pasar a
+**MG90S** hace falta un riel de 5V real: los MG90S son servos de 4.8-6V, no
+de 3.3V. Eso fija la tensión de los servos en 5V constantes, y ahí el D03012
+original tiene un problema:
 
 | Servo | Tensión máxima según ficha | ¿Vale a 5V fijos? |
 | --- | --- | --- |
@@ -91,19 +94,13 @@ problema:
 | MG90S | 4.8-6.0V | Sí |
 | DS3218MG | 4.8-6.8V (variante "Pro": 5.0-6.8V) | Sí |
 
-Es decir: si el plan es alimentar los servos desde la misma salida de 5V que
-usa la cámara, el **D03012 original no es apto** (quedaría sobrealimentado de
-forma permanente, no solo en un pico), y el D531BB es cuando menos incierto.
-Todas las alternativas modernas listadas arriba (ES9051, DSM44, MG90S,
-DS3218MG) sí admiten 5V dentro de su rango normal, así que no añaden ninguna
-restricción extra sobre la tensión ya fijada por el TPS63020.
-
-Si en algún momento se quisiera aprovechar los servos originales pese a
-todo, el TPS63020 tiene un pad de salida a **4.2V** (ver
-[tps63020-buck-boost.md](tps63020-buck-boost.md)) que encajaría con el
-D03012 — pero entonces esa misma salida ya no serviría para alimentar la
-ESP32-S3-CAM (que necesita 5V), y haría falta un segundo regulador o módulo
-para separar ambas tensiones.
+Es decir: en un riel de 5V fijos el **D03012 original no es apto** (quedaría
+sobrealimentado de forma permanente, no solo en un pico), y el D531BB es
+cuando menos incierto — ambos quedan descartados. Todas las alternativas
+modernas listadas arriba (ES9051, DSM44, MG90S, DS3218MG) sí admiten 5V
+dentro de su rango normal. El módulo TPS61088 ofrece también 9V y 12V, pero
+ninguno de estos servos los admite (MG90S máx 6V, DS3218MG máx 6.8V), así
+que 5V es la única opción válida.
 
 ### Si en cambio se prefiere subir de categoría (más robustez, menos precisión de tamaño)
 
@@ -112,12 +109,18 @@ el soporte mecánico porque el tamaño no es compatible:
 
 - **MG90S** — micro servo digital estándar (~9g), engranajes metálicos, el
   más común y documentado hoy; solo tiene sentido si de todos modos se va a
-  ajustar/imprimir un soporte nuevo.
+  ajustar/imprimir un soporte nuevo. **Es el servo elegido** para la torreta
+  y el que dimensiona el riel del [TPS61088](tps61088-boost-converter.md).
 - **DS3218MG / DS3225MG** — para la torreta final a la intemperie con la
   pistola de agua (ver README, "water-tower-defense"), donde el par y la
   resistencia a salpicaduras pesan más que mantener el tamaño original.
 
-## El pico de consumo real: dos servos + cámara en el mismo TPS63020
+## El pico de consumo real: por qué los servos no comparten regulador con la cámara
+
+**Decisión tomada:** los servos van en un riel de 5V propio con un
+[TPS61088](tps61088-boost-converter.md); la ESP32-S3-CAM va a 3.3V con el
+[TPS63020](tps63020-buck-boost.md). Lo que sigue es el análisis que llevó a
+esa separación, referido a la idea inicial de colgar todo del TPS63020 a 5V.
 
 Más allá de la tensión, el problema serio es de **corriente instantánea**. El
 datasheet del [TPS63020](tps63020-buck-boost.md) promete 2A en modo boost,
@@ -137,8 +140,9 @@ presupuestar, no la corriente en movimiento libre:
 
 | Servo | Corriente de stall (aprox.) | 2 servos a la vez |
 | --- | --- | --- |
-| Blue Arrow D03012 / Arced D531BB (pico, sin dato oficial) | No publicada; los pico de esta clase suelen rondar 300-500mA | ~0.6-1.0 A |
-| E-max ES9051 / DSM44 (pico/sub-micro modernos) | No publicada; comparable a la clase anterior, ~300-500mA | ~0.6-1.0 A |
+| **Arced D531BB** (pico) | **~210mA medidos** forzándolo contra un tope (medición propia, sin dato oficial) | ~0.4 A |
+| Blue Arrow D03012 (pico, sin dato oficial) | No publicada; previsiblemente del orden del D531BB | ~0.4-0.6 A |
+| E-max ES9051 / DSM44 (pico/sub-micro modernos) | No publicada; comparable a la clase anterior, ~200-500mA | ~0.4-1.0 A |
 | **MG90S** | **~700-900mA medidos**, según reportes de usuarios en foros de Arduino/RC ([fuente 1](https://www.kpower.com/insight_bldc/7870.html/), [fuente 2](https://forum.arduino.cc/t/how-to-power-mg90s-motors-and-arduino-nano/1001853)); en movimiento normal (no forzado) ronda 120-250mA | **~1.4-1.8 A** |
 | **DS3218MG** | **~2.1A a 5V** (hasta 2.9A a 6.8V, según datasheet DSSERVO) | **~4.2 A** |
 
@@ -209,13 +213,19 @@ optimice el resto del circuito (incluido el propio regulador boost, ver
 Es la justificación práctica de cortar la alimentación de los servos en vez
 de solo despertar/dormir el regulador.
 
-## Cortar la alimentación de los servos con un MOSFET (ahorro en reposo)
+## Cortar la alimentación de los servos (ahorro en reposo)
 
-Además de separar el riel, se puede cortar del todo la corriente a los
-servos cuando no hay seguimiento activo, con el mismo **IRLZ44N** ya usado
-para el motor de la [pistola de agua](bambulab-zc005-water-gun.md): un
-interruptor de bajo lado en el retorno a GND del servo, gobernado por un
-GPIO del ESP32-S3.
+Además de separar el riel, se corta del todo la corriente a los servos
+cuando no hay seguimiento activo. Con el [TPS61088](tps61088-boost-converter.md)
+elegido esto se hace **por su pin `EN`** desde un GPIO del ESP32-S3, sin
+ningún componente extra: con `EN` bajo el regulador queda en 1-3µA y los
+servos sin tensión.
+
+El esquema con **IRLZ44N** que sigue (el mismo MOSFET usado para el motor de
+la [pistola de agua](bambulab-zc005-water-gun.md), como interruptor de bajo
+lado en el retorno a GND del servo) queda como **respaldo** por si el módulo
+TPS61088 que llegue no expone `EN` en un pad accesible. Las precauciones de
+orden de apagado del final de esta sección aplican igual en ambos casos.
 
 ![Esquema: corte de alimentación de los servos con IRLZ44N](img/servo-power-switch-mosfet.svg)
 
@@ -228,11 +238,12 @@ Puntos clave del esquema:
   **pull-down** (~10kΩ) de la puerta a GND — el pull-down es lo que evita
   que el servo reciba corriente sin querer si el GPIO queda flotando durante
   el arranque del ESP32.
-- **Orden de apagado importante:** primero dejar que ESPHome corte la señal
-  PWM (`auto_detach_time: 2s`, ya presente en `esp32-s3-cam-servo.yaml`), y
-  solo después bajar el GPIO de este interruptor. Cortar la alimentación
-  mientras el pin de señal todavía manda PWM puede alimentar el servo a
-  medias a través de sus diodos de protección internos.
+- **Orden de apagado importante** (vale igual para el `EN` del TPS61088):
+  primero dejar que ESPHome corte la señal PWM (`auto_detach_time: 2s`, ya
+  presente en `esp32-s3-cam-servo.yaml`), y solo después bajar el GPIO de
+  corte. Cortar la alimentación mientras el pin de señal todavía manda PWM
+  puede alimentar el servo a medias a través de sus diodos de protección
+  internos.
 
 También disponible como esquema editable de KiCad: abre
 [`diagrams/mosfet-load-switch/mosfet-load-switch.kicad_pro`](diagrams/mosfet-load-switch/mosfet-load-switch.kicad_pro)
@@ -265,10 +276,10 @@ soporte, tipo de conector) y de la fuente de alimentación (ver más abajo).
   como el ES9051 suelen traer conector JR estándar de 2.54mm — revisar el
   cableado del pin de señal al montar cualquiera de las dos opciones.
 - Si se pasa a un servo de mayor par (DS3218/DS3225), revisar la
-  alimentación: tiran de más corriente en el arranque/parada que un servo
-  pico o micro, así que conviene alimentarlos aparte de la lógica del ESP32
-  (mismo razonamiento que motiva el [TPS63020](tps63020-buck-boost.md) como
-  regulador dedicado en el nodo solar).
+  alimentación: tiran de más corriente en el arranque/parada (~2.1A de stall
+  cada uno), pero siguen cabiendo en el riel del
+  [TPS61088](tps61088-boost-converter.md) a 5V — solo hay que revisar que la
+  batería aguante la corriente de entrada correspondiente.
 
 ---
 

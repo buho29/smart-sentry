@@ -71,7 +71,16 @@ Bloques relevantes:
 - **Alimentación del sensor de cámara:** dos reguladores **XC6206** dedicados
   (2.8V y 1.2V) para las tensiones que exigen los sensores OV26xx/OV37xx/OV77xx.
 - **Alimentación de lógica principal:** regulador **AMS1117-3.3** desde la
-  entrada de 5V (USB o pin `5V`).
+  entrada de 5V (USB o pin `5V`). Su salida es el nodo `VCC3.3V`, del que
+  cuelgan el módulo ESP32-S3 **y la entrada de los dos XC6206** de la
+  cámara; el header P1 expone ese nodo en el pin `3V3` (junto a `5V`).
+- **Alimentación a batería por `3V3`:** en el nodo autónomo la placa se
+  alimenta metiendo 3.3V regulados directamente por el pin `3V3` desde el
+  [TPS63020](tps63020-buck-boost.md), saltándose el AMS1117. Por ese pin
+  queda alimentado todo lo necesario (ESP32-S3 y cámara); lo único que se
+  queda sin tensión es el CH340 y el LED WS2812B, que cuelgan de `USB_5V`.
+  Para flashear por USB-TTL hay que deshabilitar antes el TPS63020 — ver
+  las precauciones en su ficha.
 
 ## Sensor de cámara: OV2640
 
