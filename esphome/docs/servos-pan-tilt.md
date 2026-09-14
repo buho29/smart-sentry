@@ -47,6 +47,9 @@ de este documento) son de una categoría de tamaño distinta:
 | --- | --- | --- | --- |
 | Blue Arrow D03012 (original) | 3.2 g | 19.6 × 8.4 × 21.8 mm | Pico |
 | Arced D531BB (original) | 3.9 g | 19.0 × 7.9 × 17.5 mm | Pico |
+| EMAX ES9251 II | 2.5 g | 18.0 × 7.9 × 16.8 mm | Pico |
+| GH-S37D / GH-S43D (genéricos) | 3.7 / 4.3 g | 20 × 8.75 × 22 mm (con eje) | Pico |
+| EMAX ES9051 II | 4.8 g | 19.9 × 8.8 × 23.1 mm | Pico |
 | SG90 / MG90S | ~9 g | ~23 × 12.2 × 29 mm | Micro estándar |
 | DS3218MG / DS3225MG | ~60 g | ~40 × 20 × 40 mm | Estándar de alto par |
 
@@ -59,17 +62,32 @@ servos "pico", no micro estándar:
 
 ### Reemplazos del mismo tamaño/peso (pico, ~3-6g)
 
-- **E-max ES9051** — 4.3g, 19×8×23mm, digital, coreless, engranajes de
-  plástico, 0.8kg·cm de par, conector JR estándar. Es prácticamente el mismo
-  tamaño y peso que el D03012 original, y se compra hoy sin problema (Amazon,
-  tiendas de aeromodelismo). [Ficha](https://servodatabase.com/servo/e-max/es9051).
-- **JX PDI-1102HB** — 4.3g, plástico, digital, coreless, sub-micro; otra
-  opción equivalente igual de disponible en tiendas de aeromodelismo.
-- **Power HD DSM44** — algo mayor (5.8g, 20×8.7×27mm) pero sigue en la misma
-  familia de tamaño; a cambio lleva **engranajes de aluminio** en vez de
-  plástico, más par (1.2-1.6kg·cm) y más velocidad (0.07-0.09s/60°) — mejor
-  opción si se quiere algo más duradero sin saltar a la categoría de 9g.
-  [Specs](https://www.pololu.com/product/2142/specs).
+- **EMAX ES9251 II** — 2.5g, 18.0×7.9×16.8mm, digital, coreless (motor de
+  6mm), engranajes de plástico, 0.27kg·cm de par a 4.8V, 0.08s/60°, 4.5-6.0V.
+  Es el que más se parece en huella al **Arced D531BB** (misma anchura, 1mm
+  menos de largo y de alto) y admite 5V fijos; a cambio tiene la mitad de par.
+  Disponible en AliExpress:
+  [listado 1](https://de.aliexpress.com/i/4001299437053.html),
+  [listado 2](https://www.aliexpress.com/i/32912752556.html).
+  [Ficha EMAX](https://emaxmodel.com/products/emax-es9251-ii-4g-plastic-micro-digital-servo-for-rc-model).
+- **GH-S37D** (genérico de 3.7g, decenas de vendedores) — 3.7g, 20×8.75×22mm
+  (alto con eje), digital, coreless, engranajes de plástico, 0.6-0.8kg·cm de
+  par, 0.09s/60°. Es el clon directo de la clase del Arced/Blue Arrow: misma
+  carcasa (~20×8mm de base) y peso. AliExpress:
+  [búsqueda "3.7g servo"](https://www.aliexpress.com/w/wholesale-3.7g-servo.html),
+  [pack 5-20 uds GH-S37D/GH-S43D](https://www.aliexpress.us/item/3256803081306558.html),
+  [TK-SO37 coreless 180°](https://www.aliexpress.com/item/1005009523664399.html).
+  [Specs](https://manuals.plus/m/9b2b34bfe98b3ce26d84e25f306007f719a5e8b81fafc7f0f377225097acad6f).
+- **GH-S43D** — 4.3g, 20.5×8.6×22.7mm, igual que el S37D con algo más de par
+  (0.8kg·cm) y 0.10s/60°; se vende en los mismos listados.
+  [Specs](https://www.laskakit.cz/en/plastove-digitalni-micro-servo-gh-s43d-4-3g--180--/).
+- **EMAX ES9051 II** — 4.8g, 19.9×8.8×23.1mm, digital, coreless, engranajes
+  de plástico, 3.6-6.0V, 0.85kgf·cm de par y 0.07s/60° a 4.8V (1.0kgf·cm y
+  0.06s/60° a 6V), conector FUT/JR estándar (según datasheet EMAX 2018/11/6).
+  Es prácticamente el mismo tamaño y peso que el D03012 original, y se compra
+  hoy sin problema (Amazon, tiendas de aeromodelismo,
+  [AliExpress 4 uds](https://www.aliexpress.us/item/3256804176360888.html)).
+  [Ficha](https://servodatabase.com/servo/e-max/es9051).
 
 Estos sí son sustitutos "drop-in" en tamaño y peso del D03012/D531BB
 originales, con la ventaja de ser piezas actuales y no descatalogadas.
@@ -89,15 +107,15 @@ original tiene un problema:
 | --- | --- | --- |
 | Blue Arrow D03012 (original) | **4.2V** | **No** — 5V lo sobrepasa casi un 20%, fuera de su rango documentado (3.3-4.2V) |
 | Arced D531BB (original) | Caracterizado a 4.8V (máximo no confirmado en la ficha) | Dudoso — 5V está justo por encima del único valor documentado |
-| E-max ES9051 | 4.0-5.5V | Sí, con margen |
-| Power HD DSM44 | 4.8-6.0V | Sí |
+| EMAX ES9251 II | 4.5-6.0V | Sí |
+| EMAX ES9051 II | 3.6-6.0V | Sí, con margen |
 | MG90S | 4.8-6.0V | Sí |
 | DS3218MG | 4.8-6.8V (variante "Pro": 5.0-6.8V) | Sí |
 
 Es decir: en un riel de 5V fijos el **D03012 original no es apto** (quedaría
 sobrealimentado de forma permanente, no solo en un pico), y el D531BB es
 cuando menos incierto — ambos quedan descartados. Todas las alternativas
-modernas listadas arriba (ES9051, DSM44, MG90S, DS3218MG) sí admiten 5V
+modernas listadas arriba (ES9251 II, ES9051 II, MG90S, DS3218MG) sí admiten 5V
 dentro de su rango normal. El módulo TPS61088 ofrece también 9V y 12V, pero
 ninguno de estos servos los admite (MG90S máx 6V, DS3218MG máx 6.8V), así
 que 5V es la única opción válida.
@@ -142,7 +160,7 @@ presupuestar, no la corriente en movimiento libre:
 | --- | --- | --- |
 | **Arced D531BB** (pico) | **~210mA medidos** forzándolo contra un tope (medición propia, sin dato oficial) | ~0.4 A |
 | Blue Arrow D03012 (pico, sin dato oficial) | No publicada; previsiblemente del orden del D531BB | ~0.4-0.6 A |
-| E-max ES9051 / DSM44 (pico/sub-micro modernos) | No publicada; comparable a la clase anterior, ~200-500mA | ~0.4-1.0 A |
+| EMAX ES9051 II / ES9251 II / GH-S37D (pico modernos) | No publicada; comparable a la clase anterior, ~200-500mA | ~0.4-1.0 A |
 | **MG90S** | **~700-900mA medidos**, según reportes de usuarios en foros de Arduino/RC ([fuente 1](https://www.kpower.com/insight_bldc/7870.html/), [fuente 2](https://forum.arduino.cc/t/how-to-power-mg90s-motors-and-arduino-nano/1001853)); en movimiento normal (no forzado) ronda 120-250mA | **~1.4-1.8 A** |
 | **DS3218MG** | **~2.1A a 5V** (hasta 2.9A a 6.8V, según datasheet DSSERVO) | **~4.2 A** |
 
@@ -152,8 +170,8 @@ Wi-Fi o una captura de cámara.
 
 **Conclusión práctica:**
 
-- Con los servos **pico** originales o sus reemplazos modernos (ES9051,
-  DSM44), el pico combinado (servos + placa) se queda razonablemente por
+- Con los servos **pico** originales o sus reemplazos modernos (ES9051 II,
+  ES9251 II, GH-S37D), el pico combinado (servos + placa) se queda razonablemente por
   debajo del límite real de ~1.5A — es la opción más segura para compartir
   el mismo regulador que la cámara.
 - Con **MG90S**, el consenso de la comunidad Arduino/RC es tajante: usar
@@ -188,7 +206,7 @@ moverse**.
 | --- | --- |
 | **MG90S** | ~5-6mA con la electrónica en reposo sin corregir posición; sube a ~70-90mA en cuanto corrige activamente sin carga externa ([fuente](https://www.kpower.com/insight_bldc/7870.html/)) |
 | **DS3218MG / DS3225MG** | ~4-5mA "detenido" (idle), según datasheet DSSERVO, medido en banco sin carga externa |
-| Blue Arrow D03012 / Arced D531BB, E-max ES9051 / DSM44 | Sin cifra de idle publicada por el fabricante; sub-micro/pico de clase similar a otros analógicos de 9g, previsiblemente entre unas pocas mA y unas pocas decenas de mA en reposo sin carga |
+| Blue Arrow D03012 / Arced D531BB, EMAX ES9051 II / ES9251 II, GH-S37D | Sin cifra de idle publicada por el fabricante; sub-micro/pico de clase similar a otros analógicos de 9g, previsiblemente entre unas pocas mA y unas pocas decenas de mA en reposo sin carga |
 
 **El matiz importante:** esa cifra de datasheet es de banco, sin carga
 externa — no es lo que va a consumir el servo sujetando de verdad el peso de
