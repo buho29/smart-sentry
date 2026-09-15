@@ -170,4 +170,4 @@ from ultralytics import YOLO
 print(YOLO("yolo11m.pt").names)
 ```
 
-*Documento generado con IA (Claude); revisar los valores antes de montar.*
+*Documento generado con IA; revisar los valores antes de montar.*

@@ -68,4 +68,4 @@ este documento se centra solo en el componente.
 *Documento de referencia de hardware. Componente aún no soldado en ningún
 YAML/placa activa del proyecto.*
 
-*Documento generado con IA (Claude); revisar los valores antes de montar.*
+*Documento generado con IA; revisar los valores antes de montar.*

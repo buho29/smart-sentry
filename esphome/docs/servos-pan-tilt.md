@@ -296,4 +296,4 @@ soporte, tipo de conector) y de la fuente de alimentación (ver más abajo).
 ServoDatabase. Ninguno de los servos mencionados está montado todavía en un
 YAML activo.*
 
-*Documento generado con IA (Claude); revisar los valores antes de montar.*
+*Documento generado con IA; revisar los valores antes de montar.*

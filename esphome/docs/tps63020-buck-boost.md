@@ -128,4 +128,4 @@ opción deseada antes de usar el módulo; de fábrica puede no venir puenteado.
 vendedor en [`img/TPS63020.webp`](img/TPS63020.webp). Componente aún no
 cableado en ningún YAML del proyecto.*
 
-*Documento generado con IA (Claude); revisar los valores antes de montar.*
+*Documento generado con IA; revisar los valores antes de montar.*

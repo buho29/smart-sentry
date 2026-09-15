@@ -155,4 +155,4 @@ Filtrado de ruido a partir de experiencias en
 y [esp8266.com](https://www.esp8266.com/viewtopic.php?f=32&t=19952).
 Cableado en `huerta.yaml` (GPIO14).*
 
-*Documento generado con IA (Claude); revisar los valores antes de montar.*
+*Documento generado con IA; revisar los valores antes de montar.*

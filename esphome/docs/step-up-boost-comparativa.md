@@ -115,4 +115,4 @@ queda como plan de respaldo si solo se dispone de un TPS61088
 *Documento de referencia de hardware, sin código ni YAML asociado. Ver las
 fichas individuales enlazadas arriba para el detalle de cada componente.*
 
-*Documento generado con IA (Claude); revisar los valores antes de montar.*
+*Documento generado con IA; revisar los valores antes de montar.*

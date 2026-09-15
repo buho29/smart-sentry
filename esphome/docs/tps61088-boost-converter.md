@@ -114,4 +114,4 @@ alimenta.
 SLVSCM8A y el listado de AliExpress citado arriba. Componente aún no
 comprado ni cableado en ningún YAML del proyecto.*
 
-*Documento generado con IA (Claude); revisar los valores antes de montar.*
+*Documento generado con IA; revisar los valores antes de montar.*

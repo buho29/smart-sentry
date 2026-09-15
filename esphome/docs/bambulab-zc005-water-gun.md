@@ -88,4 +88,4 @@ proyecto — datos recopilados de la ficha oficial de Bambu Lab, Alibaba y el
 modelo MakerWorld FMG9 que usa este mismo kit. Componente aún no integrado
 en ningún YAML del proyecto.*
 
-*Documento generado con IA (Claude); revisar los valores antes de montar.*
+*Documento generado con IA; revisar los valores antes de montar.*

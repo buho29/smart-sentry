@@ -59,4 +59,4 @@ a las resistencias de sensado R1-R4 que fijan la corriente de carga.
 vendedor en [`img/CN3791.webp`](img/CN3791.webp). Componente aún no cableado
 en ningún YAML del proyecto.*
 
-*Documento generado con IA (Claude); revisar los valores antes de montar.*
+*Documento generado con IA; revisar los valores antes de montar.*

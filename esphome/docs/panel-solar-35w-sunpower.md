@@ -189,4 +189,4 @@ Componente aún no comprado ni cableado en ningún YAML del proyecto; el
 divisor al ADC ([`img/panel-divisor-adc.svg`](img/panel-divisor-adc.svg))
 tampoco está todavía en `huerta.yaml`.*
 
-*Documento generado con IA (Claude); revisar los valores antes de montar.*
+*Documento generado con IA; revisar los valores antes de montar.*
