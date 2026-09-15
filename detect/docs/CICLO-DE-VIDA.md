@@ -487,3 +487,5 @@ Aparece solo con **dos o más** cámaras con `noise_psk`. Si algún día molesta
 la solución sería un único hilo + loop compartido por todos los
 `EsphomeController` en vez de uno por cada uno; es un refactor de cierto
 tamaño y no arregla nada más, así que de momento se queda documentado.
+
+*Documento generado con IA (Claude); revisar los valores antes de montar.*

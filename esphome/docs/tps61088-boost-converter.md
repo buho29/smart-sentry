@@ -10,6 +10,8 @@ a un pad — por ejemplo
 [este de AliExpress](https://es.aliexpress.com/item/1005009535413093.html)
 ("TPS61088 Boost Module 5V/9V/12V 10A 1MHz").
 
+![Módulo TPS61088 5V/9V/12V 10A](img/TPS61088.webp)
+
 ## Identificación
 
 - **Chip principal:** **TPS61088** (Texas Instruments) — convertidor
@@ -111,3 +113,5 @@ alimenta.
 *Documento de referencia de hardware, generado a partir del datasheet TI
 SLVSCM8A y el listado de AliExpress citado arriba. Componente aún no
 comprado ni cableado en ningún YAML del proyecto.*
+
+*Documento generado con IA (Claude); revisar los valores antes de montar.*

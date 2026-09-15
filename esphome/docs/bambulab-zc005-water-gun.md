@@ -8,6 +8,8 @@ montar réplicas de juguete imprimibles en 3D (modelo MakerWorld
 carcasa estilo TEC-9/T-15) — aquí se reaprovecha solo el mecanismo eléctrico,
 no la carcasa de juguete.
 
+![Contenido del Electric Water Spray Kit 02 (ZC005): módulo bomba S05, microswitch, batería 18650, cargador USB, tubo y tornillería](img/ZC005.webp)
+
 ## Identificación
 
 - **Kit:** Bambu Lab "Electric Water Spray Kit 02", pieza interna
@@ -77,8 +79,7 @@ control propia que haya que respetar ni "hablar" con protocolo alguno.
 
 El esquema de este interruptor (mismo circuito que para los servos) está en
 [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo)
-como SVG y también editable en
-[KiCad](diagrams/mosfet-load-switch/mosfet-load-switch.kicad_pro).
+como SVG.
 
 ---
 
@@ -86,3 +87,5 @@ como SVG y también editable en
 proyecto — datos recopilados de la ficha oficial de Bambu Lab, Alibaba y el
 modelo MakerWorld FMG9 que usa este mismo kit. Componente aún no integrado
 en ningún YAML del proyecto.*
+
+*Documento generado con IA (Claude); revisar los valores antes de montar.*

@@ -169,3 +169,5 @@ Para ver el diccionario `índice -> nombre` real que carga un modelo concreto:
 from ultralytics import YOLO
 print(YOLO("yolo11m.pt").names)
 ```
+
+*Documento generado con IA (Claude); revisar los valores antes de montar.*

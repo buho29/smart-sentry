@@ -4,6 +4,8 @@ Ficha de referencia del módulo boost que el usuario ya tiene disponible como
 alternativa/complemento al [TPS63020](tps63020-buck-boost.md) en la cadena
 de alimentación del nodo solar (ver README, "water-tower-defense").
 
+![Módulo MT3608 2A](img/MT3608.webp)
+
 ## Identificación
 
 - **Chip principal:** **MT3608** — convertidor **boost puro** (solo eleva
@@ -87,3 +89,5 @@ etapa de potencia dimensionada para varios amperios.
 
 *Documento de referencia de hardware. Componente aún no cableado en ningún
 YAML del proyecto.*
+
+*Documento generado con IA (Claude); revisar los valores antes de montar.*

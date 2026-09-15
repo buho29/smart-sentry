@@ -4,10 +4,10 @@ Ficha de referencia del MOSFET usado como interruptor de bajo lado para
 cortar la alimentación de los [servos](servos-pan-tilt.md) y disparar el
 motor de la [pistola de agua ZC005](bambulab-zc005-water-gun.md). El
 esquema completo de ese circuito (resistencia de gate, pull-down, diodo
-flyback) está en [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo)
-y como archivo de KiCad en
-[`diagrams/mosfet-load-switch/`](diagrams/mosfet-load-switch/); este
-documento se centra solo en el componente.
+flyback) está en [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo);
+este documento se centra solo en el componente.
+
+![IRLZ44N en encapsulado TO-220](img/IRLZ44N.webp)
 
 ## Identificación
 
@@ -50,8 +50,8 @@ documento se centra solo en el componente.
 ## Notas de la implementación en este proyecto
 
 - El circuito completo (resistencia de gate ~220Ω, pull-down ~10kΩ en la
-  puerta, diodo flyback en la carga) está documentado y verificado con
-  `kicad-cli` en [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo) —
+  puerta, diodo flyback en la carga) está documentado en
+  [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo) —
   no se repite aquí para no duplicar.
 - **Drain vs. Source:** el Drain va hacia la carga (servo o motor de la
   pistola), el Source va directo a GND — no hay ninguna resistencia entre
@@ -67,3 +67,5 @@ documento se centra solo en el componente.
 
 *Documento de referencia de hardware. Componente aún no soldado en ningún
 YAML/placa activa del proyecto.*
+
+*Documento generado con IA (Claude); revisar los valores antes de montar.*

@@ -26,7 +26,7 @@ URL propia guardada).
 
 | Conector       | Función                                                        |
 | -------------- | ---------------------------------------------------------------- |
-| `IN` (x2, +/-) | Entrada del **panel solar** (dos tomas JST redundantes/en paralelo) |
+| `IN` (x2, +/-) | Entrada del **panel solar** (dos tomas JST redundantes/en paralelo) — panel previsto: [`panel-solar-35w-sunpower.md`](panel-solar-35w-sunpower.md), con la caja USB quitada |
 | `BAT` (x2, +/-)| Salida a la **batería** Li-ion/LiPo 1S (dos tomas JST redundantes/en paralelo) |
 | `VCC`          | Salida auxiliar (tensión de batería, para alimentar lógica externa) |
 | `CH`           | Salida de **estado de carga** (indica si está cargando, normalmente drenaje abierto o nivel lógico) |
@@ -58,3 +58,5 @@ a las resistencias de sensado R1-R4 que fijan la corriente de carga.
 *Documento de referencia de hardware, generado a partir de la captura del
 vendedor en [`img/CN3791.webp`](img/CN3791.webp). Componente aún no cableado
 en ningún YAML del proyecto.*
+
+*Documento generado con IA (Claude); revisar los valores antes de montar.*

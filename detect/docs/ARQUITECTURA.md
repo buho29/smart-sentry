@@ -1078,3 +1078,5 @@ stateDiagram-v2
         on_state_value con el bool
     end note
 ```
+
+*Documento generado con IA (Claude); revisar los valores antes de montar.*

@@ -5,6 +5,8 @@ elevadores ya documentados ([MT3608](mt3608-boost-converter.md) y
 [TPS63020](tps63020-buck-boost.md)) para decidir cuál conviene en un nodo a
 batería con deep sleep (ver README, "water-tower-defense").
 
+![Módulo XL6009 4A](img/XL6009.webp)
+
 ## Identificación
 
 - **Chip principal:** **XL6009** (XLSemi) — convertidor **boost/buck-boost/
@@ -114,3 +116,5 @@ ESP32.
 
 *Documento de referencia de hardware. Componente aún no cableado en ningún
 YAML del proyecto.*
+
+*Documento generado con IA (Claude); revisar los valores antes de montar.*

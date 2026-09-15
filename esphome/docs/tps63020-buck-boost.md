@@ -127,3 +127,5 @@ opción deseada antes de usar el módulo; de fábrica puede no venir puenteado.
 *Documento de referencia de hardware, generado a partir de la captura del
 vendedor en [`img/TPS63020.webp`](img/TPS63020.webp). Componente aún no
 cableado en ningún YAML del proyecto.*
+
+*Documento generado con IA (Claude); revisar los valores antes de montar.*

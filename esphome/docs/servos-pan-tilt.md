@@ -247,6 +247,8 @@ orden de apagado del final de esta sección aplican igual en ambos casos.
 
 ![Esquema: corte de alimentación de los servos con IRLZ44N](img/servo-power-switch-mosfet.svg)
 
+*Esquema generado con IA; no verificado en banco.*
+
 Puntos clave del esquema:
 
 - **Diodo flyback** entre V+ y GND del servo (mismo criterio que en el
@@ -262,20 +264,6 @@ Puntos clave del esquema:
   corte. Cortar la alimentación mientras el pin de señal todavía manda PWM
   puede alimentar el servo a medias a través de sus diodos de protección
   internos.
-
-También disponible como esquema editable de KiCad: abre
-[`diagrams/mosfet-load-switch/mosfet-load-switch.kicad_pro`](diagrams/mosfet-load-switch/mosfet-load-switch.kicad_pro)
-(el proyecto va en su propia carpeta, con `.kicad_pro`/`.kicad_sch`/`.kicad_pcb`
-a juego, que es como KiCad espera encontrarlo) — con símbolos propios (R,
-diodo, MOSFET, carga) definidos dentro del propio archivo, sin depender de
-ninguna librería oficial de KiCad. Verificado con `kicad-cli` (exporta a PDF
-sin errores y con las conexiones correctas).
-
-Se intentó primero como archivo de Fritzing (`fritzing/mosfet-load-switch.fz`,
-sigue en el repo) y como diagrama de draw.io, pero se descartaron: Fritzing
-por su formato interno propenso a errores de parseo, y draw.io porque el
-layout automático quedaba con cables cruzados y sin símbolos eléctricos
-reales.
 
 ## Qué necesita el proyecto a nivel de firmware
 
@@ -307,3 +295,5 @@ soporte, tipo de conector) y de la fuente de alimentación (ver más abajo).
 [Arced D531BB](https://servodatabase.com/servo/arced/d531bb) en
 ServoDatabase. Ninguno de los servos mencionados está montado todavía en un
 YAML activo.*
+
+*Documento generado con IA (Claude); revisar los valores antes de montar.*

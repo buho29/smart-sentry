@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 470" font-family="Consolas, Menlo, monospace" font-size="15">
+  <rect x="0" y="0" width="900" height="470" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="20" y="30" font-size="18" font-weight="bold" fill="#111">Deteccion dia/noche: tension del panel al ADC por divisor</text>
+
+  <!-- Panel block -->
+  <rect x="40" y="120" width="160" height="120" fill="#f5f5f5" stroke="#111" stroke-width="2"/>
+  <text x="58" y="160" fill="#111" font-weight="bold">Panel solar</text>
+  <text x="58" y="182" fill="#555" font-size="13">~7V de dia (Voc)</text>
+  <text x="58" y="200" fill="#555" font-size="13">5.5-6V cargando</text>
+  <text x="58" y="218" fill="#555" font-size="13">0V de noche</text>
+  <text x="186" y="155" fill="#333" font-size="13">+</text>
+  <text x="186" y="215" fill="#333" font-size="13">-</text>
+
+  <!-- Panel + to node and up to CN3791 IN+ -->
+  <line x1="200" y1="150" x2="300" y2="150" stroke="#111" stroke-width="2"/>
+  <line x1="300" y1="150" x2="300" y2="80" stroke="#111" stroke-width="2"/>
+  <polygon points="300,72 294,84 306,84" fill="#111"/>
+  <text x="312" y="86" fill="#111">IN+ del CN3791 (MPPT)</text>
+  <circle cx="300" cy="150" r="4" fill="#111"/>
+
+  <!-- Panel - to GND -->
+  <line x1="200" y1="210" x2="240" y2="210" stroke="#111" stroke-width="2"/>
+  <line x1="240" y1="210" x2="240" y2="390" stroke="#111" stroke-width="2"/>
+  <text x="80" y="262" fill="#555" font-size="13">IN- del CN3791</text>
+  <text x="80" y="278" fill="#555" font-size="13">= GND</text>
+
+  <!-- R1 470k -->
+  <line x1="300" y1="150" x2="300" y2="190" stroke="#111" stroke-width="2"/>
+  <rect x="285" y="190" width="30" height="60" fill="#fff" stroke="#111" stroke-width="2"/>
+  <text x="325" y="225" fill="#111">R1 470k</text>
+  <line x1="300" y1="250" x2="300" y2="310" stroke="#111" stroke-width="2"/>
+
+  <!-- node -->
+  <circle cx="300" cy="290" r="4" fill="#111"/>
+
+  <!-- R2 220k -->
+  <rect x="285" y="310" width="30" height="60" fill="#fff" stroke="#111" stroke-width="2"/>
+  <text x="325" y="345" fill="#111">R2 220k</text>
+  <line x1="300" y1="370" x2="300" y2="390" stroke="#111" stroke-width="2"/>
+
+  <!-- node to ADC -->
+  <line x1="300" y1="290" x2="600" y2="290" stroke="#111" stroke-width="2"/>
+  <text x="325" y="278" fill="#111" font-size="13">V_adc = V_panel x 0.319  ->  7V = 2.23V</text>
+
+  <!-- C 100nF -->
+  <circle cx="450" cy="290" r="4" fill="#111"/>
+  <line x1="450" y1="290" x2="450" y2="320" stroke="#111" stroke-width="2"/>
+  <line x1="438" y1="320" x2="462" y2="320" stroke="#111" stroke-width="3"/>
+  <line x1="438" y1="334" x2="462" y2="334" stroke="#111" stroke-width="3"/>
+  <line x1="450" y1="334" x2="450" y2="390" stroke="#111" stroke-width="2"/>
+  <text x="468" y="333" fill="#111">C 100nF</text>
+  <text x="468" y="351" fill="#555" font-size="13">(ceramico, junto al pin)</text>
+
+  <!-- ESP32-S3 block -->
+  <rect x="600" y="250" width="200" height="80" fill="#e8f0ff" stroke="#111" stroke-width="2"/>
+  <text x="612" y="274" fill="#111" font-weight="bold" font-size="13">ESP32-S3</text>
+  <text x="612" y="294" fill="#111" font-size="13">GPIO1 (ADC1_CH0, RTC)</text>
+  <text x="612" y="314" fill="#555" font-size="12">atenuacion 12dB: 0-3.1V</text>
+  <line x1="700" y1="330" x2="700" y2="390" stroke="#111" stroke-width="2"/>
+
+  <!-- GND rail -->
+  <line x1="40" y1="390" x2="860" y2="390" stroke="#111" stroke-width="2"/>
+  <text x="20" y="410" fill="#111">GND</text>
+
+  <!-- Notes -->
+  <text x="20" y="432" fill="#333" font-size="13">Consumo del divisor: 7V / 690k = ~10uA a pleno sol, 0 de noche; lo paga el panel, no la bateria.</text>
+  <text x="20" y="450" fill="#333" font-size="13">Umbral "dia": ~3V de panel (~0.95V en el ADC). El 100nF es obligatorio con R tan altas; sin el, usar 100k/47k (~48uA).</text>
+</svg>

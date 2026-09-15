@@ -138,3 +138,5 @@ psram:
 *Documento de referencia de hardware, generado a partir de las capturas del
 vendedor en [`img/esp32/`](img/esp32/) y contrastado con los valores reales de
 pines de `esp32-s3-cam.yaml`.*
+
+*Documento generado con IA (Claude); revisar los valores antes de montar.*
