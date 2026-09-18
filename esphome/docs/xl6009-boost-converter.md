@@ -13,9 +13,13 @@ batería con deep sleep (ver README, "water-tower-defense").
   inversor** configurable con un único pin de feedback, frecuencia de
   conmutación fija **400kHz**, hasta **4A de corriente de conmutación**
   ([datasheet XLSemi](https://www.xlsemi.com)).
-- **Entrada:** 5-32V. **Salida:** ajustable por potenciómetro (trimpot) en la
-  placa, igual que el MT3608 — de fábrica puede estar en cualquier posición,
-  hay que **ajustarla a 5.0V con un multímetro antes de conectar carga**.
+- **Entrada:** 5-32V. **Ojo:** ese mínimo de 5V queda por encima de una
+  celda 1S (3.0-4.2V); muchos módulos arrancan por debajo, pero es fuera de
+  especificación — un motivo más para descartarlo en este nodo (el MT3608
+  admite desde 2V y el TPS61088 desde 2.7V). **Salida:** ajustable por
+  potenciómetro (trimpot) en la placa, igual que el MT3608 — de fábrica puede
+  estar en cualquier posición, hay que **ajustarla a 5.0V con un multímetro
+  antes de conectar carga**.
 - **Diferencia frente a MT3608 y TPS63020:** el chip XL6009 sí tiene un pin
   **EN** dedicado (activo alto, apagado si se lleva a bajo) según su
   datasheet — pero en la práctica esto es irrelevante para el módulo típico
@@ -80,7 +84,9 @@ TPS63020 — datasheet TI (IQ ≈25µA en power save, EN=bajo = apagado).
 
 ## Rol previsto: XL6009 como riel de servos, cortado por un IRLZ44N
 
-Descartado como riel principal, el plan para este módulo es usarlo **solo
+Opción descartada (ver arriba: consumo en reposo y entrada mínima de 5V con
+una batería 1S); se conserva el diseño por si se reutiliza en un nodo sin
+esas limitaciones. La idea era usarlo **solo
 para los servos de la torreta**, con su consumo en reposo (2.5-5mA)
 eliminado mediante un interruptor de carga: un MOSFET **IRLZ44N** en
 conmutación de **lado bajo** (low-side), controlado por un GPIO de la

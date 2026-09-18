@@ -106,16 +106,17 @@ original tiene un problema:
 | Servo | Tensión máxima según ficha | ¿Vale a 5V fijos? |
 | --- | --- | --- |
 | Blue Arrow D03012 (original) | **4.2V** | **No** — 5V lo sobrepasa casi un 20%, fuera de su rango documentado (3.3-4.2V) |
-| Arced D531BB (original) | Caracterizado a 4.8V (máximo no confirmado en la ficha) | Dudoso — 5V está justo por encima del único valor documentado |
+| Arced D531BB (original) | Caracterizado a 4.8V (máximo no confirmado en la ficha) | **Sí** — 4.8V es la tensión nominal de la mayoría de servos RC y 5V entra en su margen habitual |
 | EMAX ES9251 II | 4.5-6.0V | Sí |
 | EMAX ES9051 II | 3.6-6.0V | Sí, con margen |
 | MG90S | 4.8-6.0V | Sí |
 | DS3218MG | 4.8-6.8V (variante "Pro": 5.0-6.8V) | Sí |
 
-Es decir: en un riel de 5V fijos el **D03012 original no es apto** (quedaría
-sobrealimentado de forma permanente, no solo en un pico), y el D531BB es
-cuando menos incierto — ambos quedan descartados. Todas las alternativas
-modernas listadas arriba (ES9251 II, ES9051 II, MG90S, DS3218MG) sí admiten 5V
+Es decir: en un riel de 5V fijos solo el **D03012 original no es apto**
+(quedaría sobrealimentado de forma permanente, no solo en un pico). El D531BB
+vale a 5V como cualquier servo de 4.8V nominal; si se descarta es por par y
+tamaño frente al MG90S elegido, no por tensión. Todas las alternativas
+modernas listadas arriba (ES9251 II, ES9051 II, MG90S, DS3218MG) admiten 5V
 dentro de su rango normal. El módulo TPS61088 ofrece también 9V y 12V, pero
 ninguno de estos servos los admite (MG90S máx 6V, DS3218MG máx 6.8V), así
 que 5V es la única opción válida.
@@ -125,7 +126,8 @@ que 5V es la única opción válida.
 Sigue siendo válido lo recomendado antes, pero asumiendo que implica rehacer
 el soporte mecánico porque el tamaño no es compatible:
 
-- **MG90S** — micro servo digital estándar (~9g), engranajes metálicos, el
+- **MG90S** — micro servo analógico estándar (~9g; la versión digital es el
+  MG90D), engranajes metálicos, el
   más común y documentado hoy; solo tiene sentido si de todos modos se va a
   ajustar/imprimir un soporte nuevo. **Es el servo elegido** para la torreta
   y el que dimensiona el riel del [TPS61088](tps61088-boost-converter.md).
@@ -206,7 +208,7 @@ moverse**.
 | --- | --- |
 | **MG90S** | ~5-6mA con la electrónica en reposo sin corregir posición; sube a ~70-90mA en cuanto corrige activamente sin carga externa ([fuente](https://www.kpower.com/insight_bldc/7870.html/)) |
 | **DS3218MG / DS3225MG** | ~4-5mA "detenido" (idle), según datasheet DSSERVO, medido en banco sin carga externa |
-| Blue Arrow D03012 / Arced D531BB, EMAX ES9051 II / ES9251 II, GH-S37D | Sin cifra de idle publicada por el fabricante; sub-micro/pico de clase similar a otros analógicos de 9g, previsiblemente entre unas pocas mA y unas pocas decenas de mA en reposo sin carga |
+| Blue Arrow D03012 / Arced D531BB, EMAX ES9051 II / ES9251 II, GH-S37D | Sin cifra de idle publicada por el fabricante; por analogía con otros micro/pico, previsiblemente entre unas pocas mA y unas pocas decenas de mA en reposo sin carga |
 
 **El matiz importante:** esa cifra de datasheet es de banco, sin carga
 externa — no es lo que va a consumir el servo sujetando de verdad el peso de
@@ -224,7 +226,7 @@ dos servos sin cortar suponen del orden de **8-10mA continuos** solo por
 estar encendidos — y si tienen que corregir contra el peso de la torreta,
 eso puede subir con facilidad a **decenas o unos pocos cientos de mA**. Comparado
 con el consumo de deep sleep de una ESP32 (decenas de µA), la diferencia es
-de **3-4 órdenes de magnitud**: dejar los servos alimentados domina por
+de **2 a 4 órdenes de magnitud**: dejar los servos alimentados domina por
 completo el consumo del nodo durante el sueño, sin importar cuánto se
 optimice el resto del circuito (incluido el propio regulador boost, ver
 [`xl6009-boost-converter.md`](xl6009-boost-converter.md#rol-previsto-xl6009-como-riel-de-servos-cortado-por-un-irlz44n)).

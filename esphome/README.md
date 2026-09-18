@@ -1,7 +1,7 @@
 # esphome — firmware de las placas ESP32
 
 Configuraciones ESPHome del proyecto **cúpula de agua / huerta**: la cámara
-exterior con PIR, la cámara-proxy siempre encendida y varios Bluetooth proxy.
+exterior con PIR, la cámara-proxy siempre encendida y la torreta pan/tilt.
 
 ---
 
@@ -76,13 +76,13 @@ cámara/wifi/OTA.
 - **Placa:** `esp32-s3-devkitc-1`. IP fija `192.168.1.50` (`manual_ip` para
   acelerar el DHCP y no quedarse en el hotspot de fallback).
 - **Ciclo:** en deep sleep casi siempre; el PIR en **GPIO14** lo despierta.
-  Tras despertar sigue activo un tiempo configurable (número *"Tiempo
-  despierto (s)"* en Home Assistant) para capturar/servir imágenes y luego
-  vuelve a dormir.
+  Tras despertar sigue activo un tiempo configurable (número *"Awake time
+  (s)"* en Home Assistant) para capturar/servir imágenes y luego vuelve a
+  dormir.
 - **Servidor de cámara HTTP** (`esp32_camera_web_server`):
   - Stream MJPEG: `http://192.168.1.50:8080/`
   - Snapshot: `http://192.168.1.50:8081`
-- **API de ESPHome:** expone un `binary_sensor` `estado` (ON = despierta,
+- **API de ESPHome:** expone un `binary_sensor` `awake` (ON = despierta,
   OFF = dormida). El servicio de inferencia se suscribe a él con
   `aioesphomeapi` y la `api.encryption.key` del propio YAML. Usa la API solo
   para acciones en el ESP (servos, relés); para vídeo, el stream HTTP.
@@ -125,22 +125,24 @@ corrigiendo la posición de la torreta para centrarlo.
 
 - **Contrato con Python:** la acción de la API `set_servo_position`, con las
   variables `pan` y `tilt` en el rango **-1.0 a 1.0** (lo que espera
-  `servo.write`; no se manejan grados en ninguna capa). El nombre se busca
-  literal desde Python, así que renombrarlo aquí deja el seguimiento mudo sin
-  dar ningún error.
+  `servo.write`; no se manejan grados en ninguna capa). Es el nombre por
+  defecto de `ServoConfig.service` en `detect/`; si se renombra aquí hay que
+  cambiarlo también con `POST /cameras/<camera_id>/config/servo` (campo
+  `service`), o el seguimiento queda mudo — `GET /status` lo delata en
+  `consumers`.
 - **Cuidado con el timer LEDC:** la cámara usa `LEDC_TIMER_0` para el XCLK, a
   decenas de MHz, y los servos van a 50 Hz. Como cada par de canales LEDC
   comparte timer (0-1 → timer 0, 2-3 → timer 1, 4-5 → timer 2, 6-7 → timer 3),
   los servos usan los canales **4 y 6**. Ponerlos en el 0 o el 1 reprogramaría
   el timer del XCLK y rompería la imagen.
-- **Antes de flashear** hay que rellenar lo marcado como `PENDIENTE` en el YAML:
-  los dos GPIO de los servos, una `api.encryption.key` **propia**
-  (`openssl rand -base64 32`, la misma que se pone como `noise_psk` en
-  `detect/cameras_config.json`) y una contraseña de OTA propia.
+- **Antes de flashear** hay que confirmar los dos GPIO de los servos, marcados
+  como `PENDIENTE` en el YAML (GPIO21 y GPIO47 por defecto). La
+  `api.encryption.key` y la contraseña de OTA ya son propias de esta placa;
+  la key es la que va como `noise_psk` en `detect/cameras_config.json`.
 - **Probar el hardware** sin esperar a que haya detecciones, con
   `esphome logs esp32-s3-cam-servo.yaml` abierto:
   `POST http://<servidor>:8080/cameras/<camera_id>/servo` con
-  `{"pan": 0, "tilt": 0}`. También hay un botón *"Servos a reposo"* en Home
+  `{"pan": 0, "tilt": 0}`. También hay un botón *"Servos home"* en Home
   Assistant. `GET /cameras/<camera_id>/status` indica en `consumers` si la placa
   llegó a publicar el servicio.
 
@@ -179,6 +181,6 @@ mira `esphome version` y regenera la copia sobre esa versión. Detalles en
 
 ## Carpeta `old/`
 
-Material descartado (`old/esp_pm_local.h`, `old/test_light_sleep.yaml`), en
-`.gitignore`. `huerta_light_sleep.yaml` depende de `old/esp_pm_local.h` vía
-`includes:`.
+Material descartado (`old/esp_pm_local.h`, `old/test_light_sleep.yaml`,
+`old/huerta_light_sleep.yaml`), en `.gitignore`. `old/huerta_light_sleep.yaml`
+depende de `old/esp_pm_local.h` vía `includes:`.

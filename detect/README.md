@@ -165,7 +165,7 @@ curl -X POST http://localhost:8080/cameras `
 ```
 
 `classes` son los IDs de clase COCO separados por comas (`0` = personas,
-`16` = pájaros); vacío significa todas. Ver
+`14` = pájaros); vacío significa todas. Ver
 [`docs/MODELOS_Y_CLASES_YOLO.md`](docs/MODELOS_Y_CLASES_YOLO.md) para la lista.
 
 **Los servos no se configuran aquí**: si la placa lleva torreta, se monta

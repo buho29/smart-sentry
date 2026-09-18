@@ -20,8 +20,9 @@ cuando la placa se duerme, ver [`CICLO-DE-VIDA.md`](CICLO-DE-VIDA.md).
 
 | Fichero | Qué es | Líneas |
 | --- | --- | --- |
-| [`camera.py`](../camera.py) | El pipeline de vídeo: leer del ESP32, inferir con YOLO y repartir el stream. Todo lo que ocurre por frame. | 826 |
-| [`main.py`](../main.py) | Solo la API HTTP: el `lifespan` y los endpoints. | 412 |
+| [`camera.py`](../camera.py) | El pipeline de vídeo: leer del ESP32, inferir con YOLO y repartir el stream. Todo lo que ocurre por frame. | 853 |
+| [`main.py`](../main.py) | Solo la API HTTP: el `lifespan` y los endpoints. | 527 |
+| [`supervisor.py`](../supervisor.py) | Proceso padre que lanza y vigila a uvicorn y expone `/service/*` en `:8081` (parar, arrancar, reiniciar). No importa nada del proyecto. | 243 |
 | [`esphome_api.py`](../esphome_api.py) | `EsphomeController`: la conexión con la API nativa de la placa. No sabe nada de cámaras, ni de YOLO, ni del hardware concreto: cada variante llama a los servicios que publique su YAML. | 318 |
 | [`servo_tracker.py`](../servo_tracker.py) | La torreta pan/tilt, como consumidor de detecciones. | 181 |
 | [`detections.py`](../detections.py) | `Detection` y el protocolo `DetectionConsumer`: la frontera entre el pipeline y lo que se hace con lo que ve. | 67 |
@@ -29,9 +30,9 @@ cuando la placa se duerme, ver [`CICLO-DE-VIDA.md`](CICLO-DE-VIDA.md).
 | [`registry.py`](../registry.py) | Alta, baja y persistencia de las cámaras en `cameras_config.json`. | 54 |
 | [`log.py`](../log.py) | El `print` con marca de hora. Los demás hacen `from log import print`. | 15 |
 
-Sin ciclos de importación: `log` y `detections` no importan nada del proyecto;
-`servo_tracker` ← `detections`; `esphome_api` ← `log`; `camera` ← todos los
-anteriores + `shutdown`; `registry` ← `camera`; `main` ← todos.
+Sin ciclos de importación: `log`, `detections` y `supervisor` no importan nada
+del proyecto; `servo_tracker` ← `detections`; `esphome_api` ← `log`; `camera`
+← todos los anteriores + `shutdown`; `registry` ← `camera`; `main` ← todos.
 
 ---
 
@@ -41,14 +42,14 @@ El repositorio tiene **dos mitades independientes** que se comunican por red:
 
 | Carpeta | Qué es | Lenguaje |
 | --- | --- | --- |
-| [`esphome/`](../../esphome/) | Firmware de las placas ESP32-S3-CAM: cámara exterior con PIR + deep sleep, cámara-proxy siempre encendida, BLE proxies. | YAML de ESPHome + componente C++ parcheado |
+| [`esphome/`](../../esphome/) | Firmware de las placas ESP32-S3-CAM: cámara exterior con PIR + deep sleep, cámara-proxy siempre encendida, torreta pan/tilt. | YAML de ESPHome + componente C++ parcheado |
 | [`detect/`](..) | Servicio Python (FastAPI) que hace la inferencia YOLO sobre el vídeo de esas cámaras y lo reparte a varios clientes. | Python |
 
 La placa `huerta` ofrece dos canales:
 
 - **Stream MJPEG por HTTP** (`:8080`) y snapshot (`:8081`) — el vídeo.
 - **API nativa de ESPHome** (`:6053`) — control y estado. Expone un
-  `binary_sensor` llamado `estado`: `ON` = la placa está despierta (PIR),
+  `binary_sensor` llamado `awake`: `ON` = la placa está despierta (PIR),
   `OFF` = está a punto de dormir.
 
 El servicio Python consume los dos: el vídeo por HTTP y el estado por la API
@@ -99,7 +100,7 @@ stream MJPEG  ──HTTP──►  _read_loop (hilo lector)
 
 API nativa ESPHome ──►  EsphomeController  ──on_state_value──►  _on_esphome_state
 :6053  (binary_sensor 'awake')                                    awake on  → session.start()
-                                                                   estado off → session.stop()
+                                                                   awake off → session.stop()
 ```
 
 La idea central: **una sola conexión al ESP32, una sola inferencia, N
@@ -122,6 +123,7 @@ classDiagram
     class GlobalConfig {
         +bool keepalive_enabled
         +float keepalive_interval_sec
+        +float keepalive_idle_limit_sec
         +float reconnect_delay_sec
         +as_dict() dict
     }
@@ -331,7 +333,9 @@ Config global editable en caliente por API. Campos:
 
 - `keepalive_enabled` — activar el "keep-alive" de GPU (ver `_process_loop`).
 - `keepalive_interval_sec` — cada cuánto se hace la inferencia dummy (0.05 s).
-- `reconnect_delay_sec` — espera entre reintentos del hilo lector.
+- `keepalive_idle_limit_sec` — segundos sin frame real tras los que el
+  keep-alive se pausa (3 s; ver [`CICLO-DE-VIDA.md`](CICLO-DE-VIDA.md#2-nivel-proceso)).
+- `reconnect_delay_sec` — espera entre reintentos del hilo lector (1 s).
 
 `as_dict()` la serializa para el endpoint `GET /config`. La instancia única es
 `GLOBAL_CONFIG`.
@@ -365,7 +369,7 @@ síncronos (`CameraSession`) sin bloquearlos.
 
 - `call_service(name, **args)` — llama a cualquier `api: services:` del YAML si
   existe.
-- Vigilar una entidad (`watch_entity_object_id`, p. ej. `estado`) y llamar a
+- Vigilar una entidad (`watch_entity_object_id`, p. ej. `awake`) y llamar a
   `on_state_value(bool)` cada vez que cambia, para arrancar/parar la cámara
   según el hardware real.
 
@@ -416,8 +420,9 @@ El bucle de reconexión, con **cero polling mientras está conectado**:
 ### `_try_connect_once()` (async) → `bool` — [`esphome_api.py`](../esphome_api.py)
 
 Un intento de conexión acotado a `connect_attempt_timeout_sec`. Si conecta:
-pide `list_entities_services()`, localiza el servicio `set_servo_position` y la
-`key` numérica de la entidad vigilada (`watch_entity_object_id` →
+pide `list_entities_services()`, guarda todos los servicios que publica la
+placa en `_services` (por nombre, para `has_service` / `call_service`) y
+localiza la `key` numérica de la entidad vigilada (`watch_entity_object_id` →
 `_watch_key`), se suscribe a estados con `subscribe_states(self._on_state)`,
 marca `_connected` y loguea el tiempo que tardó. Devuelve `True`/`False`.
 
@@ -569,7 +574,7 @@ daemon y los arranca. `explicit=True` además fija `explicit_start`.
 Si quedan clientes y no es `explicit`, no para. Si no: marca `_stop_event`,
 cierra la conexión HTTP viva con `_force_close_response()` (fuera del lock, y
 a la fuerza: ver §4) y hace `_cond.notify_all()` para despertar ya a los
-generadores en vez de esperar su timeout de 5 s. `explicit=True` limpia
+generadores en vez de esperar su timeout de 1 s. `explicit=True` limpia
 `explicit_start`. Vuelve en ~0,01 s incluso con el stream activo, que es lo
 que permite llamarlo desde el loop de ESPHome.
 
@@ -599,7 +604,7 @@ Traduce el query param: `True → "true"`, `False → "false"`, `None →
 Incrementa el contador correspondiente. **Solo arranca la sesión aquí si NO
 hay `EsphomeController`**: con control ESPHome, arrancar sin saber si la placa
 está despierta dejaría el hilo lector reintentando en bucle contra una cámara
-dormida; en ese caso el arranque lo dispara `estado=on`.
+dormida; en ese caso el arranque lo dispara `awake=on`.
 
 ### `remove_client(mode)` — [`camera.py`](../camera.py)
 
@@ -638,7 +643,7 @@ Toma referencias **locales** de `_stop_event` y `_raw_queue` (clave: ver
      → **rompe**;
    - si la sesión la gobierna ESPHome y la API nativa también está caída → la
      placa está dormida, **rompe** en vez de machacar una IP muerta cada
-     segundo (el siguiente `estado=on` rearranca, ver `_on_esphome_state`);
+     segundo (el siguiente `awake=on` rearranca, ver `_on_esphome_state`);
    - si no, espera `reconnect_delay_sec` y reintenta.
 7. `finally`: limpia `_current_response` y cierra la respuesta.
 
@@ -701,7 +706,8 @@ Referencias locales otra vez. Obtiene el modelo con `get_model()`. Bucle:
 
 Generador que FastAPI convierte en `StreamingResponse`. `add_client(mode)` al
 entrar, `remove_client(mode)` en `finally`. Bucle: espera en `_cond.wait_for`
-a que cambie `_frame_seq` (o pare, o timeout 5 s), elige
+a que cambie `_frame_seq` (o pare, o timeout 1 s, que es cada cuánto revisa
+la bandera de apagado si la cámara no publica), elige
 `_latest_annotated_jpeg` o `_latest_raw_jpeg` según el modo (en `"follow"`
 relee `cfg.default_infer` en cada frame → cambio en caliente sin reconectar),
 y hace `yield` de la parte multipart (`--frame`, `Content-Type`,
@@ -779,9 +785,11 @@ Primer consumidor: mueve una torreta pan/tilt para centrar un objetivo.
 
 **Contrato con el firmware:** servicio `set_servo_position` con variables
 `pan` y `tilt` en el rango **-1.0 a 1.0** (lo que espera `servo.write` de
-ESPHome). El nombre se busca literal en `_try_connect_once`, así que renombrarlo
-en el YAML deja el seguimiento mudo sin dar ningún error; `has_service()` lo
-expone en `/status` justamente para poder descartar eso de un vistazo. Firmware
+ESPHome). El nombre es el valor por defecto de `ServoConfig.service` y se
+comprueba con `has_service()` contra la lista que publica la placa: si se
+renombra en el YAML sin cambiarlo en `POST /config/servo`, el seguimiento queda
+mudo sin dar ningún error; `/status` lo expone en `consumers` justamente para
+poder descartar eso de un vistazo. Firmware
 de referencia: [`esphome/esp32-s3-cam-servo.yaml`](../../esphome/esp32-s3-cam-servo.yaml).
 
 Pruebas: [`test/test_servo_tracker.py`](../test/test_servo_tracker.py), sin GPU
@@ -1003,8 +1011,8 @@ bucle interno de `_process_loop`.
 ```mermaid
 stateDiagram-v2
     [*] --> Detenida
-    Detenida --> Corriendo : start - 1er cliente sin ESPHome, estado=on, o POST /start
-    Corriendo --> Detenida : stop explicito, o estado=off
+    Detenida --> Corriendo : start - 1er cliente sin ESPHome, awake=on, o POST /start
+    Corriendo --> Detenida : stop explicito, o awake=off
     Corriendo --> Detenida : ultimo cliente se va y no explicit_start
     Corriendo --> Corriendo : _read_loop reconecta tras RequestException
     Detenida --> [*] : shutdown - apagado del servicio
@@ -1039,7 +1047,7 @@ sequenceDiagram
     alt sin EsphomeController y sesion parada
         S->>RL: start() lanza los dos hilos
     else con EsphomeController
-        Note over S: no arranca aqui; espera a estado=on
+        Note over S: no arranca aqui; espera a awake=on
     end
     RL->>ESP: GET stream_url (requests, stream=True)
     ESP-->>RL: multipart MJPEG

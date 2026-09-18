@@ -28,7 +28,7 @@ a un pad — por ejemplo
   externa (el módulo típico viene fijado a 1MHz de fábrica).
 - **Modo de luz de carga:** seleccionable entre PFM (más eficiente, pin
   `MODE` flotante) y PWM forzado (`MODE` a GND) — igual filosofía que el
-  MT3608 y el TPS61088, pero aquí es una elección explícita, no automática.
+  MT3608 y el TPS63020, pero aquí es una elección explícita, no automática.
 - **Diferencia clave frente a MT3608/XL6009:** el pin `EN` de este chip
   tiene una **resistencia de pull-down interna de 800kΩ** — es decir, si se
   deja flotando, el regulador **se apaga por defecto**, al revés que el

@@ -69,7 +69,11 @@ Bloques relevantes:
 - **USB-OTG:** puerto USB-C independiente cableado directamente a los pines
   USB nativos del S3 (GPIO19/GPIO20), sin pasar por el CH340.
 - **Alimentación del sensor de cámara:** dos reguladores **XC6206** dedicados
-  (2.8V y 1.2V) para las tensiones que exigen los sensores OV26xx/OV37xx/OV77xx.
+  (U5 → 2.8V para AVDD/DOVDD, U4 → 1.2V para el núcleo DVDD) para las tensiones
+  que exigen los sensores OV26xx/OV37xx/OV77xx. `OV_PWDN` va fijo a GND por
+  R11 (1K) y `OV_RESET` con pull-up a 2.8V: ningún GPIO puede apagar ni
+  resetear la cámara por hardware. Detalle de rails, compatibilidad de
+  sensores y consumo en [camaras-compatibles.md](camaras-compatibles.md).
 - **Alimentación de lógica principal:** regulador **AMS1117-3.3** desde la
   entrada de 5V (USB o pin `5V`). Su salida es el nodo `VCC3.3V`, del que
   cuelgan el módulo ESP32-S3 **y la entrada de los dos XC6206** de la
@@ -86,7 +90,10 @@ Bloques relevantes:
 
 ![Módulo OV2640, cable FPC de 75mm, FOV 66°](img/ov2640-66.png)
 
-La placa acepta OV2640/OV7725/OV3660 (ver "Hardware Introduction" arriba),
+La placa acepta OV2640/OV7725/OV3660 según el vendedor (ver "Hardware
+Introduction" arriba; en la práctica OV3660 y OV5640 se calientan en exceso
+en esta placa — detalle, rails de 2.8V/1.2V y consumo en
+[camaras-compatibles.md](camaras-compatibles.md)),
 pero el módulo que usa este proyecto es concretamente un **OV2640** en un
 cable **FPC de 75mm** terminado en el conector de **24 pines** que encaja en
 el socket de la placa, con lente de **66° de campo de visión (FOV)** — dato

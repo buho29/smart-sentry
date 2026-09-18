@@ -148,10 +148,11 @@ servo:
 # Al conectar el cliente se publica `awake`=ON; esta placa está siempre
 # encendida, así que nunca pasa a OFF.
 #
-# `set_servo_position` es el contrato con el lado Python: el nombre se busca
-# LITERAL en detect/main.py (`s.name == "set_servo_position"`), así que
-# renombrarlo aquí deja el seguimiento mudo sin dar ningún error. `pan` y `tilt`
-# van en el rango -1.0 .. 1.0, que es lo que espera `servo.write`.
+# `set_servo_position` es el contrato con el lado Python: es el nombre por
+# defecto de `ServoConfig.service` en detect/servo_tracker.py. Si se renombra
+# aquí hay que cambiarlo también en `POST /cameras/<id>/config/servo`, o el
+# seguimiento queda mudo sin dar ningún error. `pan` y `tilt` van en el rango
+# -1.0 .. 1.0, que es lo que espera `servo.write`.
 # -----------------------------------------------------------------------------
 api:
   encryption:

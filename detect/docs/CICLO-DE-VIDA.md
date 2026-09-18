@@ -183,7 +183,7 @@ su propio pie y **espera al hilo**; el hilo cierra el socket y el loop en
 > `run_until_complete` reventaba con *"Event loop stopped before Future
 > completed"*, matando el hilo con un traceback por consola.
 
-`shutdown()` es idempotente, y `notify_awake()` / `move_servo()` comprueban
+`shutdown()` es idempotente, y `notify_awake()` / `call_service()` comprueban
 `_closed` antes de tocar el loop, así que llamarlos después no lanza nada.
 
 > **Cuidado con los `clear()` de `_wake_event`.** Tras un intento de conexión
@@ -212,7 +212,7 @@ sequenceDiagram
     participant PL as hilo yolo-huerta
     participant C as Clientes MJPEG
 
-    ESP->>EC: estado = off (API nativa)
+    ESP->>EC: awake = off (API nativa)
     EC->>S: _on_esphome_state(False)
     S->>S: stop(explicit=True)
     Note over S: explicit_start=False, _stop_event.set()
@@ -244,7 +244,7 @@ sequenceDiagram
     API->>EC: notify_awake, _wake_event.set()
     Note over EC: cancela la espera de 30s y conecta ya
     EC->>ESP: connect + subscribe_states
-    ESP->>EC: estado = on
+    ESP->>EC: awake = on
     EC->>S: _on_esphome_state(True)
     S->>S: start(explicit=True), generacion nueva
     Note over S: _stop_event, _raw_queue y _fps_window nuevos
@@ -253,7 +253,7 @@ sequenceDiagram
 
 ### Rearranque si la placa se duerme sin avisar
 
-Si la placa cae sin llegar a publicar `estado=off` (corte de WiFi, batería), el
+Si la placa cae sin llegar a publicar `awake=off` (corte de WiFi, batería), el
 lector no puede reconectar. Cuando además el `EsphomeController` está
 desconectado, el lector **deja de insistir** en vez de machacar una IP muerta
 cada segundo.
@@ -266,7 +266,7 @@ if value == self._last_esphome_state and value == self.is_running:
     return
 ```
 
-Así, un `estado=on` repetido al reconectar **sí** rearranca la sesión si la
+Así, un `awake=on` repetido al reconectar **sí** rearranca la sesión si la
 lectura estaba parada. Antes se ignoraba por ser el mismo valor.
 
 ---
@@ -387,7 +387,7 @@ Un generador MJPEG vive lo que dure la respuesta. `add_client()` al entrar,
 también descuenta.
 
 Al irse el último cliente, `_maybe_autostop()` para la sesión **solo si** no
-hay `explicit_start`. Con ESPHome, `explicit_start` lo pone el `estado=on`, así
+hay `explicit_start`. Con ESPHome, `explicit_start` lo pone el `awake=on`, así
 que cerrar el navegador no apaga una cámara que el hardware dice que está
 despierta.
 

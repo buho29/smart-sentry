@@ -108,7 +108,7 @@ paga en autonomía (el AMS1117 solo ya consume más en reposo que los dos
 reguladores de la opción elegida juntos) y en robustez ante el stall de los
 servos. Para un nodo a batería con deep sleep, se mantiene la decisión de
 **dos etapas separadas** (TPS63020 a 3.3V + TPS61088 a 5V). La variante B
-queda como plan de respaldo si solo se dispone de un TPS61088
+queda como plan de respaldo si solo se dispone de un TPS61088.
 
 ---
 

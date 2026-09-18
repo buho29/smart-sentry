@@ -18,7 +18,7 @@ El repositorio tiene **dos mitades independientes** que se comunican por red:
 
 | Carpeta | Qué es | Lenguaje |
 | --- | --- | --- |
-| [`esphome/`](esphome/) | Firmware de las placas ESP32-S3-CAM: cámara exterior con PIR + deep sleep, cámara sin PIR | YAML de ESPHome + componente C++ parcheado |
+| [`esphome/`](esphome/) | Firmware de las placas ESP32-S3-CAM: cámara exterior con PIR + deep sleep, cámara siempre encendida y torreta pan/tilt | YAML de ESPHome + componente C++ parcheado |
 | [`detect/`](detect/) | Servicio Python (FastAPI) que hace la inferencia YOLO sobre el vídeo de esas cámaras y lo multiplexa hacia N clientes. | Python |
 
 ---
@@ -60,7 +60,7 @@ nativa y volver a suscribirse al `awake`.
 
 Ese segundo tramo es el que se puede recortar. Si se deja que `aioesphomeapi`
 lo resuelva "solo" —descubrimiento mDNS de la placa más su reconexión con
-backoff exponencial—, va de **un 1s a 60s**: el servicio no
+backoff exponencial—, va de **1 s a 60 s**: el servicio no
 sabe que la placa ha vuelto y solo lo descubre en su siguiente reintento
 programado. En una ventana de vigilia de pocos segundos, eso es perder el
 evento entero.
@@ -105,8 +105,9 @@ cajas de detección (con clase, confianza y `track_id`) sobre el stream que
 sirve a los clientes. No actúa sobre el mundo físico.
 
 **Siguiente paso — mover servos.** La API nativa de ESPHome no es solo para
-leer estado: `EsphomeController.move_servo(pan, tilt)` ya llama al servicio
-`set_servo_position` del YAML si la placa lo expone. La idea es cerrar el bucle:
+leer estado: `ServoTracker` (`detect/servo_tracker.py`) ya llama al servicio
+`set_servo_position` del YAML vía `EsphomeController.call_service()` si la
+placa lo expone. La idea es cerrar el bucle:
 el hilo de proceso calcula el centro del objetivo detectado y, si todo va bien,
 manda al ESP32 la corrección de pan/tilt para que la **cámara persiga** a lo
 que se mueve por la huerta.
