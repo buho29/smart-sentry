@@ -20,19 +20,32 @@ cuando la placa se duerme, ver [`CICLO-DE-VIDA.md`](CICLO-DE-VIDA.md).
 
 | Fichero | Qué es | Líneas |
 | --- | --- | --- |
-| [`camera.py`](../camera.py) | El pipeline de vídeo: leer del ESP32, inferir con YOLO y repartir el stream. Todo lo que ocurre por frame. | 853 |
-| [`main.py`](../main.py) | Solo la API HTTP: el `lifespan` y los endpoints. | 527 |
+| [`camera.py`](../camera.py) | El pipeline de vídeo: leer del ESP32, inferir con YOLO y repartir el stream. Todo lo que ocurre por frame. | 1059 |
+| [`main.py`](../main.py) | Solo la API HTTP: el `lifespan` y los endpoints. | 975 |
+| [`recorder.py`](../recorder.py) | `ClipRecorder`: cuándo se graba un clip y cómo se encolan los frames sin frenar la inferencia. El segundo consumidor de detecciones. Ver [GRABACION.md](GRABACION.md). | 699 |
+| [`clips.py`](../clips.py) | Los clips que hay en disco: rutas, listado, y la retención por días y por GB. Global, no por cámara. | 550 |
+| [`encoders.py`](../encoders.py) | Convertir JPEG en MP4 **H.264**. Dos implementaciones (ffmpeg externo y OpenCV) y la corrección de fps variable. | 302 |
 | [`supervisor.py`](../supervisor.py) | Proceso padre que lanza y vigila a uvicorn y expone `/service/*` en `:8081` (parar, arrancar, reiniciar). No importa nada del proyecto. | 243 |
 | [`esphome_api.py`](../esphome_api.py) | `EsphomeController`: la conexión con la API nativa de la placa. No sabe nada de cámaras, ni de YOLO, ni del hardware concreto: cada variante llama a los servicios que publique su YAML. | 318 |
 | [`servo_tracker.py`](../servo_tracker.py) | La torreta pan/tilt, como consumidor de detecciones. | 181 |
-| [`detections.py`](../detections.py) | `Detection` y el protocolo `DetectionConsumer`: la frontera entre el pipeline y lo que se hace con lo que ve. | 67 |
+| [`detections.py`](../detections.py) | `Detection` y el protocolo `DetectionConsumer`: la frontera entre el pipeline y lo que se hace con lo que ve. | 114 |
 | [`shutdown.py`](../shutdown.py) | La bandera de apagado y el hook de señal encadenado a uvicorn. | 61 |
 | [`registry.py`](../registry.py) | Alta, baja y persistencia de las cámaras en `cameras_config.json`. | 54 |
 | [`log.py`](../log.py) | El `print` con marca de hora. Los demás hacen `from log import print`. | 15 |
 
 Sin ciclos de importación: `log`, `detections` y `supervisor` no importan nada
-del proyecto; `servo_tracker` ← `detections`; `esphome_api` ← `log`; `camera`
-← todos los anteriores + `shutdown`; `registry` ← `camera`; `main` ← todos.
+del proyecto; `servo_tracker` ← `detections`; `esphome_api` ← `log`;
+`encoders` ← `log`; `clips` ← `log`; `recorder` ← `detections` + `clips` +
+`encoders`; `camera` ← todos los anteriores + `shutdown`; `registry` ←
+`camera`; `main` ← todos.
+
+**Por qué la grabación son tres módulos y no uno.** `recorder.py` es *lo que
+pasa por frame en una cámara* y nace y muere con su sesión; `clips.py` es *lo
+que hay en disco*, es global y su barrido de retención tiene que correr aunque
+no haya ninguna sesión viva (el tope en GB es del disco, no de la cámara); y
+`encoders.py` no sabe de cámaras ni de detecciones, solo de convertir JPEG en
+MP4. Es la misma frontera que separa `servo_tracker.py` de `registry.py`, y lo
+que permite probar la máquina de estados entera con un encoder de mentira.
 
 ---
 

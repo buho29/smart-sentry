@@ -227,8 +227,144 @@ for name, args, expected in [
     # tiene sentido tener la GPU ocupada por muy recientes que sean los frames.
     ("sin inferencia -> NO calienta", (True, True, 0.1, 3.0, False), False),
     ("sin inferencia, frame recién llegado -> NO", (True, True, 0.0, 3.0, False), False),
+    # El parámetro que hace que el keep-alive se regule solo. Sin él, una
+    # constante global tenía que valer a la vez para un modelo de 9 ms y otro
+    # de 37, y con el pesado se comía el hueco entre frames.
+    ("GPU a pleno reloj -> NO hace falta warm",
+     (True, True, 0.1, 3.0, True, False), False),
+    ("GPU baja de relojes -> calienta", (True, True, 0.1, 3.0, True, True), True),
+    ("GPU baja pero sin inferencia -> NO",
+     (True, True, 0.1, 3.0, False, True), False),
+    ("GPU baja pero pasado el límite sin frames -> NO",
+     (True, True, 5.0, 3.0, True, True), False),
 ]:
     check(name, camera._should_keepalive(*args) is expected)
+
+# Regresión concreta: al meter el gobierno por relojes, el bucle usaba la MISMA
+# condición para "hay que warm ahora" y para "el keep-alive está en pausa".
+# Con la GPU a pleno reloj y frames entrando, eso hacía que entrara y saliera de
+# pausa en cada frame: el log se llenaba de "en pausa / reanudado" y se llamaba
+# a warm_up() una vez por frame, justo lo contrario de lo que se pretendía.
+#
+# Son dos preguntas distintas: armed (llegan frames y habrá inferencia) no es
+# lo mismo que warm AHORA (además la GPU se ha dormido).
+armed = camera._should_keepalive(True, True, 0.1, 3.0, True)
+warm = camera._should_keepalive(True, True, 0.1, 3.0, True, gpu_slow=False)
+check("con frames entrando el keep-alive sigue armed aunque no toque warm",
+      armed is True and warm is False, f"(armed={armed}, warm={warm})")
+check("sin frames NO está armed, y eso sí es pausa",
+      camera._should_keepalive(True, True, 99.0, 3.0, True) is False)
+
+# El canario del bug de P-state. En produccion se vieron una confianza de 1.812
+# y otra de 3.58e15: no son detecciones raras, es la GPU devolviendo basura.
+from detections import Detection as _Det  # noqa: E402
+
+_sana = _Det(x1=10, y1=10, x2=30, y2=40, cls=0, label="person", conf=0.9)
+for nombre, d, esperado in [
+    ("una deteccion normal no es corrupta", _sana, False),
+    ("conf por encima de 1 es corrupta",
+     _Det(x1=10, y1=10, x2=30, y2=40, cls=0, label="cat", conf=1.812), True),
+    ("conf enorme (memoria sin inicializar) es corrupta",
+     _Det(x1=10, y1=10, x2=30, y2=40, cls=0, label="cat", conf=3.58e15), True),
+    ("conf negativa es corrupta",
+     _Det(x1=10, y1=10, x2=30, y2=40, cls=0, label="cat", conf=-0.5), True),
+    ("conf justo en los limites NO es corrupta",
+     _Det(x1=10, y1=10, x2=30, y2=40, cls=0, label="cat", conf=1.0), False),
+    ("coordenada NaN es corrupta",
+     _Det(x1=float("nan"), y1=10, x2=30, y2=40, cls=0, label="cat", conf=0.9), True),
+    ("coordenada infinita es corrupta",
+     _Det(x1=10, y1=10, x2=float("inf"), y2=40, cls=0, label="cat", conf=0.9), True),
+]:
+    check(nombre, camera._is_corrupt(d) is esperado)
+
+# El aviso del tracker no debe dispararse cuando fue el canario quien vacio el
+# frame: mandar a alguien a /tracker/reset por un problema de GPU es mandarlo al
+# sitio equivocado, y encontrar el sitio correcto costo una sesion entera.
+# Espejo de la condicion real de _process_loop.
+def _avisaria_del_tracker(det_crudas, corrupt, consecutivos_sin_caja):
+    return det_crudas > 0 and not corrupt and consecutivos_sin_caja == 1
+
+
+_basura = _Det(x1=1, y1=1, x2=2, y2=2, cls=0, label="cat", conf=9.9)
+check("si el canario filtro las cajas, NO se culpa al tracker",
+      _avisaria_del_tracker(1, [_basura], 1) is False)
+check("si el tracker se las comio de verdad, SI se avisa",
+      _avisaria_del_tracker(1, [], 1) is True)
+check("y no se repite el aviso en los frames siguientes",
+      _avisaria_del_tracker(1, [], 7) is False)
+check("sin cajas del detector no hay nada que avisar",
+      _avisaria_del_tracker(0, [], 1) is False)
+
+# Sin lecturas de reloj NO se calienta a ciegas. Estuvo al reves ("mejor
+# proteger") y era el peor defecto posible fuera de NVIDIA: en una AMD con ROCm
+# PyTorch tambien llama "cuda" al device y pynvml no existe, asi que el
+# keep-alive se quedaba disparando para siempre en una tarjeta que no lo
+# necesita. Quien si lo necesita sigue cubierto por el criterio de tiempo sin
+# frames, que no depende de NVML.
+_broken_before = camera._nvml_broken
+camera._nvml_broken, camera._gpu_slow_cache = True, (0.0, False)
+check("sin datos de reloj NO se calienta a ciegas",
+      camera.gpu_underclocked() is False)
+camera._nvml_broken, camera._gpu_slow_cache = _broken_before, (0.0, False)
+
+# El ratio va alto a proposito: "calienta salvo que este en su tope sostenido".
+# A 0.7 el umbral caia por debajo del reloj sostenido de esta tarjeta y no
+# calentaba nunca -> 58 detecciones corruptas en 7486 frames.
+check("el ratio por defecto es alto (0.95), no 0.7",
+      camera.GLOBAL_CONFIG.keepalive_clock_ratio >= 0.9,
+      f"({camera.GLOBAL_CONFIG.keepalive_clock_ratio})")
+
+# keepalive_enabled "auto": activo solo donde existe el bug (GPU Pascal).
+check("'auto' se resuelve a bool",
+      isinstance(camera.GLOBAL_CONFIG.resolve_keepalive(), bool))
+_ka_before = camera.GLOBAL_CONFIG.keepalive_enabled
+camera.GLOBAL_CONFIG.keepalive_enabled = False
+check("forzado a False manda sobre la deteccion",
+      camera.GLOBAL_CONFIG.resolve_keepalive() is False)
+camera.GLOBAL_CONFIG.keepalive_enabled = True
+check("forzado a True tambien", camera.GLOBAL_CONFIG.resolve_keepalive() is True)
+camera.GLOBAL_CONFIG.keepalive_enabled = _ka_before
+check("y as_dict explica por que", "keepalive_reason" in camera.GLOBAL_CONFIG.as_dict())
+
+# GLOBAL_CONFIG se persiste. Antes no, y cada reinicio se llevaba por delante lo
+# ajustado por API: cuesta explicar que un POST "no haya servido de nada".
+import tempfile as _tmp  # noqa: E402
+_cfg_before = camera.GLOBAL_CONFIG_FILE
+camera.GLOBAL_CONFIG_FILE = Path(_tmp.mkdtemp()) / "global_config.json"
+_ratio_before = camera.GLOBAL_CONFIG.keepalive_clock_ratio
+camera.GLOBAL_CONFIG.keepalive_clock_ratio = 0.87
+camera.GLOBAL_CONFIG.save()
+camera.GLOBAL_CONFIG.keepalive_clock_ratio = 0.5          # simula un reinicio
+camera.GLOBAL_CONFIG.load()
+check("los ajustes globales sobreviven a un reinicio",
+      camera.GLOBAL_CONFIG.keepalive_clock_ratio == 0.87,
+      f"({camera.GLOBAL_CONFIG.keepalive_clock_ratio})")
+camera.GLOBAL_CONFIG_FILE.write_text("{esto no es json", encoding="utf-8")
+camera.GLOBAL_CONFIG.load()
+check("un global_config.json roto no impide arrancar",
+      camera.GLOBAL_CONFIG.keepalive_clock_ratio == 0.87)
+camera.GLOBAL_CONFIG.keepalive_clock_ratio = _ratio_before
+camera.GLOBAL_CONFIG_FILE = _cfg_before
+
+# El intervalo es por camara porque el coste del dummy es el de su modelo.
+_s_ka = camera.CameraSession(camera.CameraConfig(
+    camera_id="ka", stream_url="http://192.0.2.1:8080/", device="cpu",
+    model_name="yolo11n"))
+check("sin override, la camara hereda el intervalo global",
+      _s_ka.keepalive_setting("keepalive_interval_sec")
+      == camera.GLOBAL_CONFIG.keepalive_interval_sec)
+_s_ka.cfg.keepalive_interval_sec = 0.02
+check("con override, manda el de la camara",
+      _s_ka.keepalive_setting("keepalive_interval_sec") == 0.02)
+check("y el global no se entera",
+      camera.GLOBAL_CONFIG.keepalive_interval_sec != 0.02)
+_s_ka.cfg.keepalive_enabled = False
+check("el mismo helper resuelve enabled",
+      _s_ka.keepalive_setting("keepalive_enabled") is False)
+_s_ka.cfg.keepalive_enabled = None
+check("y con None vuelve a heredar",
+      _s_ka.keepalive_setting("keepalive_enabled")
+      == camera.GLOBAL_CONFIG.resolve_keepalive())
 
 print("\n=== 3d. always_infer: detecta sin nadie mirando el stream ===")
 # Lo pedido: la cámara tiene que seguir detectando con el navegador cerrado.

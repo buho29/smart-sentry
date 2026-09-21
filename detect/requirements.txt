@@ -7,6 +7,12 @@ opencv-python==5.0.0.93
 numpy==2.4.6
 pillow==12.3.0
 
+# Trae un ffmpeg con libx264 (~25 MB). Hace falta para que los clips grabados
+# sean H.264: el FFmpeg que incluye opencv-python es LGPL y no puede codificar
+# H.264, y un MP4 en mp4v se ve en negro en el navegador y en Home Assistant.
+# Sin este paquete el servicio arranca igual, pero los clips no se ven en HA.
+imageio-ffmpeg==0.6.0
+
 # nvidia-ml-py==13.610.43
 # psutil==7.2.2
 # PyYAML==6.0.3

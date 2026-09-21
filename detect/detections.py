@@ -87,3 +87,28 @@ class DetectionConsumer(Protocol):
 
     def shutdown(self) -> None:
         """Se llama al parar la sesión, con la conexión a la placa todavía viva."""
+
+    # -- opcionales ---------------------------------------------------------
+    # Los dos de abajo NO hacen falta para ser un consumidor: `_notify_consumers`
+    # y `_consumers_want_frames` se saltan al que no los implemente. Existen
+    # porque el grabador de clips necesita los píxeles además de las cajas,
+    # mientras que a los servos les sobran.
+
+    def on_jpeg(self, raw: Optional[bytes], annotated: Optional[bytes],
+                ts: float) -> None:
+        """El frame ya codificado, justo después de publicarse al stream.
+
+        Llega el JPEG que la sesión haya codificado en esta vuelta; cualquiera
+        de los dos puede ser None si nadie lo pedía. Mismo aviso que arriba, y
+        aquí es más fácil incumplirlo: **no bloquear**. Escribir a disco desde
+        este método le metería al pipeline de vídeo la latencia del disco.
+        """
+
+    def wants_frames(self) -> Optional[str]:
+        """Qué JPEG hay que codificar aunque no lo mire ningún cliente HTTP.
+
+        Devuelve "raw", "annotated" o None. Es el gemelo de `wants_inference`
+        para la codificación: sin esto, la sesión solo codifica cuando alguien
+        está mirando el stream, y un grabador con el navegador cerrado no
+        recibiría un solo frame.
+        """

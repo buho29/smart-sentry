@@ -17,6 +17,18 @@ gpu_log*.csv
 # Código viejo / descartado
 old/
 
+# Capturas y resultados de test/barrido_modelos.py
+barridos/
+
+# Clips grabados y sus acompañantes (sidecar y miniatura)
+clips/
+
+# Ajustes de almacenamiento: sin secretos, pero con rutas de esta máquina
+recordings_config.json
+
+# Ajustes globales (keep-alive de GPU): calibrados para una tarjeta concreta
+global_config.json
+
 # Configuración con secretos (contiene noise_psk e IPs de la LAN)
 cameras_config.json
 cameras_config*.json

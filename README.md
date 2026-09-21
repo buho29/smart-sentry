@@ -46,9 +46,16 @@ ESP32-S3-CAM (huerta)                 detect/ (FastAPI, 1 proceso)          Clie
 ─────────────────────                 ───────────────────────────          ────────
 stream MJPEG  :8080  ──HTTP stream──►  hilo lector → cola → hilo YOLO  ──►  Home Assistant
 API nativa    :6053  ──awake on/off──►  EsphomeController → start/stop      Navegador / VLC
-        ▲
-        └──────────  POST /cameras/huerta/esphome/awake  (al obtener IP)
+        ▲                                          │
+        │                                          └→ hilo escritor → clips/*.mp4
+        │                                                    ▲              │
+        └──────  POST /cameras/huerta/esphome/awake          │        GET /recordings
+                 (al obtener IP)                     retención (días + GB)  ──► Home Assistant
 ```
+
+La rama de abajo es la grabación: el mismo JPEG que va al stream se encola hacia
+un hilo escritor que lo pasa a MP4 (H.264), y los clips se sirven por HTTP para
+que Home Assistant los liste y los reproduzca desde la otra máquina.
 
 ### Arranque rápido tras despertar (el webhook `esphome/awake`)
 
@@ -100,9 +107,16 @@ entonces la reconexión del WiFi (esos 3-4 s), no el software.
 
 ## Estado y hoja de ruta
 
-**Ahora mismo** el servicio solo *ve*: corre YOLO sobre cada frame y dibuja las
-cajas de detección (con clase, confianza y `track_id`) sobre el stream que
-sirve a los clientes. No actúa sobre el mundo físico.
+**Ahora mismo** el servicio *ve* y *recuerda*: corre YOLO sobre cada frame,
+dibuja las cajas de detección (con clase, confianza y `track_id`) sobre el
+stream que sirve a los clientes, y **graba clips MP4** de lo que pasa, con unos
+segundos de vídeo anterior al disparo. Todavía no actúa sobre el mundo físico.
+
+La grabación vive en el servicio Python y no en Home Assistant porque HA corre
+en otra máquina: aquí están las detecciones (así que el clip puede empezar
+*antes* de que aparezca el bicho y saber qué se vio), y la retención por días y
+por GB. HA se limita a listar los clips y reproducirlos por HTTP. Ver
+[`detect/docs/GRABACION.md`](detect/docs/GRABACION.md).
 
 **Siguiente paso — mover servos.** La API nativa de ESPHome no es solo para
 leer estado: `ServoTracker` (`detect/servo_tracker.py`) ya llama al servicio
@@ -143,6 +157,7 @@ Cada mitad tiene su propio `venv` y sus instrucciones detalladas:
 | [`detect/README.md`](detect/README.md) | Instalación del servicio, endpoints, arquitectura por cámara. |
 | [`detect/docs/ARQUITECTURA.md`](detect/docs/ARQUITECTURA.md) | Qué hace cada clase, método y endpoint de `main.py`, con diagramas. |
 | [`detect/docs/CICLO-DE-VIDA.md`](detect/docs/CICLO-DE-VIDA.md) | Cuánto vive cada instancia y cómo se cierran los sockets cuando la placa se duerme. |
+| [`detect/docs/GRABACION.md`](detect/docs/GRABACION.md) | La grabación de clips: pre-roll, por qué hace falta H.264 para que se vean en Home Assistant, retención y cómo consumirlos desde HA. |
 
 ---
 

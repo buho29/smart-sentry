@@ -41,8 +41,28 @@ ni su `EsphomeController`.
 
 ### `GLOBAL_CONFIG`
 
-Instancia única creada al importar el módulo. Solo se muta desde
-`POST /config/keepalive`. No tiene cierre.
+Instancia única creada al importar el módulo. Se muta desde
+`POST /config/keepalive` y **se persiste** en `global_config.json`, que se
+relee en el `lifespan` antes de dar de alta las cámaras. No tiene cierre.
+
+Estuvo viviendo solo en memoria, y cada reinicio se llevaba por delante lo que
+se hubiera ajustado por API — cuesta explicar que un `POST` "no haya servido de
+nada" cuando lo que pasó es que se perdió al reiniciar. Rastro de eso: el
+comentario de `clips.py` explica que la configuración de grabación se guardó en
+su propio fichero precisamente por esto.
+
+Contrapartida de persistir: **lo guardado manda sobre los valores por defecto
+del código**, así que un defecto que cambie en una versión nueva no llega a una
+máquina que ya tenga su fichero. Es el mismo trato que `cameras_config.json`.
+
+De los ajustes del keep-alive, `enabled` e `interval_sec` se pueden
+sobrescribir por cámara (`None` = heredar el global). El intervalo lo es porque
+**el coste del dummy es el del modelo de esa cámara**: 9,3 ms con `yolo26n`
+contra 37,2 con `yolo26m`. En cambio `clock_ratio` es propiedad de la tarjeta
+—dos cámaras sobre la misma GPU con ratios distintos se pelearían— y
+`idle_limit_sec` no depende del modelo, así que los dos se quedan globales. Si
+algún día hay cámaras en GPUs distintas, el ratio debería pasar a ser por
+*device*, no por cámara.
 
 ### Cache de modelos YOLO
 
@@ -85,6 +105,85 @@ vuelve a 29 %.
 
 La decisión vive en `_should_keepalive()`, una función pura precisamente para
 poder probarla sin GPU.
+
+### Y no bastaba: el keep-alive estaba muerto en funcionamiento normal
+
+Todo lo anterior protege el caso "la cámara deja de dar frames". El caso que se
+escapaba es el contrario, y es el que rompía la detección en producción.
+
+El keep-alive solo se ejecuta cuando salta `queue.Empty`. Con la cámara a
+16,7 fps (un frame cada 60 ms) y una inferencia de ~20 ms, **el frame siguiente
+llegaba siempre antes del timeout de 50 ms**, así que nunca saltaba: medido,
+**19 dummies en 11.280 frames**. La GPU pasaba dos tercios de cada ciclo sin
+trabajo y caía a **P5 / 759 MHz de los 1961** de la GTX 1080.
+
+A esos relojes la inferencia no es solo lenta, es **incorrecta**: se midieron
+confianzas de `1.812` —imposibles, salen de una sigmoide— y frames enteros sin
+detectar a una persona que estaba delante de la cámara. Es el mismo bug que
+reproduce `test/gpu_yolo_stress_test.py`, pero disparándose en uso normal.
+
+De ahí venía además una dependencia del modelo que despistó mucho: `yolo26m`
+ocupa 30 ms de cada 60 y mantiene la GPU despierta él solo, así que nunca
+fallaba; `yolo26n` solo ocupa 10 y la dejaba dormirse. Parecía que el modelo
+pequeño "detectaba peor", y lo que pasaba es que al ser más rápido dejaba que
+la tarjeta se durmiera.
+
+### La solución: gobernar por el reloj, no por un temporizador
+
+Bajar el intervalo arregla el síntoma (medido en caliente: 759 → 1265 MHz,
+22,2 → 9,8-16,6 ms, confianzas de vuelta a 0,71-0,91) pero introduce otro
+problema, porque **el dummy cuesta lo mismo que una inferencia real**:
+
+| Modelo | Inferencia | Dummy | Hueco por frame |
+| --- | --- | --- | --- |
+| `yolo26n` | 10,7 ms | 9,3 ms | 49,2 ms → caben ~3 |
+| `yolo26m` | 29,9 ms | **37,2 ms** | **30,0 ms** → no cabe ninguno |
+
+Con el medium, lanzar el dummy igualmente metía el ciclo en ~72 ms contra los
+60 de la cámara: **se perdía en torno al 17 % de los frames** y la GPU subía al
+93 %, todo ello sin necesitarlo.
+
+Así que la condición ya no es un temporizador sino el **reloj real de la GPU**:
+`gpu_underclocked()` lee `sm_clock` por NVML (cacheado 0,5 s) y calienta
+mientras esté por debajo de `keepalive_clock_ratio` (**0,95**) del **máximo
+observado**. Más una guarda: si el dummy no cabe antes del frame siguiente, no
+se lanza (`dummies_skipped` en `/status`). Esa guarda es la que protege al
+modelo pesado.
+
+**La referencia es el reloj observado, no el que declara NVML.**
+`nvmlDeviceGetMaxClockInfo` devuelve 1961 MHz en la GTX 1080, pero ese es el de
+P0: bajo carga de cómputo la tarjeta se queda en **P2**, con un techo real en
+torno a 1290 MHz. Los dos valores salen en **`GET /gpu`** (`sm_clock_max_mhz` y
+`sm_clock_max_seen_mhz`); en el `/status` de cada cámara solo queda
+`gpu_clock_pct`, que es el actual como porcentaje del observado. Repetir los
+mismos relojes en cada cámara era ruido: son de la máquina, no de la cámara.
+
+**Y el ratio va alto a propósito.** La regla es "calienta salvo que la tarjeta
+esté prácticamente en su tope sostenido", no "calienta solo si ha caído un
+30 %". Estuvo en 0,7 y fue un error caro: con el máximo observado en 1657 MHz el
+umbral quedaba en 1160, y esta tarjeta se sostiene en 1177 —justo por encima—,
+así que no se calentaba nunca. Medido: **58 detecciones corruptas en 7486
+frames**, frente a **1 en 5986** cuando sí calentaba.
+
+Puntos de operación medidos en esta GTX 1080:
+
+| Reloj | Resultado |
+| --- | --- |
+| 759 MHz | corrupción masiva, deja de detectar |
+| 1177 MHz | 58 corruptas en 7486 frames |
+| 1290 MHz | 1 corrupta en 5986 frames |
+
+En una GPU sana que sostiene sus relojes, el actual es prácticamente igual al
+observado, así que **no se calienta nada**: ahí está la portabilidad. Y sin
+lecturas de reloj (`pynvml` ausente, o una AMD con ROCm, donde PyTorch también
+llama `"cuda"` al device) se devuelve `False` y no se calienta a ciegas; el
+criterio de tiempo sin frames sigue cubriendo el caso que sí lo necesita.
+
+**Qué mirar en `/status` cuando la inferencia vaya lenta o dé resultados
+raros**: `gpu_keepalive.gpu_clock_pct` (100 = a pleno rendimiento) y, para el detalle, `GET /gpu`, y
+`inference_health.corrupt_detections`, que cuenta las confianzas fuera de
+`[0,1]`. Esas detecciones se descartan además antes de propagarse: una caja con
+confianza 1,8 movería los servos hacia un fantasma y dispararía una grabación.
 
 ### `lifespan`
 

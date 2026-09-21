@@ -214,10 +214,12 @@ el siguiente `/start`, aunque la placa despierte o reconecte y republique
 ### Otros endpoints
 
 - `GET /health` — vivo / no vivo
-- `GET /config`, `POST /config/keepalive` — configuración global
-  (`enabled`, `interval_sec`, `idle_limit_sec`: segundos sin frames tras los
-  cuales se deja de calentar la GPU, ver
-  [`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md))
+- `GET /config`, `POST /config/keepalive` — keep-alive de GPU, global y
+  **persistido** en `global_config.json`. Los campos que no mandes **no se
+  tocan**. `enabled` (`auto` = activo solo en GPU Pascal, que es donde existe
+  el bug), `interval_sec`, `clock_ratio` y `idle_limit_sec`; ver
+  [`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md)
+- `GET /gpu` — relojes, P-state, temperatura y memoria de la tarjeta
 - `GET /cameras`, `POST /cameras`, `DELETE /cameras/{camera_id}` — alta/baja
 - `POST /cameras/{camera_id}/esphome/awake` — forzar "despierto"
 
@@ -230,13 +232,95 @@ Los ajustes de una cámara cuelgan de `/config/`:
   envías (recarga `/docs` para ver cambios recientes). Lo que no se envía se
   conserva, `classes: null` = todas las clases, y cambiar `model_name` o
   `device` relanza los hilos solo. El resto van por formulario:
-- `POST /cameras/{camera_id}/config/keepalive` — override del keep-alive
+- `POST /cameras/{camera_id}/config/keepalive` — override de `enabled` e
+  `interval_sec` solo para esta cámara (vacío = heredar el global). El
+  intervalo es por cámara porque el coste del dummy es el de **su** modelo:
+  9,3 ms con `yolo26n` contra 37,2 con `yolo26m`
 - `POST /cameras/{camera_id}/config/stream` — `default_infer`
 - `POST /cameras/{camera_id}/config/servo` — la torreta pan/tilt
+- `POST /cameras/{camera_id}/config/recording` — la grabación de clips
 - `POST /detect-file` — prueba puntual sobre una imagen subida, eligiendo
   modelo/confianza/resolución. Devuelve JSON con las detecciones, o con
   `annotated=true` la imagen con las cajas pintadas y un overlay de
   modelo / ms / número de detecciones
+
+---
+
+## Grabación de clips
+
+El servicio puede guardar clips MP4, por detección de YOLO o a mano, con unos
+segundos de vídeo **anterior** al disparo (pre-roll), retención automática y los
+ficheros servidos por HTTP para que Home Assistant los reproduzca desde otra
+máquina. Los detalles están en [`docs/GRABACION.md`](docs/GRABACION.md).
+
+El flujo mínimo:
+
+```
+GET  /recordings/capabilities                  ¿hay H.264? (ver aviso de abajo)
+POST /cameras/huerta/config/recording          source=raw, trigger_classes=14,15,16
+...                                            (esperar a que pase algo)
+GET  /recordings?camera_id=huerta&limit=1      el último clip, con su url
+```
+
+| Qué | Endpoint |
+| --- | --- |
+| Configurar la grabación | `POST /cameras/{camera_id}/config/recording` |
+| Grabar a mano | `POST /cameras/{camera_id}/record/start` \| `/stop` |
+| Estado de la grabación | `GET /cameras/{camera_id}/record/status` |
+| Listar clips | `GET /recordings` |
+| Descargar / reproducir | `GET /recordings/{clip_id}` (admite `Range`) |
+| Miniatura | `GET /recordings/{clip_id}/thumbnail` |
+| Borrar | `DELETE /recordings/{clip_id}` |
+| Ocupación y disco libre | `GET /recordings/stats` |
+| Retención | `GET`/`POST /recordings/config`, `POST /recordings/sweep` |
+| Qué encoder hay | `GET /recordings/capabilities` |
+
+**Aviso: hace falta H.264.** El FFmpeg que trae `opencv-python` es LGPL y no
+puede codificar H.264; el `mp4v` que sale por defecto produce ficheros que VLC
+abre pero que **no se reproducen en el navegador ni en Home Assistant** —se ven
+en negro, sin ningún mensaje de error—. Por eso `requirements.txt` incluye
+`imageio-ffmpeg`, que trae un ffmpeg con `libx264`. Comprueba que está con
+`GET /recordings/capabilities`: si `h264` viene a `false`, instálalo con
+`venv\Scripts\python.exe -m pip install imageio-ffmpeg`.
+
+**Aviso: `source=annotated` gasta GPU.** Grabar el vídeo con las cajas pintadas
+enciende la inferencia en esa cámara aunque no haya nadie mirando el stream. Si
+solo quieres vídeo, usa `source=raw`, que no cuesta GPU ninguna.
+
+**Aviso: esto no tiene autenticación.** Como el resto del servicio. Con la
+grabación activada, cualquiera que alcance el `:8080` puede descargarse el vídeo
+de la parcela: mantenlo en la LAN.
+
+---
+
+## Cuando no detecta, o detecta cosas raras
+
+Antes de sospechar del modelo, mira `GET /cameras/{camera_id}/status`. Hay dos
+bloques que contestan casi siempre:
+
+```jsonc
+"gpu_keepalive": {
+  "gpu_clock_pct": 98, "warming": true,
+  "dummies": 344, "dummies_skipped": 0
+},
+"inference_health": {
+  "raw_dets": 2, "dets_after_tracker": 2,
+  "corrupt_detections": 0, "consecutive_without_box": 0,
+  "last_conf_range": [0.71, 0.91]
+}
+```
+
+| Síntoma | Qué mirar |
+| --- | --- |
+| No detecta nada con algo delante | `raw_dets`. Si es 0, no lo ve el detector; si es mayor que 0 con `dets_after_tracker` a 0, se lo come el tracker → `POST /cameras/{id}/tracker/reset` |
+| Cajas absurdas, o deja de detectar tras un rato | `corrupt_detections` y `gpu_clock_pct`. Por debajo de ~95 la GPU se ha dormido y devuelve basura (bug de P-state de la GTX 1080); el detalle en `GET /gpu` |
+| La inferencia va 2-3 veces más lenta de lo normal | Lo mismo: es el reloj, no el modelo |
+| Detecta poco, pero limpio | `last_conf_range`. Si ronda tu `confidence`, es cuestión de umbral o de modelo, no un fallo |
+
+Si nada de eso lo aclara, `POST /cameras/{camera_id}/selftest` pasa el frame
+actual por cuatro caminos dentro del propio proceso (con tracker, sin tracker,
+la red cruda y una instancia recién cargada) y te dice en una frase de quién es
+la culpa.
 
 ---
 
@@ -273,6 +357,7 @@ Los ajustes de una cámara cuelgan de `/config/`:
 | **requests** | Cliente HTTP para el stream MJPEG del ESP32 (`requests.get(..., stream=True)` + `iter_content()`). |
 | **torch** (PyTorch) | El motor de deep learning bajo YOLO. Se usa directamente para mover el modelo a la GPU (`model.to("cuda")`) y para `torch.backends.cudnn.enabled = False` (bug de la GTX 1080). |
 | **aioesphomeapi** | Cliente de la API nativa de ESPHome (puerto 6053, no HTTP). Lo usa `EsphomeController` para suscribirse a `huerta_awake`. |
+| **imageio-ffmpeg** | Trae un `ffmpeg.exe` con `libx264` (~25 MB). Es lo que permite grabar clips en H.264: el FFmpeg incluido en `opencv-python` es LGPL y no puede. Sin él, los clips no se ven en Home Assistant. |
 
 ---
 
@@ -282,6 +367,7 @@ Los ajustes de una cámara cuelgan de `/config/`:
 | --- | --- |
 | [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md) | El reparto por módulos y qué hace cada clase, método y endpoint, con diagramas (UML, flujo, secuencia). |
 | [`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md) | Cuánto vive cada instancia, quién la destruye y cómo se cierran los sockets cuando la placa se duerme. |
+| [`docs/GRABACION.md`](docs/GRABACION.md) | La grabación de clips: los dos disparos, el pre-roll, por qué hace falta H.264, el formato en disco, la retención y cómo consumirlo desde Home Assistant. |
 
 ---
 
@@ -310,6 +396,20 @@ Ninguno de los dos necesita el ESP32: simulan una placa dormida con
 - **`test/test_supervisor.py`** — `supervisor.py` con un hijo de mentira en
   vez de uvicorn: start/stop/restart/status, el watchdog relanza un crash pero
   no una parada manual, y si el hijo ignora la señal se mata el árbol entero.
+- **`test/test_recorder.py`** — la máquina de estados de la grabación con un
+  encoder de mentira: que el pre-roll sale entero y en orden, que un falso
+  positivo suelto no genera clip, y que la cola llena descarta frames en vez de
+  frenar el hilo de la cámara.
+- **`test/test_clips.py`** — el almacén y la retención: a qué le toca la tijera
+  (por edad primero, por tamaño después) y que `resolve` para el path traversal,
+  que es la única barrera de una API que sirve ficheros por ruta.
+- **`test/test_recording_api.py`** — el contrato HTTP: que las rutas fijas ganan
+  al comodín `{clip_id:path}` y que la descarga responde `206` a un `Range`, que
+  es lo que necesita Home Assistant para hacer seek.
+- **`test/test_encoder_smoke.py`** — codifica un MP4 **de verdad** y comprueba
+  que es H.264 y no `mp4v`. Es el único fallo de la grabación que no da ningún
+  error: el fichero pesa, VLC lo abre, y en HA se ve en negro. Si en la máquina
+  no hay H.264 imprime `SKIP` y sale con 0.
 
 El resto de scripts de `test/` son pruebas manuales que sí necesitan la placa.
 
