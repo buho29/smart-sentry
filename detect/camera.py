@@ -237,11 +237,24 @@ class GlobalConfig:
         #   759 MHz (P5) -> 1265 MHz (P2), 22,2 ms -> 9,8-16,6 ms,
         #   y las confianzas volvieron a 0,71-0,91.
         #
-        # Ya no es el único freno: quien decide si se calienta es el reloj real
-        # de la GPU (ver keepalive_clock_ratio y gpu_underclocked). Esto solo
-        # marca cada cuánto se vuelve a mirar mientras se espera un frame, así
-        # que 0.01 va sobrado y ahorra vueltas en vacío.
-        self.keepalive_interval_sec: float = 0.01
+        # MEDIDO, no razonado. Estuvo en 0.01 con el argumento de que "el reloj
+        # ya decide si se calienta, así que basta con mirar de vez en cuando", y
+        # era falso: con 0.01 la GPU se quedaba en 847 MHz (P5) y salían **570
+        # detecciones corruptas en 48.967 frames** (1,16 %), con el keep-alive
+        # disparando 54.753 veces sin conseguir nada.
+        #
+        # A 0.005, misma cámara y mismo modelo: el reloj se sostiene en ~1290
+        # MHz y **cero corrupciones en 4147 frames** seguidos, con la inferencia
+        # bajando de 18,5 a ~12 ms.
+        #
+        # El motivo es que el driver decide por utilización: con huecos de 10 ms
+        # entre dummies ve la GPU ociosa (`nvidia-smi` lo dice literalmente:
+        # "Clocks Event Reasons -> Idle: Active", con 45 W de 210) y baja los
+        # relojes. Hay que no dejarle hueco.
+        #
+        # Se puede subir por cámara si su modelo es lento: el dummy cuesta lo
+        # mismo que una inferencia, y con uno pesado no cabe en el hueco.
+        self.keepalive_interval_sec: float = 0.005
         # Segundos sin recibir un frame real tras los cuales se deja de
         # calentar la GPU. El keep-alive solo tiene sentido ENTRE frames de un
         # stream vivo (huecos de decenas de ms); pasado este plazo la cámara no

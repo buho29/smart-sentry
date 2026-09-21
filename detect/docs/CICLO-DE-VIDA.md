@@ -173,6 +173,27 @@ Puntos de operación medidos en esta GTX 1080:
 | 1177 MHz | 58 corruptas en 7486 frames |
 | 1290 MHz | 1 corrupta en 5986 frames |
 
+**El intervalo importa tanto como el ratio.** El driver decide por utilización,
+y con huecos de 10 ms entre dummies ve la tarjeta ociosa: `nvidia-smi` lo dice
+con todas las letras —`Clocks Event Reasons -> Idle: Active`, con 45 W de los
+210 disponibles— y baja los relojes aunque el keep-alive esté disparando sin
+parar. Medido en la misma cámara y con el mismo modelo:
+
+| `interval_sec` | Reloj sostenido | Detecciones corruptas |
+| --- | --- | --- |
+| 0,01 | 847 MHz (P5) | **570 en 48.967 frames** (1,16 %), con 54.753 dummies |
+| **0,005** | ~1290 MHz | **0 en 4147 frames seguidos** |
+
+Por eso el defecto es 0,005: no hay que dejarle hueco al driver. Se puede subir
+por cámara si su modelo es lento, porque el dummy cuesta lo mismo que una
+inferencia y con uno pesado no cabe en el hueco entre frames.
+
+Nota: en esta tarjeta **no se pueden fijar los relojes** (`nvidia-smi -lgc`
+responde "not supported for GPU"), y en Windows tampoco hay modo persistencia.
+La vía alternativa, si algún día el keep-alive no basta, es el panel de NVIDIA:
+*Administrar configuración 3D → Configuración del programa →* el `python.exe`
+del venv *→ Modo de administración de energía → Preferir rendimiento máximo*.
+
 En una GPU sana que sostiene sus relojes, el actual es prácticamente igual al
 observado, así que **no se calienta nada**: ahí está la portabilidad. Y sin
 lecturas de reloj (`pynvml` ausente, o una AMD con ROCm, donde PyTorch también
