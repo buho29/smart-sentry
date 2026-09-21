@@ -30,6 +30,7 @@ from camera import (
     CameraConfig,
     CameraSession,  # solo para la anotación de _shutdown_one
     get_model,
+    release_model,
 )
 from clips import (
     STORE,
@@ -305,6 +306,10 @@ async def remove_camera(camera_id: str):
     # quedaban parados mientras se borraba una cámara. Mismo motivo que en
     # lifespan().
     await asyncio.to_thread(session.shutdown)
+    # Suelta su modelo: ahora hay una instancia por cámara (para que no
+    # compartan el tracker), así que no liberarla convertiría un alta/baja
+    # repetida en una fuga de VRAM.
+    release_model(session.cfg.model_name, session.cfg.device, camera_id)
     save_cameras_to_disk()
     return {"removed": camera_id}
 

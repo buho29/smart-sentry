@@ -23,7 +23,7 @@ venv\Scripts\python.exe test\test_shutdown.py
 | Objeto | Cuántos | Lo crea | Lo destruye | Vive |
 | --- | --- | --- | --- | --- |
 | `GlobalConfig` (`GLOBAL_CONFIG`) | 1 | Import del módulo | Nunca | Todo el proceso |
-| Modelos `YOLO` (`_loaded_models`) | 1 por `modelo+device` | `get_model()`, perezoso | **Nunca** (a propósito) | Todo el proceso |
+| Modelos `YOLO` (`_loaded_models`) | 1 por `modelo+device+cámara` | `get_model()`, perezoso | `release_model()` al `DELETE` | Entre alta y baja de la cámara |
 | `CameraSession` | 1 por cámara registrada | `register_camera()` | `DELETE /cameras/{id}` o apagado | Entre alta y baja |
 | `CameraConfig` | 1 por sesión | Pydantic al registrar | Con su sesión | Igual que la sesión |
 | `EsphomeController` | 1 por sesión **con** `noise_psk` | `CameraSession.__init__` | `CameraSession.shutdown()` | Igual que la sesión |
@@ -66,12 +66,26 @@ algún día hay cámaras en GPUs distintas, el ratio debería pasar a ser por
 
 ### Cache de modelos YOLO
 
-`_loaded_models` no se vacía nunca, ni al borrar una cámara. Es deliberado:
-cargar y precalentar un modelo cuesta segundos, y varias cámaras suelen
-compartirlo. Consecuencia a tener presente: **la VRAM que ocupa un modelo no
-se recupera al hacer `DELETE` de la última cámara que lo usaba**. Si algún día
-molesta, el sitio para liberarlo es `remove_camera`, contando antes cuántas
-sesiones vivas siguen usando esa clave.
+**Una instancia por cámara**, no una por modelo. La caché estuvo indexada solo
+por `modelo+device`, y parecía razonable: cargar y precalentar cuesta segundos,
+y varias cámaras suelen usar el mismo modelo. Pero dos cámaras con el mismo
+`yolo26n` en `cuda` recibían el **mismo objeto `YOLO`**, y con él el mismo
+predictor y **el mismo ByteTrack**.
+
+Con una sola cámara no se nota. Con dos: el estado de seguimiento de ambas
+escenas se mezcla en un único tracker, los `track_id` saltan de una a otra, un
+`POST /tracker/reset` en una afecta a la otra, y dos hilos `yolo-*` llaman a
+`model.track()` sobre el mismo predictor sin ningún lock.
+
+Por eso `get_model(name, device, owner)` incluye el `camera_id` en la clave. El
+precio es una copia de los pesos por cámara —5,5 MB en `yolo26n`, 44 MB en
+`yolo26m`— despreciable al lado de una detección que se equivoca de objetivo.
+Quien no necesita tracking (`/detect-file`, los scripts de `test/`) llama sin
+`owner` y comparte instancia.
+
+Y como ahora la caché crece con el número de cámaras, `DELETE /cameras/{id}`
+llama a `release_model()`: antes no liberar era una nota al pie, ahora un
+alta/baja repetida sería una fuga de VRAM de verdad.
 
 ### El keep-alive de GPU tiene fecha de caducidad
 

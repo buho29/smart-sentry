@@ -366,6 +366,30 @@ check("y con None vuelve a heredar",
       _s_ka.keepalive_setting("keepalive_enabled")
       == camera.GLOBAL_CONFIG.resolve_keepalive())
 
+# Cada camara tiene su PROPIA instancia del modelo. La cache estuvo indexada
+# solo por modelo+device, asi que dos camaras con el mismo yolo26n en cuda
+# recibian el mismo objeto YOLO: mismo predictor y mismo ByteTrack. Con una sola
+# camara no se nota; con dos, los track_id saltan entre escenas, un
+# reset_tracker en una afecta a la otra, y dos hilos llaman a track() sobre el
+# mismo predictor sin lock.
+_m_a = camera.get_model("yolo11n", "cpu", "camA")
+_m_b = camera.get_model("yolo11n", "cpu", "camB")
+_m_shared = camera.get_model("yolo11n", "cpu")
+check("dos camaras con el mismo modelo NO comparten instancia",
+      _m_a is not _m_b)
+check("la misma camara reutiliza la suya",
+      camera.get_model("yolo11n", "cpu", "camA") is _m_a)
+check("quien no pide owner (detect-file, scripts) comparte",
+      camera.get_model("yolo11n", "cpu") is _m_shared)
+check("y esa compartida es distinta de las de las camaras",
+      _m_shared is not _m_a and _m_shared is not _m_b)
+check("release_model suelta solo la de esa camara",
+      camera.release_model("yolo11n", "cpu", "camA") is True
+      and camera.model_key("yolo11n", "cpu", "camB") in camera._loaded_models)
+check("y no se puede soltar dos veces",
+      camera.release_model("yolo11n", "cpu", "camA") is False)
+camera.release_model("yolo11n", "cpu", "camB")
+
 print("\n=== 3d. always_infer: detecta sin nadie mirando el stream ===")
 # Lo pedido: la cámara tiene que seguir detectando con el navegador cerrado.
 # Ni un solo cliente ni consumidores en toda esta prueba.

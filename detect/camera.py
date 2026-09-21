@@ -492,15 +492,35 @@ def _should_keepalive(is_cuda: bool, enabled: bool, seconds_since_frame: float,
 
 
 # ---------------------------------------------------------------------------
-# Modelos YOLO cacheados (compartidos entre cámaras que usen el mismo modelo)
+# Modelos YOLO cacheados, UNO POR CÁMARA
 # ---------------------------------------------------------------------------
 
 _loaded_models: dict[str, YOLO] = {}
 _models_lock = threading.Lock()
 
 
-def get_model(name: str, device: str) -> YOLO:
-    key = f"{name}_{device}"
+def model_key(name: str, device: str, owner: Optional[str] = None) -> str:
+    return f"{name}_{device}_{owner or 'shared'}"
+
+
+def get_model(name: str, device: str, owner: Optional[str] = None) -> YOLO:
+    """El modelo de `owner`, cargándolo la primera vez.
+
+    **`owner` es lo que impide que dos cámaras compartan el tracker.** La caché
+    estuvo indexada solo por modelo+device, así que dos cámaras con el mismo
+    `yolo26n` en `cuda` recibían el MISMO objeto `YOLO`, y con él el mismo
+    predictor y el mismo ByteTrack. Con una sola cámara no se nota; con dos, el
+    estado de seguimiento de ambas escenas se mezcla en un único tracker, los
+    track_id saltan de una a otra, un `reset_tracker` en una afecta a la otra, y
+    encima dos hilos `yolo-*` llaman a `model.track()` sobre el mismo predictor
+    sin ningún lock.
+
+    El precio es una copia de los pesos por cámara (5,5 MB en `yolo26n`, 44 MB
+    en `yolo26m`), despreciable al lado de una detección que se equivoca de
+    objetivo. Quien no necesite tracking —`/detect-file`, los scripts de
+    `test/`— llama sin `owner` y sigue compartiendo instancia.
+    """
+    key = model_key(name, device, owner)
     with _models_lock:
         if key not in _loaded_models:
             m = YOLO(f"{name}.pt")
@@ -508,8 +528,30 @@ def get_model(name: str, device: str) -> YOLO:
             dummy = np.zeros((640, 640, 3), dtype=np.uint8)
             m.predict(dummy, verbose=False)
             _loaded_models[key] = m
-            print(f"Modelo {name} precalentado en {device} y listo")
+            print(f"Modelo {name} precalentado en {device} y listo"
+                  f"{f' (para {owner})' if owner else ''}")
         return _loaded_models[key]
+
+
+def release_model(name: str, device: str, owner: str) -> bool:
+    """Suelta el modelo de una cámara al darla de baja.
+
+    Antes la caché no se vaciaba nunca y la VRAM de un modelo no se recuperaba
+    al borrar la última cámara que lo usaba. Con una instancia por cámara eso
+    pasa de ser una nota al pie a una fuga de verdad: dar de alta y de baja
+    cámaras iría llenando la tarjeta.
+    """
+    key = model_key(name, device, owner)
+    with _models_lock:
+        if _loaded_models.pop(key, None) is None:
+            return False
+    try:
+        if device.startswith("cuda"):
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    print(f"Modelo {name} de {owner} liberado")
+    return True
 
 
 # Dónde corre el endpoint de prueba puntual (/detect-file). El modelo lo elige
@@ -1222,7 +1264,7 @@ class CameraSession:
         Devuelve el MISMO objeto, no uno nuevo: el selftest necesita examinar
         precisamente el que lleva horas vivo.
         """
-        return _loaded_models.get(f"{self.cfg.model_name}_{self.cfg.device}")
+        return _loaded_models.get(model_key(self.cfg.model_name, self.cfg.device, self.cfg.camera_id))
 
     def reset_tracker(self) -> bool:
         """Tira el estado de ByteTrack para que se reconstruya en el próximo frame.
@@ -1234,7 +1276,7 @@ class CameraSession:
         reiniciando el proceso entero.
         """
         try:
-            model = _loaded_models.get(f"{self.cfg.model_name}_{self.cfg.device}")
+            model = _loaded_models.get(model_key(self.cfg.model_name, self.cfg.device, self.cfg.camera_id))
             predictor = getattr(model, "predictor", None) if model else None
             if predictor is None or not hasattr(predictor, "trackers"):
                 return False
@@ -1255,7 +1297,7 @@ class CameraSession:
         raw_queue = self._raw_queue
         fps_window: deque = deque()
 
-        model = get_model(self.cfg.model_name, self.cfg.device)
+        model = get_model(self.cfg.model_name, self.cfg.device, self.cfg.camera_id)
         is_cuda = self.cfg.device.startswith("cuda")
         self._instrument_tracker(model)
 
