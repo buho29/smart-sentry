@@ -177,8 +177,8 @@ def _force_close_response(resp: "requests.Response", tag: str = ""):
 # Config global, modificable en runtime vía API
 # ---------------------------------------------------------------------------
 
-# Cada cuánto se mira si hay que calentar mientras se espera el frame
-# siguiente. Constante y no configurable: es un valor medido, no una
+# Defecto de `CameraConfig.keepalive_interval_sec`: cada cuánto se mira si hay
+# que calentar mientras se espera el frame siguiente. Es un valor medido, no una
 # preferencia. Estuvo en 0,01 y la GPU se quedaba en 847 MHz dando **570
 # detecciones corruptas en 48.967 frames**; a 0,005 el reloj se sostiene en
 # ~1290 MHz y salieron **cero en 4147 frames seguidos**.
@@ -187,6 +187,12 @@ def _force_close_response(resp: "requests.Response", tag: str = ""):
 # kernels: con huecos de 10 ms ve la tarjeta ociosa —`nvidia-smi` lo dice
 # literalmente, "Clocks Event Reasons -> Idle: Active" con 45 W de 210— y baja
 # los relojes. Hay que no dejarle hueco.
+#
+# Se ajusta POR CÁMARA porque cada una tiene su modelo y sus fps, que es lo que
+# decide si el keep-alive hace falta y cuánto cuesta. Y como esto es el
+# `timeout` del `get()` de la cola, **por encima del hueco entre frames el
+# `get()` nunca expira y no se lanza ningún dummy**: así se apaga el keep-alive
+# en una cámara cuyo modelo ya mantiene despierta la GPU.
 KEEPALIVE_INTERVAL_SEC = 0.005
 
 
@@ -209,9 +215,13 @@ class GlobalConfig:
         self.reconnect_delay_sec: float = 1.0
 
     def as_dict(self):
+        # `keepalive_interval_sec` NO sale aquí: vive en cada cámara
+        # (`CameraConfig`) y publicarlo como global diría algo falso en cuanto
+        # dos cámaras lo tengan distinto. Mismo fallo que el "auto" que sobrevivía
+        # en el fichero: un campo que se enseña y no manda. Se ve por cámara, en
+        # `status()["gpu_keepalive"]["interval_sec"]`.
         return {
             "keepalive_enabled": self.keepalive_enabled,
-            "keepalive_interval_sec": KEEPALIVE_INTERVAL_SEC,
             "keepalive_idle_limit_sec": self.keepalive_idle_limit_sec,
             "reconnect_delay_sec": self.reconnect_delay_sec,
         }
@@ -500,6 +510,17 @@ class CameraConfig(BaseModel):
     #
     # A false, una variante que solo sirva vídeo no gasta GPU.
     always_infer: bool = True
+
+    # Cada cuánto se comprueba si hay que calentar la GPU mientras se espera el
+    # frame siguiente (ver KEEPALIVE_INTERVAL_SEC, que es el defecto medido).
+    #
+    # Es por cámara porque el coste depende del modelo: una dummy de yolo26m
+    # cuesta 30,7 ms, MÁS que su propia inferencia real (27,5 ms), así que
+    # calentar duplica el gasto de esa cámara. Medido: 65% de GPU, de los que
+    # 40 puntos eran dummies — y con 0 detecciones corruptas, o sea que no
+    # protegían de nada. Subirlo por encima del hueco entre frames
+    # (1/fps - last_inference_ms) apaga el keep-alive de esa cámara.
+    keepalive_interval_sec: float = KEEPALIVE_INTERVAL_SEC
 
     # Parada manual (POST /stop): la cámara se queda parada hasta el siguiente
     # POST /start, aunque la placa republique awake=on al reconectar o al
@@ -1286,7 +1307,14 @@ class CameraSession:
                                         idle_limit, want_infer)
             # Si ya no toca calentar, esperar 1s en vez de 5ms: así el hilo
             # queda de verdad en reposo en lugar de girar sin hacer nada.
-            wait_timeout = KEEPALIVE_INTERVAL_SEC if warming else 1.0
+            #
+            # Se relee del cfg en cada vuelta, como want_infer, para que un POST
+            # a /config/inference se note sin relanzar la sesión. Y ojo al doble
+            # papel: esto es el timeout del get() de abajo, así que un intervalo
+            # mayor que el hueco entre frames significa que no se lanza NINGUNA
+            # dummy. No añade latencia, porque el get() vuelve en cuanto llega
+            # el frame.
+            wait_timeout = self.cfg.keepalive_interval_sec if warming else 1.0
             self._ka_warming = warming
 
             if is_cuda and keepalive_on and not warming and not idle:
@@ -1555,6 +1583,11 @@ class CameraSession:
             "gpu_keepalive": {
                 # Ya resueltos contra GLOBAL_CONFIG: antes había que deducirlos.
                 "enabled": GLOBAL_CONFIG.keepalive_enabled,
+                # De esta cámara, no global: se ajusta en /config/inference.
+                # Junto a dummy_ms cuenta la historia entera — si interval_sec
+                # es menor que el hueco entre frames, se calienta casi en cada
+                # frame y la GPU paga otra inferencia.
+                "interval_sec": self.cfg.keepalive_interval_sec,
                 "warming": self._ka_warming,
                 "idle": self._ka_idle,
                 "dummies": self._ka_dummies,

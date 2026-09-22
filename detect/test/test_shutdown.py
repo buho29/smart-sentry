@@ -241,11 +241,15 @@ check("_should_keepalive tiene 5 parametros, no 6",
       len(_inspect.signature(camera._should_keepalive).parameters) == 5,
       f"({list(_inspect.signature(camera._should_keepalive).parameters)})")
 
-# El intervalo es una constante medida, no un ajuste: a 0.01 esta GTX 1080 se
-# quedaba en 847 MHz y daba 570 detecciones corruptas en 48.967 frames.
-check("el intervalo es constante y vale 0.005",
+# El intervalo por defecto es un valor medido: a 0.01 esta GTX 1080 se quedaba
+# en 847 MHz y daba 570 detecciones corruptas en 48.967 frames. Se puede subir
+# por camara, pero el defecto no se toca sin volver a medir.
+check("el intervalo por defecto vale 0.005",
       camera.KEEPALIVE_INTERVAL_SEC == 0.005,
       f"({camera.KEEPALIVE_INTERVAL_SEC})")
+check("y es el defecto de CameraConfig, sin copiar el numero",
+      camera.CameraConfig.model_fields["keepalive_interval_sec"].default
+      is camera.KEEPALIVE_INTERVAL_SEC)
 
 # Ya no hay modo "auto" ni gobierno por relojes ni overrides por camara.
 check("keepalive_enabled es un bool, sin 'auto'",
@@ -253,11 +257,20 @@ check("keepalive_enabled es un bool, sin 'auto'",
 for gone in ("resolve_keepalive", "gpu_underclocked", "_is_pascal", "_any_pascal"):
     check(f"ya no existe {gone}",
           not hasattr(camera, gone) and not hasattr(camera.GLOBAL_CONFIG, gone))
-check("CameraConfig ya no tiene overrides de keep-alive",
-      not any(f.startswith("keepalive")
-              for f in camera.CameraConfig.model_fields))
+# El unico ajuste de keep-alive que vive en la camara es el intervalo, porque
+# su coste depende del modelo. El interruptor y el limite de inactividad siguen
+# siendo globales: los overrides por camara de aquellos se quitaron con el resto
+# de la maquinaria del modo "auto".
+check("de keep-alive, CameraConfig solo tiene el intervalo",
+      {f for f in camera.CameraConfig.model_fields if f.startswith("keepalive")}
+      == {"keepalive_interval_sec"},
+      str([f for f in camera.CameraConfig.model_fields if f.startswith("keepalive")]))
 check("/config no expone clock_ratio",
       "keepalive_clock_ratio" not in camera.GLOBAL_CONFIG.as_dict())
+# Se publicaba leyendo la constante, y eso mentiria en cuanto dos camaras lo
+# tuvieran distinto.
+check("/config tampoco expone el intervalo: ahora es por camara",
+      "keepalive_interval_sec" not in camera.GLOBAL_CONFIG.as_dict())
 
 # Un global_config.json de una version anterior trae claves que ya no existen.
 # Tiene que cargar igual, ignorandolas.
@@ -273,7 +286,8 @@ check("un global_config.json viejo carga ignorando lo que sobra",
       camera.GLOBAL_CONFIG.keepalive_enabled is False
       and camera.GLOBAL_CONFIG.keepalive_idle_limit_sec == 9.0)
 check("y no se cuelan las claves muertas como atributos",
-      not hasattr(camera.GLOBAL_CONFIG, "keepalive_clock_ratio"))
+      not hasattr(camera.GLOBAL_CONFIG, "keepalive_clock_ratio")
+      and not hasattr(camera.GLOBAL_CONFIG, "keepalive_interval_sec"))
 
 # El caso que el test anterior NO cubria, y que se escapo en produccion: una
 # clave que SI existe pero con un valor de un tipo que el codigo ya no acepta.

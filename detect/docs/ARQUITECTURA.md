@@ -135,7 +135,6 @@ dependencia de uso, `..|>` = implementación de un `Protocol`.
 classDiagram
     class GlobalConfig {
         +bool keepalive_enabled
-        +float keepalive_interval_sec
         +float keepalive_idle_limit_sec
         +float reconnect_delay_sec
         +as_dict() dict
@@ -151,6 +150,7 @@ classDiagram
         +list~int~ classes
         +bool default_infer
         +bool always_infer
+        +float keepalive_interval_sec
         +str noise_psk
         +str esphome_state_object_id
         +ServoConfig servo
@@ -345,7 +345,8 @@ Context manager del ciclo de vida de FastAPI:
 Config global editable en caliente por API. Campos:
 
 - `keepalive_enabled` — activar el "keep-alive" de GPU (ver `_process_loop`).
-- `keepalive_interval_sec` — cada cuánto se hace la inferencia dummy (0.05 s).
+  El **intervalo** no está aquí: vive en `CameraConfig`, porque lo que decide si
+  hace falta y lo que cuesta es el modelo, y cada cámara tiene el suyo.
 - `keepalive_idle_limit_sec` — segundos sin frame real tras los que el
   keep-alive se pausa (3 s; ver [`CICLO-DE-VIDA.md`](CICLO-DE-VIDA.md#2-nivel-proceso)).
 - `reconnect_delay_sec` — espera entre reintentos del hilo lector (1 s).
@@ -683,7 +684,11 @@ Referencias locales otra vez. Obtiene el modelo con `get_model()`. Bucle:
    - `want_raw` = hay `_raw_clients`, o hay `_follow_clients` y `default_infer`
      a `False`.
 2. Calcula el keep-alive con `_should_keepalive(...)` y de ahí el `wait_timeout`
-   (0,05 s si toca calentar, si no 1 s). **Requiere `want_infer`**: el
+   (`cfg.keepalive_interval_sec`, 0,005 s por defecto, si toca calentar; si no,
+   1 s). Ese doble papel importa: como es también el timeout del `get()` del
+   punto 3, **un intervalo mayor que el hueco entre frames significa que no se
+   lanza ninguna dummy**, y así se apaga el keep-alive en una cámara cuyo modelo
+   ya mantiene despierta la GPU. **Requiere `want_infer`**: el
    workaround protege a las inferencias reales de salir corruptas, así que si
    no va a haber ninguna, calentar no protege nada — era el ~10 % de GPU que se
    gastaba en reposo.

@@ -82,9 +82,10 @@ alta/baja repetida sería una fuga de VRAM de verdad.
 
 ### El keep-alive de GPU tiene fecha de caducidad
 
-`_process_loop` lanza una inferencia dummy cada `KEEPALIVE_INTERVAL_SEC`
-(0,005 s, constante) cuando la cola está vacía, para que el driver de la
-GTX 1080 no baje de P-state entre frames y devuelva inferencias corruptas.
+`_process_loop` lanza una inferencia dummy cada `keepalive_interval_sec`
+(0,005 s por defecto, ajustable por cámara) cuando la cola está vacía, para que
+el driver de la GTX 1080 no baje de P-state entre frames y devuelva inferencias
+corruptas.
 
 Eso **solo tiene sentido entre frames de un stream vivo**, en huecos de decenas
 de milisegundos. Sin ese límite, una cámara desaparecida dejaba el hilo de
@@ -156,15 +157,52 @@ La paradoja: en esta tarjeta **gastar menos sale más caro**. El driver castiga
 la carga baja bajando los relojes, y entonces el mismo trabajo cuesta el doble.
 Apagar el keep-alive con el modelo ligero es la opción **más** cara de las tres.
 
-Así que hoy el keep-alive es: un interruptor (`keepalive_enabled`), un intervalo
-constante (`KEEPALIVE_INTERVAL_SEC`, 0,005 s) y la guarda `dummy_fits`. Nada
-más. La guarda es lo que impide que un modelo pesado pierda frames: su dummy
-cuesta 37,2 ms y el hueco entre frames es de 30, así que sin ella el ciclo se
-va a ~72 ms contra los 60 de la cámara. Hace el mismo trabajo que hacía el
-gobierno por relojes, sin NVML ni estado que mantener.
+Así que hoy el keep-alive es: un interruptor global (`keepalive_enabled`), un
+intervalo por cámara (`keepalive_interval_sec`, 0,005 s por defecto) y la guarda
+`dummy_fits`. Nada más. La guarda es lo que impide que un modelo pesado pierda
+frames: su dummy cuesta 37,2 ms y el hueco entre frames es de 30, así que sin
+ella el ciclo se va a ~72 ms contra los 60 de la cámara. Hace el mismo trabajo
+que hacía el gobierno por relojes, sin NVML ni estado que mantener.
 
 NVML sigue ahí, pero solo para **mirar**: `GET /gpu` y `gpu_clock_pct` en
 `/status`. No decide nada.
+
+### Por qué el intervalo es por cámara, y no global
+
+Porque **lo que decide si el keep-alive hace falta, y lo que cuesta, es el
+modelo**, y cada cámara tiene el suyo. Un valor global no puede servir a la vez
+a un `yolo26n`, que se duerme si no lo calientas, y a un `yolo26m`, que se
+mantiene despierto solo.
+
+El caso que lo forzó: una única cámara con `yolo26m` consumiendo el **65 % de la
+GPU**, de los que unos 40 puntos eran dummies.
+
+```jsonc
+"last_inference_ms": 27.5, "pipeline_fps": 16.5,
+"gpu_keepalive": { "dummies": 3697, "dummy_ms": 30.7 },
+"inference_health": { "frames_inferred": 4609, "corrupt_detections": 0 }
+```
+
+Una dummy de ese modelo cuesta **30,7 ms, más que su propia inferencia real**
+(27,5 ms): no tiene nada de "mínima", es un forward completo de la misma red. Y
+`corrupt_detections` a 0 dice que no estaba protegiendo de nada.
+
+La tabla de más arriba daba ~0 % de dummies para `yolo26m`, y no se contradice:
+la guarda `dummy_fits` compara el hueco entre frames (60,6 − 27,5 = **33,1 ms**)
+con el coste de la dummy (30,7 ms), y ahí cabe **por 2,4 ms**. El
+comportamiento está en un filo, así que unos fps arriba o abajo duplican el
+consumo sin que nadie toque nada.
+
+Subir el intervalo lo arregla por un camino que conviene entender, porque no es
+obvio: `keepalive_interval_sec` es el `timeout` del `raw_queue.get()`, así que
+**por encima del hueco entre frames el `get()` nunca expira y no se lanza
+ninguna dummy**. Poner `0.06` en esa cámara apaga su keep-alive de hecho. Y no
+añade latencia, porque el `get()` devuelve el frame en cuanto llega.
+
+Se ajusta en `POST /cameras/{id}/config/inference`, se relee en cada vuelta del
+bucle (no relanza la sesión) y se ve en `gpu_keepalive.interval_sec`. El
+interruptor y `keepalive_idle_limit_sec` siguen siendo globales: ninguno de los
+dos depende del modelo.
 
 <details>
 <summary>El camino que se recorrió hasta llegar aquí (histórico)</summary>

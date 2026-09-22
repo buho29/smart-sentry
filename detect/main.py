@@ -230,10 +230,10 @@ async def set_global_keepalive(
 
     Los campos vacíos **no se tocan**: una llamada parcial no resetea el resto.
 
-    Es todo lo que hay. El intervalo entre comprobaciones es una constante del
-    código (`KEEPALIVE_INTERVAL_SEC`, 0,005 s) porque es un valor medido, no una
-    preferencia: a 0,01 esta GTX 1080 se quedaba en 847 MHz y daba 570
-    detecciones corruptas en 48.967 frames.
+    Es todo lo que hay de global. El **intervalo** entre comprobaciones se
+    ajusta por cámara, en `POST /cameras/{id}/config/inference`, porque su coste
+    depende del modelo: una dummy de `yolo26m` cuesta 30,7 ms, más que su propia
+    inferencia real, así que calentar duplica el gasto de esa cámara.
 
     Y conviene saber lo que este workaround **no** hace: no arregla el problema
     de fondo. Con un modelo ligero (`yolo26n`) seguían saliendo 6 corrupciones
@@ -400,6 +400,7 @@ class InferenceConfig(BaseModel):
     classes: Optional[list[int]] = Field(None, description="IDs de clase COCO (0 = personas, 16 = pájaros). null = todas las clases.")
     model_name: Optional[str] = Field(None, description="Pesos YOLO, sin el .pt. Cambiarlo relanza la sesión.")
     device: Optional[str] = Field(None, description="'cuda' o 'cpu'. Cambiarlo relanza la sesión.")
+    keepalive_interval_sec: Optional[float] = Field(None, gt=0.0, le=1.0, description="Cada cuánto se comprueba si hay que calentar la GPU mientras se espera el frame siguiente. Si lo pones POR ENCIMA del hueco entre frames (1/pipeline_fps menos last_inference_ms) no se lanza ninguna inferencia dummy: es la forma de apagar el keep-alive en una cámara cuyo modelo ya mantiene despierta la GPU por sí solo. Bajarlo calienta más y gasta más, porque una dummy cuesta casi lo mismo que una inferencia real (medido con yolo26m: 30,7 ms la dummy contra 27,5 ms la real). Ojo al otro extremo: a 0,01 esta GTX 1080 se quedó en 847 MHz y dio 570 detecciones corruptas en 48.967 frames.")
 
 
 @app.post("/cameras/{camera_id}/config/inference")
@@ -411,17 +412,18 @@ async def set_inference_config(camera_id: str, body: InferenceConfig):
     que quieras y envía. Lo que no se envía se conserva, y reenviar valores
     iguales no cuesta nada.
 
-    `confidence`, `imgsz`, `always_infer` y `classes` se releen en cada
-    frame, así que el cambio se nota al instante. `model_name` y `device`,
-    en cambio, solo se resuelven al arrancar los hilos: cuando cambian la
-    sesión se relanza sola.
+    `confidence`, `imgsz`, `always_infer`, `classes` y
+    `keepalive_interval_sec` se releen en cada frame, así que el cambio se
+    nota al instante. `model_name` y `device`, en cambio, solo se resuelven al
+    arrancar los hilos: cuando cambian la sesión se relanza sola.
     """
     session = get_camera(camera_id)
     cfg = session.cfg
 
     changes = body.model_dump(exclude_unset=True)
     # Solo classes admite null; en el resto, null o vacío = no tocar.
-    for k in ("confidence", "imgsz", "always_infer", "model_name", "device"):
+    for k in ("confidence", "imgsz", "always_infer", "model_name", "device",
+              "keepalive_interval_sec"):
         if k in changes:
             v = changes[k]
             if v is None or (isinstance(v, str) and not v.strip()):

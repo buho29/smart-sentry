@@ -233,8 +233,9 @@ el siguiente `/start`, aunque la placa despierte o reconecte y republique
 - `GET /health` — vivo / no vivo
 - `GET /config`, `POST /config/keepalive` — keep-alive de GPU, global y
   **persistido** en `global_config.json`. Dos campos, `enabled` e
-  `idle_limit_sec`, y los que no mandes **no se tocan**; ver
-  [`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md)
+  `idle_limit_sec`, y los que no mandes **no se tocan**. El intervalo va
+  aparte, por cámara (`keepalive_interval_sec`), porque su coste depende del
+  modelo; ver [`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md)
 - `GET /gpu` — relojes, P-state, temperatura y memoria de la tarjeta
 - `GET /cameras`, `POST /cameras`, `DELETE /cameras/{camera_id}` — alta/baja
 - `POST /cameras/{camera_id}/esphome/awake` — forzar "despierto"
@@ -242,12 +243,13 @@ el siguiente `/start`, aunque la placa despierte o reconecte y republique
 Los ajustes de una cámara cuelgan de `/config/`:
 
 - `POST /cameras/{camera_id}/config/inference` — `confidence`, `imgsz`,
-  `classes`, `always_infer`, y también el `model_name` y el `device`. Va en
-  JSON: en Swagger el desplegable **Examples** del body lista cada cámara
-  con sus valores actuales, así que eliges la tuya, tocas lo que quieras y
-  envías (recarga `/docs` para ver cambios recientes). Lo que no se envía se
-  conserva, `classes: null` = todas las clases, y cambiar `model_name` o
-  `device` relanza los hilos solo. El resto van por formulario:
+  `classes`, `always_infer`, `keepalive_interval_sec`, y también el
+  `model_name` y el `device`. Va en JSON: en Swagger el desplegable
+  **Examples** del body lista cada cámara con sus valores actuales, así que
+  eliges la tuya, tocas lo que quieras y envías (recarga `/docs` para ver
+  cambios recientes). Lo que no se envía se conserva, `classes: null` = todas
+  las clases, y cambiar `model_name` o `device` relanza los hilos solo. El
+  resto van por formulario:
 - `POST /cameras/{camera_id}/config/stream` — `default_infer`
 - `POST /cameras/{camera_id}/config/servo` — la torreta pan/tilt
 - `POST /cameras/{camera_id}/config/recording` — la grabación de clips
@@ -312,8 +314,8 @@ bloques que contestan casi siempre:
 
 ```jsonc
 "gpu_keepalive": {
-  "gpu_clock_pct": 98, "warming": true,
-  "dummies": 344, "dummies_skipped": 0
+  "gpu_clock_pct": 98, "warming": true, "interval_sec": 0.005,
+  "dummies": 344, "dummy_ms": 30.7, "dummies_skipped": 0
 },
 "inference_health": {
   "raw_dets": 2, "dets_after_tracker": 2,
@@ -328,6 +330,7 @@ bloques que contestan casi siempre:
 | Cajas absurdas, o deja de detectar tras un rato | `corrupt_detections` y `gpu_clock_pct`. Por debajo de ~95 la GPU se ha dormido y devuelve basura (bug de P-state de la GTX 1080); el detalle en `GET /gpu` |
 | La inferencia va 2-3 veces más lenta de lo normal | Lo mismo: es el reloj, no el modelo |
 | Detecta poco, pero limpio | `last_conf_range`. Si ronda tu `confidence`, es cuestión de umbral o de modelo, no un fallo |
+| Una sola cámara se come media GPU | `dummies` contra `frames_inferred`. Si van casi a la par, estás pagando dos inferencias por frame: `dummy_ms` suele ser igual o mayor que `last_inference_ms`. Con `corrupt_detections` a 0 el keep-alive no te está protegiendo de nada, así que sube el `keepalive_interval_sec` de esa cámara por encima de su hueco entre frames (`1/pipeline_fps - last_inference_ms`) y deja de calentar |
 
 Si nada de eso lo aclara, `POST /cameras/{camera_id}/selftest` pasa el frame
 actual por cuatro caminos dentro del propio proceso (con tracker, sin tracker,

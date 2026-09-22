@@ -70,7 +70,7 @@ check("persistido a disco", any(c["camera_id"] == "cam" and c["confidence"] == 0
 print("\n=== 3. Reenviar la config entera (el ejemplo de Swagger) no relanza ===")
 s = fresh()
 full = s.cfg.model_dump(include=set(_main.InferenceConfig.model_fields))
-check("el ejemplo cubre todos los campos", set(full) == {"confidence", "imgsz", "always_infer", "classes", "model_name", "device"}, str(full))
+check("el ejemplo cubre todos los campos", set(full) == {"confidence", "imgsz", "always_infer", "classes", "model_name", "device", "keepalive_interval_sec"}, str(full))
 r = client.post(URL, json=full)
 check("200", r.status_code == 200, r.text[:120])
 check("no relaunched", r.json()["relaunched"] is False)
@@ -111,6 +111,48 @@ check("con los valores reales", ex.get("otra", {}).get("value", {}).get("confide
 check("solo campos de inferencia", "stream_url" not in ex.get("cam", {}).get("value", {}))
 _registry.CAMERAS.pop("otra", None)
 check("se regenera en cada carga", set(examples()) == {"cam"})
+_registry.CAMERAS.pop("cam", None)
+
+print("\n=== 8. keepalive_interval_sec: por cámara, en caliente y acotado ===")
+s = fresh()
+check("defecto = la constante medida",
+      s.cfg.keepalive_interval_sec == camera.KEEPALIVE_INTERVAL_SEC,
+      f"({s.cfg.keepalive_interval_sec})")
+
+# Subirlo por encima del hueco entre frames es la forma de apagar el keep-alive
+# en una cámara cuyo modelo ya mantiene despierta la GPU. No debe relanzar: se
+# relee en cada vuelta del bucle, y relanzar cortaría el stream por un ajuste
+# que no lo necesita.
+r = client.post(URL, json={"keepalive_interval_sec": 0.06})
+check("200", r.status_code == 200, r.text[:120])
+check("aplicado", s.cfg.keepalive_interval_sec == 0.06)
+check("NO relanza la sesión", r.json()["relaunched"] is False and _registry.CAMERAS["cam"] is s)
+check("visible en gpu_keepalive.interval_sec",
+      s.status()["gpu_keepalive"]["interval_sec"] == 0.06)
+check("persistido a disco", any(
+    c["camera_id"] == "cam" and c["keepalive_interval_sec"] == 0.06
+    for c in json.loads(_registry.CAMERAS_CONFIG_FILE.read_text())))
+
+r = client.post(URL, json={"keepalive_interval_sec": None, "confidence": 0.55})
+check("null = no tocar", r.status_code == 200 and s.cfg.keepalive_interval_sec == 0.06
+      and s.cfg.confidence == 0.55, r.text[:120])
+
+# 0 dejaría el bucle girando sin esperar; por encima de 1 s ya no es un
+# keep-alive, y además hay un camino de 1 s para cuando no toca calentar.
+for bad in (0, -0.01, 2.0):
+    r = client.post(URL, json={"keepalive_interval_sec": bad})
+    check(f"{bad} -> 422", r.status_code == 422, f"({r.status_code})")
+check("tras los rechazos, sin tocar", s.cfg.keepalive_interval_sec == 0.06)
+
+# Una cámara guardada por una versión anterior no trae la clave.
+old = camera.CameraConfig(**{k: v for k, v in s.cfg.model_dump().items()
+                             if k != "keepalive_interval_sec"})
+check("un cfg antiguo sin la clave coge el defecto",
+      old.keepalive_interval_sec == camera.KEEPALIVE_INTERVAL_SEC)
+
+check("ya no es global: no sale en /config",
+      "keepalive_interval_sec" not in client.get("/config").json(),
+      str(client.get("/config").json()))
 _registry.CAMERAS.pop("cam", None)
 
 print()
