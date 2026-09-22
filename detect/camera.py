@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import queue
 import re
 import socket
@@ -35,23 +34,9 @@ from recorder import ClipRecorder, RecordingConfig
 from servo_tracker import ServoConfig, ServoTracker
 
 
-# cuDNN: lo decide DETECT_CUDNN y nada más. Hubo detección automática de
-# arquitectura Pascal, y se quitó a propósito: una decisión explícita en una
-# variable de entorno se entiende de un vistazo y no depende de adivinar el
-# hardware.
-#
-# El motivo de poder apagarlo: en una GTX 1080 (Pascal), cuDNN produce
-# "CUDA misaligned address" de forma intermitente. En el resto de tarjetas
-# desactivarlo solo cuesta rendimiento (medido aquí: 9,71 ms con cuDNN contra
-# 11,49 sin él, y en arquitecturas más nuevas se espera peor), por eso el
-# defecto es tenerlo activado.
-_cudnn_off = os.environ.get("DETECT_CUDNN", "").strip().lower() in ("off", "0", "false")
-if _cudnn_off:
-    torch.backends.cudnn.enabled = False
-    print("cuDNN desactivado por DETECT_CUDNN")
-else:
-    print("cuDNN activado. Si ves 'CUDA misaligned address' o detecciones "
-          "erráticas en una GTX 10xx (Pascal), arranca con DETECT_CUDNN=off")
+# cuDNN NO se configura aquí: la decisión vive en `CUDNN_ENABLED`, arriba del
+# todo en main.py, que es el fichero que uno abre. Aquí estuvo antes, y también
+# como variable de entorno; las dos veces quedaba escondida.
 
 
 # Estilo de las cajas de detección

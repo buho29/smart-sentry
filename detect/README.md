@@ -57,21 +57,25 @@ python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_
 
 Debería imprimir `True` y el nombre de la tarjeta (p. ej. `NVIDIA GeForce GTX 1080`).
 
-> ### ⚠️ GTX 10xx (Pascal): arranca con `DETECT_CUDNN=off`
+> ### ⚠️ GTX 10xx (Pascal): pon `CUDNN_ENABLED = False`
 >
 > En una GTX 1080, cuDNN produce `CUDA misaligned address` de forma
-> intermitente. Por defecto cuDNN va **activado**, porque desactivarlo cuesta
-> rendimiento en cualquier otra tarjeta (medido: 9,71 ms con cuDNN contra 11,49
-> sin él). Si tienes una Pascal:
+> intermitente, y las detecciones salen erráticas sin que nada llegue a dar
+> error. Por defecto va **activado**, porque desactivarlo cuesta rendimiento en
+> cualquier otra tarjeta (medido: 9,71 ms con cuDNN contra 11,49 sin él).
 >
-> ```powershell
-> $env:DETECT_CUDNN = "off"
-> venv\Scripts\python.exe supervisor.py
+> Si tienes una Pascal, edita **`main.py`**, al principio del fichero:
+>
+> ```python
+> CUDNN_ENABLED = False
 > ```
 >
-> El servicio dice siempre en el log en qué modo arrancó. No hay detección
-> automática de arquitectura a propósito: una variable explícita se entiende de
-> un vistazo y no depende de adivinar el hardware.
+> Y la **misma línea** en `test/barrido_modelos.py`, que no pasa por `main.py`
+> y es el único script que hace inferencia sostenida.
+>
+> El servicio dice siempre en el log en qué modo arrancó y dónde cambiarlo. No
+> hay detección automática de arquitectura a propósito: una constante a la
+> vista se entiende de un vistazo y no depende de adivinar el hardware.
 
 ### Resto de dependencias
 

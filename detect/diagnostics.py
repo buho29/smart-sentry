@@ -60,9 +60,9 @@ def gpu_report() -> dict:
         out["device_count"] = torch.cuda.device_count()
     except Exception:
         out["name"] = None
-    # cuDNN lo decide DETECT_CUDNN, no una detección de arquitectura. Se expone
-    # porque una GTX 10xx (Pascal) con cuDNN activo da "CUDA misaligned
-    # address" de forma intermitente, y esto es lo primero que hay que mirar.
+    # cuDNN lo decide `CUDNN_ENABLED`, arriba del todo en main.py. Se expone
+    # aquí porque una GTX 10xx (Pascal) con cuDNN activo da "CUDA misaligned
+    # address" de forma intermitente, y es lo primero que hay que mirar.
     out["cudnn_enabled"] = torch.backends.cudnn.enabled
 
     try:

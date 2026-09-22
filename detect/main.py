@@ -53,6 +53,30 @@ from registry import (
 from servo_tracker import ServoConfig, ServoTracker
 
 
+# ---------------------------------------------------------------------------
+# cuDNN
+# ---------------------------------------------------------------------------
+# PONLO A False SI TU GPU ES UNA GTX 10xx (Pascal): con cuDNN activo produce
+# "CUDA misaligned address" de forma intermitente, y las detecciones salen
+# erráticas sin que nada llegue a dar error.
+#
+# En cualquier otra tarjeta déjalo a True: desactivarlo solo cuesta rendimiento
+# (medido aquí: 9,71 ms con cuDNN contra 11,49 sin él, y en arquitecturas más
+# nuevas se espera peor, porque cuDNN aporta más).
+#
+# Vive aquí, y no en camera.py ni en una variable de entorno, porque es un
+# ajuste que se toca una vez por máquina al instalar: a la vista en el fichero
+# que uno abre. OJO si cambias esto: `test/barrido_modelos.py` no pasa por
+# main.py y lleva su propia copia de esta línea.
+CUDNN_ENABLED = True
+
+torch.backends.cudnn.enabled = CUDNN_ENABLED
+print(f"cuDNN {'activado' if CUDNN_ENABLED else 'desactivado'} "
+      f"(CUDNN_ENABLED en main.py)"
+      + (". Si ves 'CUDA misaligned address' o detecciones erráticas en una "
+         "GTX 10xx (Pascal), ponlo a False" if CUDNN_ENABLED else ""))
+
+
 # Hilo de retención de clips. Uno solo para todo el servicio: el tope en GB es
 # del disco, no de cada cámara.
 SWEEPER: Optional[RetentionSweeper] = None

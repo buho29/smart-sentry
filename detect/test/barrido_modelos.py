@@ -40,11 +40,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 import requests  # noqa: E402
+import torch  # noqa: E402
 
-# Importar camera trae get_model y, de paso, el `cudnn.enabled = False` que el
-# servicio necesita en la GTX 1080: así se mide en las MISMAS condiciones que
-# corre en producción, que es todo el objetivo.
 from camera import get_model  # noqa: E402
+
+# Espejo de CUDNN_ENABLED en main.py: **ponlo igual que allí**. Este script no
+# pasa por main.py y es el único de test/ que hace inferencia sostenida, que es
+# donde el fallo de Pascal asoma. Y además hay que medir en las MISMAS
+# condiciones en las que corre el servicio, o los milisegundos no valen nada.
+CUDNN_ENABLED = True
+torch.backends.cudnn.enabled = CUDNN_ENABLED
 
 
 RAIZ = Path(__file__).resolve().parent.parent / "barridos"
