@@ -241,6 +241,14 @@ class GlobalConfig:
         Aviso: lo guardado MANDA sobre los valores por defecto del código, así
         que un defecto que cambie en una versión nueva no llega a una máquina
         que ya tenga su fichero. Es el mismo trato que cameras_config.json.
+
+        Por eso **cada valor se valida contra el tipo del defecto** antes de
+        aceptarlo, y el que no cuadra se ignora con un aviso. Sin esa
+        comprobación pasó algo concreto: `keepalive_enabled` llegó a admitir la
+        cadena `"auto"`, se guardó en disco, y cuando el código pasó a aceptar
+        solo booleanos el fichero seguía resucitando el `"auto"` en cada
+        arranque. Un fichero viejo no puede reintroducir una opción que ya no
+        existe.
         """
         if not GLOBAL_CONFIG_FILE.exists():
             return
@@ -250,10 +258,37 @@ class GlobalConfig:
             print(f"No se pudo leer {GLOBAL_CONFIG_FILE}: {e!r}; "
                   f"se usan los valores por defecto")
             return
+        if not isinstance(data, dict):
+            print(f"{GLOBAL_CONFIG_FILE.name} no contiene un objeto JSON; "
+                  f"se usan los valores por defecto")
+            return
+
+        defaults = GlobalConfig.__new__(GlobalConfig)
+        GlobalConfig.__init__(defaults)     # los defectos del código, sin tocar self
+        ignored = []
         for k in self._PERSISTED:
-            if k in data:
-                setattr(self, k, data[k])
+            if k not in data:
+                continue
+            value, expected = data[k], type(getattr(defaults, k))
+            if expected is bool:
+                ok = isinstance(value, bool)
+            elif expected is float:
+                # JSON escribe 3 donde el defecto es 3.0, así que un int vale;
+                # un bool NO, aunque Python lo considere subclase de int.
+                ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+                if ok:
+                    value = float(value)
+            else:
+                ok = isinstance(value, expected)
+            if ok:
+                setattr(self, k, value)
+            else:
+                ignored.append(f"{k}={data[k]!r}")
+
         print(f"Ajustes globales cargados desde {GLOBAL_CONFIG_FILE.name}")
+        if ignored:
+            print(f"  valores ignorados por no ser válidos (se usa el defecto): "
+                  f"{', '.join(ignored)}")
 
 
 GLOBAL_CONFIG_FILE = Path(__file__).with_name("global_config.json")

@@ -68,7 +68,7 @@ from servo_tracker import ServoConfig, ServoTracker
 # ajuste que se toca una vez por máquina al instalar: a la vista en el fichero
 # que uno abre. OJO si cambias esto: `test/barrido_modelos.py` no pasa por
 # main.py y lleva su propia copia de esta línea.
-CUDNN_ENABLED = True
+CUDNN_ENABLED = False
 
 torch.backends.cudnn.enabled = CUDNN_ENABLED
 print(f"cuDNN {'activado' if CUDNN_ENABLED else 'desactivado'} "

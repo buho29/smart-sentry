@@ -274,6 +274,42 @@ check("un global_config.json viejo carga ignorando lo que sobra",
       and camera.GLOBAL_CONFIG.keepalive_idle_limit_sec == 9.0)
 check("y no se cuelan las claves muertas como atributos",
       not hasattr(camera.GLOBAL_CONFIG, "keepalive_clock_ratio"))
+
+# El caso que el test anterior NO cubria, y que se escapo en produccion: una
+# clave que SI existe pero con un valor de un tipo que el codigo ya no acepta.
+# keepalive_enabled admitio la cadena "auto", se guardo en disco, y al pasar a
+# solo booleanos el fichero la resucitaba en cada arranque.
+camera.GLOBAL_CONFIG_FILE.write_text(
+    '{"keepalive_enabled": "auto", "keepalive_idle_limit_sec": "tres"}',
+    encoding="utf-8")
+camera.GLOBAL_CONFIG.keepalive_enabled = True
+camera.GLOBAL_CONFIG.keepalive_idle_limit_sec = 3.0
+camera.GLOBAL_CONFIG.load()
+check("un 'auto' guardado NO resucita: se ignora y manda el defecto",
+      camera.GLOBAL_CONFIG.keepalive_enabled is True,
+      f"({camera.GLOBAL_CONFIG.keepalive_enabled!r})")
+check("y un numero mal escrito tampoco",
+      camera.GLOBAL_CONFIG.keepalive_idle_limit_sec == 3.0,
+      f"({camera.GLOBAL_CONFIG.keepalive_idle_limit_sec!r})")
+
+# Un entero donde se espera float SI vale: JSON escribe 3 donde el defecto es
+# 3.0. Un bool no, aunque Python lo considere subclase de int.
+camera.GLOBAL_CONFIG_FILE.write_text(
+    '{"keepalive_idle_limit_sec": 12}', encoding="utf-8")
+camera.GLOBAL_CONFIG.load()
+check("un int donde se espera float se acepta y se convierte",
+      camera.GLOBAL_CONFIG.keepalive_idle_limit_sec == 12.0
+      and isinstance(camera.GLOBAL_CONFIG.keepalive_idle_limit_sec, float))
+camera.GLOBAL_CONFIG_FILE.write_text(
+    '{"keepalive_idle_limit_sec": true}', encoding="utf-8")
+camera.GLOBAL_CONFIG.load()
+check("pero un bool donde se espera float, no",
+      camera.GLOBAL_CONFIG.keepalive_idle_limit_sec == 12.0)
+
+camera.GLOBAL_CONFIG_FILE.write_text('[1, 2, 3]', encoding="utf-8")
+camera.GLOBAL_CONFIG.load()
+check("un JSON que no es un objeto tampoco rompe nada",
+      camera.GLOBAL_CONFIG.keepalive_enabled is True)
 camera.GLOBAL_CONFIG.keepalive_enabled = True
 camera.GLOBAL_CONFIG.keepalive_idle_limit_sec = 3.0
 camera.GLOBAL_CONFIG_FILE = _old_file
