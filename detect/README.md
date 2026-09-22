@@ -57,8 +57,21 @@ python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_
 
 Debería imprimir `True` y el nombre de la tarjeta (p. ej. `NVIDIA GeForce GTX 1080`).
 
-> **Nota GTX 1080 (Pascal):** `camera.py` fuerza `torch.backends.cudnn.enabled = False`
-> para evitar el error `CUDA misaligned address` con cuDNN en esta GPU.
+> ### ⚠️ GTX 10xx (Pascal): arranca con `DETECT_CUDNN=off`
+>
+> En una GTX 1080, cuDNN produce `CUDA misaligned address` de forma
+> intermitente. Por defecto cuDNN va **activado**, porque desactivarlo cuesta
+> rendimiento en cualquier otra tarjeta (medido: 9,71 ms con cuDNN contra 11,49
+> sin él). Si tienes una Pascal:
+>
+> ```powershell
+> $env:DETECT_CUDNN = "off"
+> venv\Scripts\python.exe supervisor.py
+> ```
+>
+> El servicio dice siempre en el log en qué modo arrancó. No hay detección
+> automática de arquitectura a propósito: una variable explícita se entiende de
+> un vistazo y no depende de adivinar el hardware.
 
 ### Resto de dependencias
 
@@ -215,9 +228,8 @@ el siguiente `/start`, aunque la placa despierte o reconecte y republique
 
 - `GET /health` — vivo / no vivo
 - `GET /config`, `POST /config/keepalive` — keep-alive de GPU, global y
-  **persistido** en `global_config.json`. Los campos que no mandes **no se
-  tocan**. `enabled` (`auto` = activo solo en GPU Pascal, que es donde existe
-  el bug), `interval_sec`, `clock_ratio` y `idle_limit_sec`; ver
+  **persistido** en `global_config.json`. Dos campos, `enabled` e
+  `idle_limit_sec`, y los que no mandes **no se tocan**; ver
   [`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md)
 - `GET /gpu` — relojes, P-state, temperatura y memoria de la tarjeta
 - `GET /cameras`, `POST /cameras`, `DELETE /cameras/{camera_id}` — alta/baja
@@ -232,10 +244,6 @@ Los ajustes de una cámara cuelgan de `/config/`:
   envías (recarga `/docs` para ver cambios recientes). Lo que no se envía se
   conserva, `classes: null` = todas las clases, y cambiar `model_name` o
   `device` relanza los hilos solo. El resto van por formulario:
-- `POST /cameras/{camera_id}/config/keepalive` — override de `enabled` e
-  `interval_sec` solo para esta cámara (vacío = heredar el global). El
-  intervalo es por cámara porque el coste del dummy es el de **su** modelo:
-  9,3 ms con `yolo26n` contra 37,2 con `yolo26m`
 - `POST /cameras/{camera_id}/config/stream` — `default_infer`
 - `POST /cameras/{camera_id}/config/servo` — la torreta pan/tilt
 - `POST /cameras/{camera_id}/config/recording` — la grabación de clips

@@ -199,31 +199,25 @@ async def gpu_status():
 
 @app.post("/config/keepalive")
 async def set_global_keepalive(
-    enabled: Optional[str] = Form(None, description="'auto' (recomendado: activo solo en GPU Pascal, que es donde existe el bug), 'true' o 'false'. Vacío = no tocar. En una tarjeta sana el keep-alive sube la ocupación de GPU del 18 % al 64 % sin ganar nada."),
-    interval_sec: Optional[float] = Form(None, gt=0.0, description="Cada cuánto se comprueba si hay que calentar mientras se espera un frame. Vacío = no tocar. Se puede sobrescribir por cámara, que es lo suyo porque el coste del dummy depende del modelo."),
-    clock_ratio: Optional[float] = Form(None, gt=0.0, le=1.0, description="Fracción del reloj máximo observado por debajo de la cual se calienta. Vacío = no tocar. Va alto (0.95) a propósito: la regla es 'calienta salvo que la GPU esté en su tope sostenido'. A 0.7 esta GTX 1080 pasó de 1 a 58 detecciones corruptas."),
+    enabled: Optional[bool] = Form(None, description="Mantener la GPU ocupada con inferencias mínimas entre frames, para que el driver no le baje los relojes y devuelva detecciones corruptas. Vacío = no tocar. Ojo: en una tarjeta que ya sostenga sus relojes esto solo gasta."),
     idle_limit_sec: Optional[float] = Form(None, gt=0.0, description="Segundos sin recibir ningún frame tras los cuales se deja de calentar: si la cámara no da imagen, ocupar la GPU es gastar para nada. Vacío = no tocar."),
 ):
     """Keep-alive de GPU, global para todas las cámaras. **Se persiste.**
 
-    Los campos vacíos **no se tocan**. Antes todos tenían valor por defecto, así
-    que una llamada parcial —solo `enabled`, por ejemplo— reseteaba los demás en
-    silencio.
+    Los campos vacíos **no se tocan**: una llamada parcial no resetea el resto.
 
-    Cada cámara puede sobrescribir `enabled` e `interval_sec` para ella sola en
-    `POST /cameras/{camera_id}/config/keepalive`. El ratio de reloj y el tiempo
-    de reposo son de aquí: el primero es una propiedad de la tarjeta y el
-    segundo no depende del modelo.
+    Es todo lo que hay. El intervalo entre comprobaciones es una constante del
+    código (`KEEPALIVE_INTERVAL_SEC`, 0,005 s) porque es un valor medido, no una
+    preferencia: a 0,01 esta GTX 1080 se quedaba en 847 MHz y daba 570
+    detecciones corruptas en 48.967 frames.
+
+    Y conviene saber lo que este workaround **no** hace: no arregla el problema
+    de fondo. Con un modelo ligero (`yolo26n`) seguían saliendo 6 corrupciones
+    por minuto aun con el keep-alive activo. Lo que lo resuelve es usar un
+    modelo lo bastante pesado como para que la GPU no se duerma sola.
     """
     if enabled is not None:
-        valor = enabled.strip().lower()
-        if valor not in ("auto", "true", "false"):
-            raise HTTPException(422, "enabled debe ser 'auto', 'true' o 'false'")
-        GLOBAL_CONFIG.keepalive_enabled = valor if valor == "auto" else (valor == "true")
-    if interval_sec is not None:
-        GLOBAL_CONFIG.keepalive_interval_sec = interval_sec
-    if clock_ratio is not None:
-        GLOBAL_CONFIG.keepalive_clock_ratio = clock_ratio
+        GLOBAL_CONFIG.keepalive_enabled = enabled
     if idle_limit_sec is not None:
         GLOBAL_CONFIG.keepalive_idle_limit_sec = idle_limit_sec
     GLOBAL_CONFIG.save()
@@ -270,7 +264,6 @@ async def add_camera(
     classes: Optional[str] = Form(None, description="IDs de clase COCO separados por comas a los que limitar la detección (0 = personas, 16 = pájaros). Vacío = todas."),
     default_infer: bool = Form(True, description="Qué devuelven /stream y /snapshot cuando no se pasa ?infer=: true = anotado, false = crudo."),
     always_infer: bool = Form(True, description="Correr YOLO aunque nadie mire el stream, para que la cámara siga detectando con el navegador cerrado. A false ahorra GPU en una cámara que solo sirva vídeo."),
-    keepalive_enabled: Optional[bool] = Form(None, description="Override del keep-alive de GPU para esta cámara. Vacío = usar el global de /config/keepalive."),
     noise_psk: Optional[str] = Form(None, description="api.encryption.key del YAML de la placa. Si se rellena, la sesión abre además la API nativa de ESPHome y arranca/para siguiendo el sensor de estado."),
     esphome_state_object_id: str = Form("awake", description="object_id del sensor de la placa que dice si está despierta."),
 ):
@@ -284,7 +277,6 @@ async def add_camera(
         camera_id=camera_id, stream_url=stream_url,
         model_name=model_name, device=_validate_device(device),
         confidence=confidence, imgsz=imgsz, classes=_parse_classes(classes),
-        keepalive_enabled=keepalive_enabled,
         default_infer=default_infer, always_infer=always_infer,
         noise_psk=noise_psk or None,
         esphome_state_object_id=esphome_state_object_id,
@@ -465,26 +457,9 @@ def _openapi_with_camera_examples():
 app.openapi = _openapi_with_camera_examples
 
 
-@app.post("/cameras/{camera_id}/config/keepalive")
-async def set_camera_keepalive(
-    camera_id: str,
-    enabled: Optional[bool] = Form(None, description="Override del keep-alive de GPU solo para esta cámara. Vacío = seguir el global."),
-    interval_sec: Optional[float] = Form(None, gt=0.0, description="Override del intervalo solo para esta cámara. Vacío = seguir el global. Tiene sentido por cámara porque el coste del dummy es el de su modelo: medido, 9,3 ms con yolo26n contra 37,2 con yolo26m."),
-):
-    """Overrides del keep-alive para una cámara concreta.
-
-    Ambos campos vacíos = esta cámara sigue lo que diga `GET /config`. Se
-    persisten en `cameras_config.json` junto al resto de su configuración.
-
-    El ratio de reloj y el tiempo de reposo no se pueden sobrescribir aquí: el
-    primero es propiedad de la tarjeta (dos cámaras sobre la misma GPU con
-    ratios distintos se pelearían) y el segundo no depende del modelo.
-    """
-    session = get_camera(camera_id)
-    session.cfg.keepalive_enabled = enabled
-    session.cfg.keepalive_interval_sec = interval_sec
-    save_cameras_to_disk()
-    return session.status()
+# El keep-alive ya no se puede ajustar por cámara: hubo overrides
+# (`POST /cameras/{id}/config/keepalive`) y se quitaron con el resto de la
+# maquinaria. Es global, en `POST /config/keepalive`.
 
 
 # ---------------------------------------------------------------------------

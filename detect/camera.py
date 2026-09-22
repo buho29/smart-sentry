@@ -35,44 +35,23 @@ from recorder import ClipRecorder, RecordingConfig
 from servo_tracker import ServoConfig, ServoTracker
 
 
-def _is_pascal(index: int = 0) -> bool:
-    """¿Es una GPU de la era Pascal (GTX 10xx, compute capability 6.x)?
-
-    Es la familia con los dos fallos que este proyecto rodea: el "CUDA
-    misaligned address" de cuDNN y el de P-state, que devuelve inferencias
-    corrupt cuando la tarjeta baja de relojes. En cualquier otra arquitectura
-    los dos workarounds solo cuestan rendimiento, así que conviene detectarla en
-    vez de imponérselos a todo el mundo: este repositorio es público.
-    """
-    try:
-        if not torch.cuda.is_available():
-            return False
-        return torch.cuda.get_device_capability(index)[0] == 6
-    except Exception:
-        return False
-
-
-def _any_pascal() -> bool:
-    try:
-        return any(_is_pascal(i) for i in range(torch.cuda.device_count()))
-    except Exception:
-        return False
-
-
-# cuDNN desactivado SOLO donde hace falta. En la GTX 1080 evita el "CUDA
-# misaligned address"; en el resto cuesta rendimiento y nada más (medido aquí:
-# 9,71 ms con cuDNN contra 11,49 sin él, y en arquitecturas más nuevas se espera
-# peor, porque cuDNN aporta más). DETECT_CUDNN=on|off lo fuerza en los dos
-# sentidos, por si alguien tiene una tarjeta con síntomas parecidos.
-_cudnn_env = os.environ.get("DETECT_CUDNN", "").strip().lower()
-if _cudnn_env in ("on", "off"):
-    torch.backends.cudnn.enabled = (_cudnn_env == "on")
-    print(f"cuDNN {'activado' if _cudnn_env == 'on' else 'desactivado'} "
-          f"por DETECT_CUDNN")
-elif _any_pascal():
+# cuDNN: lo decide DETECT_CUDNN y nada más. Hubo detección automática de
+# arquitectura Pascal, y se quitó a propósito: una decisión explícita en una
+# variable de entorno se entiende de un vistazo y no depende de adivinar el
+# hardware.
+#
+# El motivo de poder apagarlo: en una GTX 1080 (Pascal), cuDNN produce
+# "CUDA misaligned address" de forma intermitente. En el resto de tarjetas
+# desactivarlo solo cuesta rendimiento (medido aquí: 9,71 ms con cuDNN contra
+# 11,49 sin él, y en arquitecturas más nuevas se espera peor), por eso el
+# defecto es tenerlo activado.
+_cudnn_off = os.environ.get("DETECT_CUDNN", "").strip().lower() in ("off", "0", "false")
+if _cudnn_off:
     torch.backends.cudnn.enabled = False
-    print("GPU Pascal detectada: cuDNN desactivado "
-          "(workaround del 'CUDA misaligned address')")
+    print("cuDNN desactivado por DETECT_CUDNN")
+else:
+    print("cuDNN activado. Si ves 'CUDA misaligned address' o detecciones "
+          "erráticas en una GTX 10xx (Pascal), arranca con DETECT_CUDNN=off")
 
 
 # Estilo de las cajas de detección
@@ -213,100 +192,49 @@ def _force_close_response(resp: "requests.Response", tag: str = ""):
 # Config global, modificable en runtime vía API
 # ---------------------------------------------------------------------------
 
+# Cada cuánto se mira si hay que calentar mientras se espera el frame
+# siguiente. Constante y no configurable: es un valor medido, no una
+# preferencia. Estuvo en 0,01 y la GPU se quedaba en 847 MHz dando **570
+# detecciones corruptas en 48.967 frames**; a 0,005 el reloj se sostiene en
+# ~1290 MHz y salieron **cero en 4147 frames seguidos**.
+#
+# El motivo es que el driver decide por utilización, no por si le lanzas
+# kernels: con huecos de 10 ms ve la tarjeta ociosa —`nvidia-smi` lo dice
+# literalmente, "Clocks Event Reasons -> Idle: Active" con 45 W de 210— y baja
+# los relojes. Hay que no dejarle hueco.
+KEEPALIVE_INTERVAL_SEC = 0.005
+
+
 class GlobalConfig:
     def __init__(self):
-        # "auto" = activo solo en GPU Pascal, que es donde existe el bug de
-        # P-state. En una tarjeta sana el keep-alive llena los huecos entre
-        # frames con inferencias inútiles: medido aquí, la ocupación de GPU pasa
-        # del 18 % al 64 % sin ganar nada. True/False lo fuerzan.
-        self.keepalive_enabled: "bool | str" = "auto"
-        # Cada cuánto se lanza una inferencia dummy mientras se espera el frame
-        # siguiente. Estuvo en 0.05 y era DEMASIADO LARGO: con la cámara a 16,7
-        # fps (60 ms por frame) y una inferencia de ~20 ms, el frame siguiente
-        # llegaba siempre antes del timeout, así que `queue.Empty` no saltaba
-        # casi nunca y el keep-alive no se ejecutaba (19 dummies en 11.280
-        # frames). La GPU se pasaba dormida dos tercios de cada ciclo y caía a
-        # P5 / 759 MHz de los 1961 de la GTX 1080.
-        #
-        # El efecto no era solo lentitud: a esos relojes la inferencia salía
-        # CORRUPTA, con confianzas fuera de [0,1] (se midió un 1.812) y frames
-        # enteros sin detectar a una persona que estaba delante. Es el bug de
-        # P-state que reproduce test/gpu_yolo_stress_test.py.
-        #
-        # Medido al bajarlo a 0.005, en caliente y con la misma escena:
-        #   759 MHz (P5) -> 1265 MHz (P2), 22,2 ms -> 9,8-16,6 ms,
-        #   y las confianzas volvieron a 0,71-0,91.
-        #
-        # MEDIDO, no razonado. Estuvo en 0.01 con el argumento de que "el reloj
-        # ya decide si se calienta, así que basta con mirar de vez en cuando", y
-        # era falso: con 0.01 la GPU se quedaba en 847 MHz (P5) y salían **570
-        # detecciones corruptas en 48.967 frames** (1,16 %), con el keep-alive
-        # disparando 54.753 veces sin conseguir nada.
-        #
-        # A 0.005, misma cámara y mismo modelo: el reloj se sostiene en ~1290
-        # MHz y **cero corrupciones en 4147 frames** seguidos, con la inferencia
-        # bajando de 18,5 a ~12 ms.
-        #
-        # El motivo es que el driver decide por utilización: con huecos de 10 ms
-        # entre dummies ve la GPU ociosa (`nvidia-smi` lo dice literalmente:
-        # "Clocks Event Reasons -> Idle: Active", con 45 W de 210) y baja los
-        # relojes. Hay que no dejarle hueco.
-        #
-        # Se puede subir por cámara si su modelo es lento: el dummy cuesta lo
-        # mismo que una inferencia, y con uno pesado no cabe en el hueco.
-        self.keepalive_interval_sec: float = 0.005
+        # Un interruptor y ya. Hubo un modo "auto" que lo activaba solo en GPU
+        # Pascal, y gobierno por relojes vía NVML para decidir cuándo calentar.
+        # Todo eso se quitó: era mucha maquinaria para afinar un workaround que
+        # **no llega a arreglar el problema** — con `yolo26n` y el keep-alive
+        # activo seguían saliendo 6 detecciones corruptas por minuto. Lo que de
+        # verdad lo resuelve es usar un modelo lo bastante pesado como para que
+        # la GPU no se duerma (`yolo26m`: 0 corrupciones en 4935 frames).
+        self.keepalive_enabled: bool = True
         # Segundos sin recibir un frame real tras los cuales se deja de
         # calentar la GPU. El keep-alive solo tiene sentido ENTRE frames de un
         # stream vivo (huecos de decenas de ms); pasado este plazo la cámara no
-        # está dando nada y seguir lanzando inferencias dummy a 20 Hz es quemar
-        # la GPU para nada.
+        # está dando nada y seguir lanzando inferencias dummy es quemar la GPU
+        # para nada.
         self.keepalive_idle_limit_sec: float = 3.0
-        # Fracción del reloj MÁXIMO OBSERVADO por debajo de la cual se
-        # considera que la GPU se ha dormido. La lógica es "calienta salvo que
-        # la tarjeta esté prácticamente en su tope sostenido", no "calienta solo
-        # si ha caído un 30 %": por eso está tan alto.
-        #
-        # Estuvo en 0.7 y fue un error caro. Con el máximo observado en 1657 MHz
-        # el umbral quedaba en 1160, y esta GTX 1080 se sostiene en 1177 — justo
-        # por encima, así que no se calentaba NUNCA. Medido: 58 detecciones
-        # corrupt en 7486 frames, contra 1 en 5986 cuando sí calentaba.
-        #
-        # Puntos de operación medidos en esta tarjeta:
-        #   759 MHz  -> corrupción masiva, deja de detectar
-        #   1177 MHz -> 58 corrupt en 7486 frames
-        #   1290 MHz -> 1 corrupta en 5986 frames
-        #
-        # A 0.95 el umbral queda en ~1574 y se calienta siempre, que es lo
-        # correcto aquí. En una GPU sana que sostiene sus relojes, el actual es
-        # ~igual al observado y no se calienta nada: ahí está la portabilidad.
-        self.keepalive_clock_ratio: float = 0.95
         self.reconnect_delay_sec: float = 1.0
-
-    def resolve_keepalive(self) -> bool:
-        """`keepalive_enabled` ya resuelto: traduce "auto" a True/False."""
-        if isinstance(self.keepalive_enabled, bool):
-            return self.keepalive_enabled
-        return _any_pascal()
 
     def as_dict(self):
         return {
             "keepalive_enabled": self.keepalive_enabled,
-            "keepalive_resolved": self.resolve_keepalive(),
-            "keepalive_reason": (
-                "forzado por configuración" if isinstance(self.keepalive_enabled, bool)
-                else ("GPU Pascal detectada" if _any_pascal()
-                      else "no hay GPU Pascal: el workaround no hace falta")),
-            "keepalive_interval_sec": self.keepalive_interval_sec,
-            "keepalive_clock_ratio": self.keepalive_clock_ratio,
+            "keepalive_interval_sec": KEEPALIVE_INTERVAL_SEC,
             "keepalive_idle_limit_sec": self.keepalive_idle_limit_sec,
             "reconnect_delay_sec": self.reconnect_delay_sec,
         }
 
-    # Solo estos se guardan y se releen. `keepalive_resolved` y
-    # `keepalive_reason` son derivados: persistirlos significaría que una
-    # máquina que cambia de GPU arrastraría el veredicto de la anterior.
-    _PERSISTED = ("keepalive_enabled", "keepalive_interval_sec",
-                  "keepalive_clock_ratio", "keepalive_idle_limit_sec",
+    # Un global_config.json de una versión anterior traerá claves que ya no
+    # existen (keepalive_clock_ratio, keepalive_interval_sec...). No pasa nada:
+    # se recorre esta lista y lo que sobra se ignora.
+    _PERSISTED = ("keepalive_enabled", "keepalive_idle_limit_sec",
                   "reconnect_delay_sec")
 
     def save(self) -> None:
@@ -382,9 +310,9 @@ def _gpu_state(index: int = 0) -> dict:
             _nvml_handles[index] = pynvml.nvmlDeviceGetHandleByIndex(index)
         _nvml_handle = _nvml_handles[index]
         clock = pynvml.nvmlDeviceGetClockInfo(_nvml_handle, pynvml.NVML_CLOCK_SM)
-        # El máximo observado se actualiza AQUÍ y no solo en gpu_underclocked:
-        # si no, cualquier lector (gpu_clock_pct, GET /gpu) veía un máximo a
-        # cero mientras el bucle de vídeo no hubiera arrancado todavía.
+        # El máximo observado se actualiza en cada lectura, para que cualquiera
+        # que pregunte (gpu_clock_pct, GET /gpu) tenga referencia desde el
+        # primer momento y no un cero.
         global _sm_clock_max_seen
         _sm_clock_max_seen = max(_sm_clock_max_seen, clock)
         return {
@@ -412,20 +340,23 @@ def _is_corrupt(d: Detection) -> bool:
             or not all(map(math.isfinite, (d.x1, d.y1, d.x2, d.y2))))
 
 
-_gpu_slow_cache = (0.0, False)
-# Reloj más alto visto desde que arrancó el proceso. Se usa como referencia en
-# vez del máximo teórico de NVML: ese es el de P0, y bajo carga de cómputo una
-# GTX 1080 se queda en P2 con un techo bastante más bajo (medido: ~1290 MHz
-# frente a los 1961 que declara).
+# Reloj más alto visto desde que arrancó el proceso. Solo para diagnóstico: la
+# referencia buena no es el máximo teórico de NVML, que es el de P0, sino lo que
+# la tarjeta alcanza de verdad bajo carga de cómputo (medido aquí: ~1290 MHz en
+# P2 frente a los 1961 que declara).
 _sm_clock_max_seen = 0
 
 
 def gpu_clock_pct(index: int = 0) -> Optional[int]:
     """Reloj actual como % del máximo observado. None si no hay lecturas.
 
-    Un solo número que resume el estado de la GPU para `/status`: 100 es "a
-    pleno rendimiento", y por debajo del `keepalive_clock_ratio` (95) es donde
-    esta GTX 1080 empieza a devolver inferencias corruptas.
+    Un número que resume el estado de la GPU en `/status`: 100 es a pleno
+    rendimiento, y por debajo de ~60 esta GTX 1080 empieza a devolver
+    inferencias corruptas.
+
+    **Es diagnóstico, no gobierna nada.** Hubo una versión en la que el
+    keep-alive decidía leyendo esto por NVML, y se quitó: mucha maquinaria para
+    afinar un workaround que no llegaba a arreglar el problema de fondo.
     """
     current = _gpu_state(index).get("sm_clock_mhz")
     if not current or not _sm_clock_max_seen:
@@ -433,62 +364,28 @@ def gpu_clock_pct(index: int = 0) -> Optional[int]:
     return round(100 * current / _sm_clock_max_seen)
 
 
-def gpu_underclocked(ratio: float = 0.95, max_age_sec: float = 0.5) -> bool:
-    """¿Está la GPU por debajo de su tope sostenido, o sea a punto de dar basura?
-
-    Es la señal que gobierna el keep-alive. Antes se aproximaba por "segundos
-    sin frame", que no es lo mismo y fallaba justo en el caso que importaba:
-    con un modelo rápido llegaban frames sin parar y aun así la GPU se dormía
-    entre uno y otro.
-
-    Se cachea porque esto se consulta en el bucle de vídeo y NVML no es gratis.
-    Medio segundo es de sobra: las transiciones de P-state van en esa escala.
-
-    **Sin lecturas de reloj devuelve False.** Antes devolvía True ("mejor
-    proteger"), y era el peor defecto posible fuera de NVIDIA: en una AMD con
-    ROCm PyTorch también llama "cuda" al device, así que el keep-alive se
-    quedaba disparando de forma permanente en una tarjeta que no lo necesita.
-    Quien sí lo necesite sigue cubierto por el criterio de tiempo sin frames,
-    que es independiente de esto.
-    """
-    global _gpu_slow_cache, _sm_clock_max_seen
-    now = time.monotonic()
-    seen, value = _gpu_slow_cache
-    if now - seen < max_age_sec:
-        return value
-    current = _gpu_state().get("sm_clock_mhz")
-    if not current:
-        value = False
-    else:
-        # Referencia: el reloj más alto que se ha visto de verdad.
-        _sm_clock_max_seen = max(_sm_clock_max_seen, current)
-        value = current < ratio * _sm_clock_max_seen
-    _gpu_slow_cache = (now, value)
-    return value
-
-
 def _should_keepalive(is_cuda: bool, enabled: bool, seconds_since_frame: float,
-                      idle_limit: float, has_inference: bool,
-                      gpu_slow: bool = True) -> bool:
-    """¿Hay que lanzar una inferencia dummy para que la GPU no baje de P-state?
+                      idle_limit: float, has_inference: bool) -> bool:
+    """¿Está el keep-alive activo ahora mismo?
 
-    Separado en una función pura para poder probar la lógica sin GPU. Ver el
-    comentario largo sobre el bug de P-state de la GTX 1080 encima de
-    _process_loop.
+    Tres condiciones y ninguna sorpresa: hay GPU, está encendido, va a haber
+    inferencia que proteger y la cámara sigue dando frames.
 
-    `has_inference` es lo que evita calentar para nada: el workaround protege
-    a las inferencias REALES de salir corrupt, así que si no va a haber
-    ninguna (always_infer a false, nadie mirando y ningún consumidor), tener la
-    GPU ocupada no protege nada.
+    `has_inference` es lo que evita calentar para nada: el workaround protege a
+    las inferencias REALES de salir corruptas, así que si no va a haber ninguna
+    (`always_infer` a false, nadie mirando y ningún consumidor), tener la GPU
+    ocupada no protege nada.
 
-    `gpu_slow` es lo que evita calentar de más. Con un modelo pesado la GPU se
-    mantiene despierta ella sola (el medium ocupa la mitad del tiempo entre
-    frames), así que lanzar dummies ahí solo sirve para robarle tiempo al
-    pipeline. Por defecto True para que quien no pueda medir los relojes se
-    comporte como antes.
+    Función pura a propósito, para poder probarla sin GPU.
+
+    Llegó a tener un sexto parámetro, `gpu_slow`, leído de NVML, y eso partía la
+    decisión en dos conceptos parecidos —"armado" y "calentando"— que se
+    confundieron en el bucle: el log acabó repitiendo "en pausa / reanudado" en
+    cada frame y llamando a warm_up() una vez por frame. Con una sola condición
+    ese fallo no se puede repetir.
     """
     return (is_cuda and enabled and has_inference
-            and seconds_since_frame < idle_limit and gpu_slow)
+            and seconds_since_frame < idle_limit)
 
 
 # ---------------------------------------------------------------------------
@@ -572,12 +469,6 @@ class CameraConfig(BaseModel):
     confidence: float = 0.5
     imgsz: int = 640
     classes: Optional[list[int]] = None  # None = todas las clases
-    # Overrides del keep-alive para ESTA cámara. None = hereda de GLOBAL_CONFIG.
-    keepalive_enabled: Optional[bool] = None
-    # El intervalo es por cámara porque el coste del dummy depende del modelo:
-    # medido, 9,3 ms con yolo26n y 37,2 ms con yolo26m. Un único valor global no
-    # puede ser bueno para las dos a la vez.
-    keepalive_interval_sec: Optional[float] = None
     default_infer: bool = True  # usado por /stream y /snapshot cuando no se pasa ?infer=
 
     # Correr YOLO aunque no haya nadie mirando el stream ni ningún consumidor
@@ -1237,23 +1128,6 @@ class CameraSession:
             # La instrumentación NO puede tumbar el pipeline de vídeo.
             print(f"[{self.cfg.camera_id}] no se pudo instrumentar el tracker: {e!r}")
 
-    def keepalive_setting(self, name: str):
-        """El ajuste del keep-alive de esta cámara, o el global si no lo tiene.
-
-        `CameraConfig` guarda los overrides como `Optional`, con None = heredar.
-        La resolución aparecía copiada en varios sitios y era justo el tipo de
-        detalle que se olvida en uno de ellos.
-
-        `keepalive_enabled` pasa además por `resolve_keepalive()`, que traduce
-        el "auto" del global (activo solo en GPU Pascal) a un bool.
-        """
-        own = getattr(self.cfg, name, None)
-        if own is not None:
-            return own
-        if name == "keepalive_enabled":
-            return GLOBAL_CONFIG.resolve_keepalive()
-        return getattr(GLOBAL_CONFIG, name)
-
     def latest_frame(self):
         """El último frame decodificado, tal cual lo vio la inferencia."""
         return self._latest_frame
@@ -1371,7 +1245,7 @@ class CameraSession:
         idle = False
 
         while not stop_event.is_set():
-            keepalive_on = self.keepalive_setting("keepalive_enabled")
+            keepalive_on = GLOBAL_CONFIG.keepalive_enabled
             # Se recalculan en cada vuelta y ANTES del get(), porque el
             # keep-alive necesita saber si va a haber inferencia para decidir si
             # calienta y cuánto espera. Releerlos cada vez es además lo que
@@ -1383,30 +1257,19 @@ class CameraSession:
             idle_limit = GLOBAL_CONFIG.keepalive_idle_limit_sec
             since_frame = time.monotonic() - last_frame
 
-            # DOS preguntas distintas, y confundirlas costó un bug: el bucle
-            # entraba y salía de "pausa" en cada frame, llenando el log y
-            # llamando a warm_up() una vez por frame.
-            #
-            # 1) ¿Está armed el keep-alive? O sea: ¿llegan frames y va a haber
-            #    inferencia que proteger? Esto es lo que gobierna el reposo del
-            #    hilo y los mensajes de pausa/reanudación.
-            armed = _should_keepalive(is_cuda, keepalive_on, since_frame,
-                                       idle_limit, want_infer)
-            # 2) ¿Hace falta calentar AHORA? Solo si además la GPU se ha
-            #    dormido de verdad. Con un modelo pesado los relojes se
-            #    mantienen solos y aquí no se calienta nada, pero el keep-alive
-            #    sigue armed: no está en pausa, está esperando a que haga falta.
-            gpu_slow = gpu_underclocked(GLOBAL_CONFIG.keepalive_clock_ratio) \
-                if armed else False
+            # UNA sola condición. Llegó a haber dos —"armado" y "calentando"—
+            # porque un chequeo de relojes por NVML podía cancelar el
+            # calentamiento sin que el keep-alive estuviera en pausa; se
+            # confundieron en este mismo bucle y el log acabó repitiendo
+            # "en pausa / reanudado" en cada frame. Con una sola no puede pasar.
             warming = _should_keepalive(is_cuda, keepalive_on, since_frame,
-                                        idle_limit, want_infer, gpu_slow)
-            # Si ya no toca calentar, esperar 1s en vez de 50ms: así el hilo
-            # queda de verdad en reposo en lugar de girar a 20 Hz sin hacer nada.
-            wait_timeout = (self.keepalive_setting("keepalive_interval_sec")
-                            if armed else 1.0)
+                                        idle_limit, want_infer)
+            # Si ya no toca calentar, esperar 1s en vez de 5ms: así el hilo
+            # queda de verdad en reposo en lugar de girar sin hacer nada.
+            wait_timeout = KEEPALIVE_INTERVAL_SEC if warming else 1.0
             self._ka_warming = warming
 
-            if is_cuda and keepalive_on and not armed and not idle:
+            if is_cuda and keepalive_on and not warming and not idle:
                 idle = True
                 self._ka_idle = True
                 reason = ("nadie pide inferencia" if not want_infer
@@ -1671,8 +1534,7 @@ class CameraSession:
             },
             "gpu_keepalive": {
                 # Ya resueltos contra GLOBAL_CONFIG: antes había que deducirlos.
-                "enabled": self.keepalive_setting("keepalive_enabled"),
-                "interval_sec": self.keepalive_setting("keepalive_interval_sec"),
+                "enabled": GLOBAL_CONFIG.keepalive_enabled,
                 "warming": self._ka_warming,
                 "idle": self._ka_idle,
                 "dummies": self._ka_dummies,

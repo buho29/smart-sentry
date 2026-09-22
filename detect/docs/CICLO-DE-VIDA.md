@@ -55,14 +55,7 @@ Contrapartida de persistir: **lo guardado manda sobre los valores por defecto
 del código**, así que un defecto que cambie en una versión nueva no llega a una
 máquina que ya tenga su fichero. Es el mismo trato que `cameras_config.json`.
 
-De los ajustes del keep-alive, `enabled` e `interval_sec` se pueden
-sobrescribir por cámara (`None` = heredar el global). El intervalo lo es porque
-**el coste del dummy es el del modelo de esa cámara**: 9,3 ms con `yolo26n`
-contra 37,2 con `yolo26m`. En cambio `clock_ratio` es propiedad de la tarjeta
-—dos cámaras sobre la misma GPU con ratios distintos se pelearían— y
-`idle_limit_sec` no depende del modelo, así que los dos se quedan globales. Si
-algún día hay cámaras en GPUs distintas, el ratio debería pasar a ser por
-*device*, no por cámara.
+El keep-alive no se puede ajustar por cámara: es global, en `POST /config/keepalive`, con solo `enabled` e `idle_limit_sec`. Hubo overrides por cámara y se quitaron con el resto de la maquinaria.
 
 ### Cache de modelos YOLO
 
@@ -89,9 +82,9 @@ alta/baja repetida sería una fuga de VRAM de verdad.
 
 ### El keep-alive de GPU tiene fecha de caducidad
 
-`_process_loop` lanza una inferencia dummy cada `keepalive_interval_sec`
-(0,05 s) cuando la cola está vacía, para que el driver de la GTX 1080 no baje
-de P-state entre frames y devuelva inferencias corruptas.
+`_process_loop` lanza una inferencia dummy cada `KEEPALIVE_INTERVAL_SEC`
+(0,005 s, constante) cuando la cola está vacía, para que el driver de la
+GTX 1080 no baje de P-state entre frames y devuelva inferencias corruptas.
 
 Eso **solo tiene sentido entre frames de un stream vivo**, en huecos de decenas
 de milisegundos. Sin ese límite, una cámara desaparecida dejaba el hilo de
@@ -104,11 +97,10 @@ consumidor pidiéndolo, `model.track()` no llega a ejecutarse, así que calentar
 la GPU no protege nada. Eran ~10 puntos de GPU gastados en reposo con la cámara
 despierta. Por eso `_should_keepalive()` recibe también `has_inference`.
 
-Ahora, pasados `keepalive_idle_limit_sec` (3 s, configurable en
-`GLOBAL_CONFIG` y por `POST /config/keepalive`) sin un frame real, el
-keep-alive se pausa y el `queue.get()` pasa a esperar 1 s en vez de 0,05 s, así
-que el hilo queda de verdad en reposo. Medido: **29 % → 2 %**, con el reposo
-del sistema en 4 %.
+Pasados `keepalive_idle_limit_sec` (3 s, configurable en `GLOBAL_CONFIG` y por
+`POST /config/keepalive`) sin un frame real, el keep-alive se pausa y el
+`queue.get()` pasa a esperar 1 s en vez de 5 ms, así que el hilo queda de
+verdad en reposo. Medido: **29 % → 2 %**, con el reposo del sistema en 4 %.
 
 Al salir del reposo se lanza **una** dummy justo antes de la primera inferencia
 real, para recalentar: así se conserva la garantía del workaround de P-state,
@@ -142,7 +134,42 @@ fallaba; `yolo26n` solo ocupa 10 y la dejaba dormirse. Parecía que el modelo
 pequeño "detectaba peor", y lo que pasaba es que al ser más rápido dejaba que
 la tarjeta se durmiera.
 
-### La solución: gobernar por el reloj, no por un temporizador
+### Y la conclusión, después de intentarlo de varias formas
+
+Todo lo que viene a continuación quedó **desmontado a propósito**. Se llegó a
+gobernar el keep-alive por el reloj real de la GPU (NVML), con detección de
+arquitectura Pascal, un `clock_ratio` ajustable y overrides por cámara. Mucha
+maquinaria para afinar un workaround que **no llega a arreglar el problema**:
+con `yolo26n` y el keep-alive activo seguían saliendo **6 detecciones corruptas
+por minuto**.
+
+Lo que sí lo resuelve es usar un modelo lo bastante pesado como para que la GPU
+no se duerma sola. Medido en la misma máquina y la misma escena:
+
+| Configuración | ms/inferencia | Inferencia | Dummies | Total | Reloj | Corrupciones |
+| --- | --- | --- | --- | --- | --- | --- |
+| `yolo26n` sin keep-alive | 33,1 | 55,2 % | 0 % | **55 %** | 40 % | — |
+| `yolo26n` con keep-alive | 15,0 | 25,1 % | 27,0 % | **52 %** | 61 % | 6/min |
+| **`yolo26m`** | 22,6 | 36,8 % | ~0 % | **~37 %** | **97 %** | **0 en 4935** |
+
+La paradoja: en esta tarjeta **gastar menos sale más caro**. El driver castiga
+la carga baja bajando los relojes, y entonces el mismo trabajo cuesta el doble.
+Apagar el keep-alive con el modelo ligero es la opción **más** cara de las tres.
+
+Así que hoy el keep-alive es: un interruptor (`keepalive_enabled`), un intervalo
+constante (`KEEPALIVE_INTERVAL_SEC`, 0,005 s) y la guarda `dummy_fits`. Nada
+más. La guarda es lo que impide que un modelo pesado pierda frames: su dummy
+cuesta 37,2 ms y el hueco entre frames es de 30, así que sin ella el ciclo se
+va a ~72 ms contra los 60 de la cámara. Hace el mismo trabajo que hacía el
+gobierno por relojes, sin NVML ni estado que mantener.
+
+NVML sigue ahí, pero solo para **mirar**: `GET /gpu` y `gpu_clock_pct` en
+`/status`. No decide nada.
+
+<details>
+<summary>El camino que se recorrió hasta llegar aquí (histórico)</summary>
+
+### La solución intermedia: gobernar por el reloj, no por un temporizador
 
 Bajar el intervalo arregla el síntoma (medido en caliente: 759 → 1265 MHz,
 22,2 → 9,8-16,6 ms, confianzas de vuelta a 0,71-0,91) pero introduce otro
@@ -214,11 +241,17 @@ lecturas de reloj (`pynvml` ausente, o una AMD con ROCm, donde PyTorch también
 llama `"cuda"` al device) se devuelve `False` y no se calienta a ciegas; el
 criterio de tiempo sin frames sigue cubriendo el caso que sí lo necesita.
 
+</details>
+
 **Qué mirar en `/status` cuando la inferencia vaya lenta o dé resultados
-raros**: `gpu_keepalive.gpu_clock_pct` (100 = a pleno rendimiento) y, para el detalle, `GET /gpu`, y
-`inference_health.corrupt_detections`, que cuenta las confianzas fuera de
-`[0,1]`. Esas detecciones se descartan además antes de propagarse: una caja con
-confianza 1,8 movería los servos hacia un fantasma y dispararía una grabación.
+raros**: `gpu_keepalive.gpu_clock_pct` (100 = a pleno rendimiento) y, para el
+detalle, `GET /gpu`; más `inference_health.corrupt_detections`, que cuenta las
+confianzas fuera de `[0,1]`. Esas detecciones se descartan antes de propagarse:
+una caja con confianza 1,8 movería los servos hacia un fantasma y dispararía una
+grabación.
+
+Y si `gpu_clock_pct` está bajo, la respuesta no es tocar el keep-alive: es usar
+un modelo más pesado. Suena al revés y está medido.
 
 ### `lifespan`
 

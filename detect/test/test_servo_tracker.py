@@ -427,8 +427,12 @@ routes = {r.path for r in main.app.routes}
 check("las rutas del servo están registradas",
       {"/cameras/{camera_id}/servo", "/cameras/{camera_id}/config/servo"} <= routes)
 check("todos los ajustes cuelgan de /config/",
-      {"/cameras/{camera_id}/config/inference", "/cameras/{camera_id}/config/keepalive",
+      {"/cameras/{camera_id}/config/inference",
        "/cameras/{camera_id}/config/stream", "/cameras/{camera_id}/config/servo"} <= routes)
+# El keep-alive dejó de ser ajustable por cámara al simplificarlo: es global,
+# en POST /config/keepalive.
+check("el keep-alive ya no tiene ruta por cámara",
+      "/cameras/{camera_id}/config/keepalive" not in routes)
 check("y ya no quedan las rutas viejas",
       not ({"/cameras/{camera_id}/inference/config", "/cameras/{camera_id}/stream/config",
             "/cameras/{camera_id}/servo/tracking"} & routes))
