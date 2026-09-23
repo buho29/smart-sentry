@@ -135,7 +135,6 @@ dependencia de uso, `..|>` = implementación de un `Protocol`.
 classDiagram
     class GlobalConfig {
         +bool keepalive_enabled
-        +float keepalive_idle_limit_sec
         +float reconnect_delay_sec
         +as_dict() dict
     }
@@ -292,10 +291,11 @@ Envoltura sobre el `print` nativo (guardado en `_orig_print`) que antepone la
 hora local en formato `[HH:MM:SS.mmm]`, el mismo que usa el log de ESPHome,
 para poder cotejar tiempos entre ambos logs.
 
-### `torch.backends.cudnn.enabled = False` — [`camera.py`](../camera.py)
+### `CUDNN_ENABLED` — [`main.py`](../main.py)
 
-Necesario en la GTX 1080 (Pascal): con cuDNN activo se produce
-`CUDA misaligned address`.
+Decide `torch.backends.cudnn.enabled`. Va a `False` en la GTX 1080 (Pascal):
+con cuDNN activo se produce `CUDA misaligned address`. En cualquier otra
+tarjeta, `True`. Detalle en [`GPU.md`](GPU.md#1-cudnn-y-cuda-misaligned-address).
 
 ### Constantes — [`camera.py`](../camera.py)
 
@@ -345,10 +345,8 @@ Context manager del ciclo de vida de FastAPI:
 Config global editable en caliente por API. Campos:
 
 - `keepalive_enabled` — activar el "keep-alive" de GPU (ver `_process_loop`).
-  El **intervalo** no está aquí: vive en `CameraConfig`, porque lo que decide si
-  hace falta y lo que cuesta es el modelo, y cada cámara tiene el suyo.
-- `keepalive_idle_limit_sec` — segundos sin frame real tras los que el
-  keep-alive se pausa (3 s; ver [`CICLO-DE-VIDA.md`](CICLO-DE-VIDA.md#2-nivel-proceso)).
+  Apagado por defecto. El **intervalo** no está aquí: vive en `CameraConfig`,
+  porque lo que cuesta depende del modelo de cada cámara.
 - `reconnect_delay_sec` — espera entre reintentos del hilo lector (1 s).
 
 `as_dict()` la serializa para el endpoint `GET /config`. La instancia única es
@@ -508,10 +506,10 @@ serializa a `cameras_config.json`.
 | --- | --- |
 | `camera_id` | Identificador único en las rutas. |
 | `stream_url` | URL del stream MJPEG del ESP32. |
-| `model_name` / `device` | Modelo YOLO (`yolo11m`…) y `cuda` / `cpu`. |
+| `model_name` / `device` | Modelo YOLO (`yolo26m` por defecto, `DEFAULT_MODEL`) y `cuda` / `cpu`. |
 | `confidence` / `imgsz` | Umbral de confianza y resolución de inferencia. |
 | `classes` | Lista de IDs de clase COCO a detectar (`None` = todas; `[0]` = solo personas). |
-| `keepalive_enabled` | `None` = hereda de `GLOBAL_CONFIG`. |
+| `keepalive_interval_sec` | Intervalo del keep-alive de GPU para esta cámara: 0,005 s por defecto (`KEEPALIVE_INTERVAL_SEC`). Solo actúa con el interruptor global encendido (`GLOBAL_CONFIG.keepalive_enabled`, apagado por defecto); ver [`GPU.md`](GPU.md). |
 | `default_infer` | Qué devuelven `/stream` y `/snapshot` si no se pasa `?infer=` (anotado o crudo). |
 | `always_infer` | Si YOLO corre aunque no haya nadie mirando ni ningún consumidor. `True` por defecto: la cámara sigue detectando con el navegador cerrado. **No confundir con `default_infer`**: aquel decide *qué* se devuelve, este *si* la detección llega a correr. |
 | `noise_psk` | `api.encryption.key` del YAML de la placa. Si se rellena, la sesión abre además el `EsphomeController`. |
@@ -684,22 +682,21 @@ Referencias locales otra vez. Obtiene el modelo con `get_model()`. Bucle:
    - `want_raw` = hay `_raw_clients`, o hay `_follow_clients` y `default_infer`
      a `False`.
 2. Calcula el keep-alive con `_should_keepalive(...)` y de ahí el `wait_timeout`
-   (`cfg.keepalive_interval_sec`, 0,005 s por defecto, si toca calentar; si no,
-   1 s). Ese doble papel importa: como es también el timeout del `get()` del
-   punto 3, **un intervalo mayor que el hueco entre frames significa que no se
-   lanza ninguna dummy**, y así se apaga el keep-alive en una cámara cuyo modelo
-   ya mantiene despierta la GPU. **Requiere `want_infer`**: el
+   (`cfg.keepalive_interval_sec`, 0,005 s por defecto, si toca calentar; si
+   no, 1 s). Con el keep-alive apagado (lo normal) siempre es 1 s: el `get()`
+   vuelve en cuanto llega el frame. **Requiere `want_infer`**: el
    workaround protege a las inferencias reales de salir corruptas, así que si
    no va a haber ninguna, calentar no protege nada — era el ~10 % de GPU que se
    gastaba en reposo.
 3. `raw_queue.get(timeout=wait_timeout)`.
 4. **Si salta `queue.Empty`** (no llegó frame): avisa a los consumidores con
    `on_idle()` (ver §7.bis) para que puedan caducar su objetivo; y si toca
-   calentar, hace `model.predict()` sobre un frame negro. **Por qué:** la GTX
+   calentar y la dummy cabe antes del frame siguiente (`dummy_fits`), hace un
+   forward crudo de la red sobre un tensor de ceros. **Por qué:** la GTX
    1080 produce inferencias corruptas (confianzas fuera de 0-1) cuando el
    driver baja el P-state entre frames; las anomalías coinciden al segundo con
    las transiciones de P-state en `nvidia-smi`. Mantener la GPU ocupada lo
-   evita. Luego `continue`.
+   evita con un modelo ligero; con `yolo26m` no hace falta. Luego `continue`.
 5. **Si llega frame:** `_update_fps()`.
 6. **Si `want_infer`:** si se venía de dejar enfriar la GPU, lanza **una** dummy
    justo antes (así la primera inferencia real no sale corrupta; se hace aquí y
@@ -844,7 +841,7 @@ de la LAN.
 | --- | --- | --- |
 | `GET /health` | `health` | `{status, cameras}` — vivo y lista de IDs. |
 | `GET /config` | `get_config` | Devuelve `GLOBAL_CONFIG`. |
-| `POST /config/keepalive` | `set_global_keepalive` | Keep-alive de GPU global: `enabled`, `interval_sec` (0,05 s) e `idle_limit_sec` (3 s), por formulario y con los valores por defecto ya puestos. |
+| `POST /config/keepalive` | `set_global_keepalive` | Interruptor global del keep-alive de GPU (`enabled`, apagado por defecto), por formulario; se persiste en `global_config.json`. El intervalo es por cámara (`keepalive_interval_sec`, en `/config/inference`). |
 
 ### Gestión de cámaras
 
@@ -867,7 +864,6 @@ Swagger enseñe cada campo en su casilla con su descripción y su valor por
 defecto.
 
 | `POST /cameras/{id}/config/inference` | `set_inference_config` | Body JSON (`InferenceConfig`), todos los campos opcionales: **lo que no se envía se conserva** (`model_dump(exclude_unset=True)`); `classes: null` = todas, `null`/vacío en el resto = no tocar. Va en JSON y no en formulario porque Swagger rellena los formularios con `"string"`/`0` y los envía tal cual; con JSON, `app.openapi` se sustituye por `_openapi_with_camera_examples`, que regenera el esquema en cada `/openapi.json` metiendo como `examples` del body los valores actuales de cada cámara, así que en Swagger se edita partiendo de lo real (recargar `/docs` tras cambiar algo). Se filtra lo que no cambia respecto a `session.cfg` (reenviar el ejemplo entero es un no-op) y se sustituye `session.cfg` por `cfg.model_copy(update=...)`: `confidence`/`imgsz`/`always_infer`/`classes` se releen por frame y cambian al instante; `model_name`/`device` los resuelve `_process_loop` una sola vez al arrancar, así que cambiarlos precarga el modelo (400 si no existe) y llama a `session.restart()`. Devuelve `relaunched`. |
-| `POST /cameras/{id}/config/keepalive` | `set_camera_keepalive` | Override de `enabled` por cámara. El intervalo y el tiempo de reposo son globales, en `POST /config/keepalive`. |
 | `POST /cameras/{id}/config/stream` | `set_stream_default` | Cambia `default_infer`; los streams en modo "follow" cambian en caliente. |
 | `POST /cameras/{id}/config/servo` | `set_servo_config` | Toda la `ServoConfig`. **Es donde se le ponen servos a una cámara**: el alta no los pide, así que la primera llamada crea el `ServoTracker` y lo enchufa como consumidor. 400 sin `noise_psk`. |
 
@@ -935,9 +931,10 @@ así que un cliente lento no acumula memoria, solo pierde frames.
 si algún cliente pide el stream anotado. Sin clientes de inferencia, solo
 re-encoda JPEG.
 
-**Keep-alive de GPU.** Específico de la GTX 1080: inferencia dummy cada 50 ms
-cuando no hay frame real, para que el driver no baje el P-state y corrompa las
-siguientes inferencias.
+**Keep-alive de GPU.** Específico de la GTX 1080 con modelos ligeros, y
+apagado por defecto: inferencia dummy cada `keepalive_interval_sec` (por
+cámara, 0,005 s) cuando no hay frame real, para que el driver no baje el P-state y corrompa las siguientes
+inferencias. El porqué y sus límites, en [`GPU.md`](GPU.md).
 
 **Framing por `Content-Length`, no por marcadores JPEG.** Buscar `\xff\xd8` /
 `\xff\xd9` a mano se desincronizaba con esos bytes dentro de datos

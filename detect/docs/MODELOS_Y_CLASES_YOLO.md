@@ -13,7 +13,7 @@ poner el nombre para usarlo — se descarga solo la primera vez si no hay un
 | Modelo | Familia | Notas |
 |--------|---------|-------|
 | `yolo11n` | YOLO11 nano | usado en tests, más ligero/rápido |
-| `yolo11m` | YOLO11 medium | valor por defecto de `CameraConfig.model_name` |
+| `yolo11m` | YOLO11 medium | fue el valor por defecto de `CameraConfig.model_name` |
 | `yolo26m` | YOLO26 medium | ejemplo en README: ≈ 29 % de una GTX 1080 por cámara |
 | `yolo26n` | YOLO26 nano | fichero presente en `detect/`, pero no referenciado en código/tests/README |
 | `rtdetr-l` | RT-DETR large | ver nota más abajo |

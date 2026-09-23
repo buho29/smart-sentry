@@ -177,60 +177,40 @@ def _force_close_response(resp: "requests.Response", tag: str = ""):
 # Config global, modificable en runtime vía API
 # ---------------------------------------------------------------------------
 
-# Defecto de `CameraConfig.keepalive_interval_sec`: cada cuánto se mira si hay
-# que calentar mientras se espera el frame siguiente. Es un valor medido, no una
-# preferencia. Estuvo en 0,01 y la GPU se quedaba en 847 MHz dando **570
-# detecciones corruptas en 48.967 frames**; a 0,005 el reloj se sostiene en
-# ~1290 MHz y salieron **cero en 4147 frames seguidos**.
+# Modelo por defecto de una cámara. Un medium y no un nano a propósito: en la
+# GTX 1080 un modelo ligero deja dormirse a la GPU entre frames y las
+# inferencias salen corruptas; yolo26m la mantiene despierta él solo (97 % de
+# reloj, 0 corruptas en 4935 frames). Ver docs/GPU.md.
+DEFAULT_MODEL = "yolo26m"
+
+# Keep-alive de GPU: mientras se espera el frame siguiente, una inferencia
+# dummy para que el driver no baje los relojes. Es un workaround de la GTX 1080
+# con modelos ligeros (yolo26n); con DEFAULT_MODEL no hace falta y viene
+# apagado (`GlobalConfig.keepalive_enabled`). Ver docs/GPU.md.
 #
-# El motivo es que el driver decide por utilización, no por si le lanzas
-# kernels: con huecos de 10 ms ve la tarjeta ociosa —`nvidia-smi` lo dice
-# literalmente, "Clocks Event Reasons -> Idle: Active" con 45 W de 210— y baja
-# los relojes. Hay que no dejarle hueco.
-#
-# Se ajusta POR CÁMARA porque cada una tiene su modelo y sus fps, que es lo que
-# decide si el keep-alive hace falta y cuánto cuesta. Y como esto es el
-# `timeout` del `get()` de la cola, **por encima del hueco entre frames el
-# `get()` nunca expira y no se lanza ningún dummy**: así se apaga el keep-alive
-# en una cámara cuyo modelo ya mantiene despierta la GPU.
+# Intervalo por defecto (`CameraConfig.keepalive_interval_sec`), medido: a 0,01
+# la GPU se dormía y daba detecciones corruptas; a 0,005 no.
 KEEPALIVE_INTERVAL_SEC = 0.005
+
+# Segundos sin frames tras los que se deja de calentar: si la cámara no da
+# imagen, ocupar la GPU es gastar para nada.
+KEEPALIVE_IDLE_LIMIT_SEC = 3.0
 
 
 class GlobalConfig:
     def __init__(self):
-        # Un interruptor y ya. Hubo un modo "auto" que lo activaba solo en GPU
-        # Pascal, y gobierno por relojes vía NVML para decidir cuándo calentar.
-        # Todo eso se quitó: era mucha maquinaria para afinar un workaround que
-        # **no llega a arreglar el problema** — con `yolo26n` y el keep-alive
-        # activo seguían saliendo 6 detecciones corruptas por minuto. Lo que de
-        # verdad lo resuelve es usar un modelo lo bastante pesado como para que
-        # la GPU no se duerma (`yolo26m`: 0 corrupciones en 4935 frames).
-        self.keepalive_enabled: bool = True
-        # Segundos sin recibir un frame real tras los cuales se deja de
-        # calentar la GPU. El keep-alive solo tiene sentido ENTRE frames de un
-        # stream vivo (huecos de decenas de ms); pasado este plazo la cámara no
-        # está dando nada y seguir lanzando inferencias dummy es quemar la GPU
-        # para nada.
-        self.keepalive_idle_limit_sec: float = 3.0
+        self.keepalive_enabled: bool = False
         self.reconnect_delay_sec: float = 1.0
 
     def as_dict(self):
-        # `keepalive_interval_sec` NO sale aquí: vive en cada cámara
-        # (`CameraConfig`) y publicarlo como global diría algo falso en cuanto
-        # dos cámaras lo tengan distinto. Mismo fallo que el "auto" que sobrevivía
-        # en el fichero: un campo que se enseña y no manda. Se ve por cámara, en
-        # `status()["gpu_keepalive"]["interval_sec"]`.
         return {
             "keepalive_enabled": self.keepalive_enabled,
-            "keepalive_idle_limit_sec": self.keepalive_idle_limit_sec,
             "reconnect_delay_sec": self.reconnect_delay_sec,
         }
 
     # Un global_config.json de una versión anterior traerá claves que ya no
-    # existen (keepalive_clock_ratio, keepalive_interval_sec...). No pasa nada:
-    # se recorre esta lista y lo que sobra se ignora.
-    _PERSISTED = ("keepalive_enabled", "keepalive_idle_limit_sec",
-                  "reconnect_delay_sec")
+    # existen. No pasa nada: se recorre esta lista y lo que sobra se ignora.
+    _PERSISTED = ("keepalive_enabled", "reconnect_delay_sec")
 
     def save(self) -> None:
         try:
@@ -245,20 +225,10 @@ class GlobalConfig:
 
         Existe porque antes no: `GLOBAL_CONFIG` vivía solo en memoria y cada
         reinicio se llevaba por delante lo que se hubiera ajustado por API.
-        Cuesta explicar que un `POST /config/keepalive` "no haya servido de
-        nada" cuando lo que pasó es que se perdió al reiniciar.
-
-        Aviso: lo guardado MANDA sobre los valores por defecto del código, así
-        que un defecto que cambie en una versión nueva no llega a una máquina
-        que ya tenga su fichero. Es el mismo trato que cameras_config.json.
-
-        Por eso **cada valor se valida contra el tipo del defecto** antes de
-        aceptarlo, y el que no cuadra se ignora con un aviso. Sin esa
-        comprobación pasó algo concreto: `keepalive_enabled` llegó a admitir la
-        cadena `"auto"`, se guardó en disco, y cuando el código pasó a aceptar
-        solo booleanos el fichero seguía resucitando el `"auto"` en cada
-        arranque. Un fichero viejo no puede reintroducir una opción que ya no
-        existe.
+        Lo guardado MANDA sobre los valores por defecto del código, igual que
+        cameras_config.json. Por eso **cada valor se valida contra el tipo del
+        defecto** y el que no cuadra se ignora con un aviso: un fichero viejo no
+        puede reintroducir una opción que ya no existe.
         """
         if not GLOBAL_CONFIG_FILE.exists():
             return
@@ -305,56 +275,6 @@ GLOBAL_CONFIG_FILE = Path(__file__).with_name("global_config.json")
 GLOBAL_CONFIG = GlobalConfig()
 
 
-_nvml_handles: dict = {}
-_nvml_broken = False
-
-
-def device_index(device: str) -> int:
-    """Índice de GPU de un device de PyTorch: "cuda:1" -> 1, "cuda" -> 0."""
-    if ":" in device:
-        try:
-            return int(device.rsplit(":", 1)[1])
-        except ValueError:
-            pass
-    return 0
-
-
-def _gpu_state(index: int = 0) -> dict:
-    """P-state y relojes de la GPU, para /status.
-
-    Barato (unas lecturas de NVML) y solo se llama al pedir el estado. Si
-    pynvml no está o falla, se devuelven None y nadie se entera: esto es
-    diagnóstico, no puede romper el servicio.
-
-    El handle se cachea POR ÍNDICE: el device de cada cámara es configurable
-    ("cuda:1"), y antes se leía siempre la GPU 0, así que en una máquina con
-    varias tarjetas el keep-alive decidía mirando los relojes de otra.
-    """
-    global _nvml_broken
-    if _nvml_broken:
-        return {"pstate": None, "sm_clock_mhz": None, "sm_clock_max_mhz": None}
-    try:
-        import pynvml
-        if index not in _nvml_handles:
-            pynvml.nvmlInit()
-            _nvml_handles[index] = pynvml.nvmlDeviceGetHandleByIndex(index)
-        _nvml_handle = _nvml_handles[index]
-        clock = pynvml.nvmlDeviceGetClockInfo(_nvml_handle, pynvml.NVML_CLOCK_SM)
-        # El máximo observado se actualiza en cada lectura, para que cualquiera
-        # que pregunte (gpu_clock_pct, GET /gpu) tenga referencia desde el
-        # primer momento y no un cero.
-        global _sm_clock_max_seen
-        _sm_clock_max_seen = max(_sm_clock_max_seen, clock)
-        return {
-            "pstate": f"P{pynvml.nvmlDeviceGetPerformanceState(_nvml_handle)}",
-            "sm_clock_mhz": pynvml.nvmlDeviceGetClockInfo(_nvml_handle, pynvml.NVML_CLOCK_SM),
-            "sm_clock_max_mhz": pynvml.nvmlDeviceGetMaxClockInfo(_nvml_handle, pynvml.NVML_CLOCK_SM),
-        }
-    except Exception:
-        _nvml_broken = True
-        return {"pstate": None, "sm_clock_mhz": None, "sm_clock_max_mhz": None}
-
-
 def _is_corrupt(d: Detection) -> bool:
     """¿Esta detección es físicamente imposible?
 
@@ -370,49 +290,12 @@ def _is_corrupt(d: Detection) -> bool:
             or not all(map(math.isfinite, (d.x1, d.y1, d.x2, d.y2))))
 
 
-# Reloj más alto visto desde que arrancó el proceso. Solo para diagnóstico: la
-# referencia buena no es el máximo teórico de NVML, que es el de P0, sino lo que
-# la tarjeta alcanza de verdad bajo carga de cómputo (medido aquí: ~1290 MHz en
-# P2 frente a los 1961 que declara).
-_sm_clock_max_seen = 0
-
-
-def gpu_clock_pct(index: int = 0) -> Optional[int]:
-    """Reloj actual como % del máximo observado. None si no hay lecturas.
-
-    Un número que resume el estado de la GPU en `/status`: 100 es a pleno
-    rendimiento, y por debajo de ~60 esta GTX 1080 empieza a devolver
-    inferencias corruptas.
-
-    **Es diagnóstico, no gobierna nada.** Hubo una versión en la que el
-    keep-alive decidía leyendo esto por NVML, y se quitó: mucha maquinaria para
-    afinar un workaround que no llegaba a arreglar el problema de fondo.
-    """
-    current = _gpu_state(index).get("sm_clock_mhz")
-    if not current or not _sm_clock_max_seen:
-        return None
-    return round(100 * current / _sm_clock_max_seen)
-
-
 def _should_keepalive(is_cuda: bool, enabled: bool, seconds_since_frame: float,
                       idle_limit: float, has_inference: bool) -> bool:
     """¿Está el keep-alive activo ahora mismo?
 
-    Tres condiciones y ninguna sorpresa: hay GPU, está encendido, va a haber
-    inferencia que proteger y la cámara sigue dando frames.
-
-    `has_inference` es lo que evita calentar para nada: el workaround protege a
-    las inferencias REALES de salir corruptas, así que si no va a haber ninguna
-    (`always_infer` a false, nadie mirando y ningún consumidor), tener la GPU
-    ocupada no protege nada.
-
-    Función pura a propósito, para poder probarla sin GPU.
-
-    Llegó a tener un sexto parámetro, `gpu_slow`, leído de NVML, y eso partía la
-    decisión en dos conceptos parecidos —"armado" y "calentando"— que se
-    confundieron en el bucle: el log acabó repitiendo "en pausa / reanudado" en
-    cada frame y llamando a warm_up() una vez por frame. Con una sola condición
-    ese fallo no se puede repetir.
+    Hay GPU, está encendido, va a haber inferencia que proteger y la cámara
+    sigue dando frames. Función pura para poder probarla sin GPU.
     """
     return (is_cuda and enabled and has_inference
             and seconds_since_frame < idle_limit)
@@ -494,7 +377,7 @@ DEFAULT_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 class CameraConfig(BaseModel):
     camera_id: str
     stream_url: str
-    model_name: str = "yolo11m"
+    model_name: str = DEFAULT_MODEL
     device: str = "cuda"
     confidence: float = 0.5
     imgsz: int = 640
@@ -512,14 +395,8 @@ class CameraConfig(BaseModel):
     always_infer: bool = True
 
     # Cada cuánto se comprueba si hay que calentar la GPU mientras se espera el
-    # frame siguiente (ver KEEPALIVE_INTERVAL_SEC, que es el defecto medido).
-    #
-    # Es por cámara porque el coste depende del modelo: una dummy de yolo26m
-    # cuesta 30,7 ms, MÁS que su propia inferencia real (27,5 ms), así que
-    # calentar duplica el gasto de esa cámara. Medido: 65% de GPU, de los que
-    # 40 puntos eran dummies — y con 0 detecciones corruptas, o sea que no
-    # protegían de nada. Subirlo por encima del hueco entre frames
-    # (1/fps - last_inference_ms) apaga el keep-alive de esa cámara.
+    # frame siguiente (solo si el keep-alive global está encendido). Por encima
+    # del hueco entre frames no se lanza ninguna dummy en esta cámara.
     keepalive_interval_sec: float = KEEPALIVE_INTERVAL_SEC
 
     # Parada manual (POST /stop): la cámara se queda parada hasta el siguiente
@@ -591,13 +468,7 @@ class CameraSession:
         self.pipeline_fps: float = 0.0
         self.last_error: Optional[str] = None
 
-        # Salud de la inferencia. Existen porque hubo un fallo en el que el
-        # servicio dibujaba cero cajas sobre frames donde el mismo modelo,
-        # offline, encontraba a la persona: sin estos números no había forma de
-        # saber si las perdía el detector o el tracker.
-        self._raw_dets_last = 0      # cajas del detector, antes del tracker
-        self._dets_after_tracker = 0     # las que sobreviven al tracker
-        self._frames_filtered = 0       # veces que el tracker se las comió TODAS
+        # Salud de la inferencia, para /status.
         self._frames_inferred = 0
         self._frames_without_box = 0
         self._consecutive_without_box = 0
@@ -607,20 +478,6 @@ class CameraSession:
         # finitas). Son la señal inequívoca del bug de P-state.
         self._corrupt_dets = 0
         self._last_corruption: Optional[dict] = None
-
-        # Estado del keep-alive de GPU. Vivían como variables locales de
-        # _process_loop, así que no había manera de saber desde fuera si estaba
-        # calentando o en pausa.
-        self._ka_idle = False
-        self._ka_warming = False
-        self._ka_dummies = 0
-        self._ka_dummy_ms = 0.0     # coste medido de una dummy
-        self._ka_skipped = 0       # dummies que no cabían antes del frame siguiente
-
-        # Último frame decodificado, para que el selftest pueda inferir sobre
-        # EXACTAMENTE lo mismo que vio el pipeline. Es una referencia, no una
-        # copia: no cuesta nada.
-        self._latest_frame: Optional[np.ndarray] = None
 
         # Conexión opcional a la API nativa de ESPHome de la misma placa,
         # para arrancar/parar la sesión según el estado real del hardware
@@ -1125,70 +982,13 @@ class CameraSession:
                 draw = True
         return raw, draw
 
-    def _instrument_tracker(self, model) -> None:
-        """Apunta cuántas cajas trae el detector ANTES de que el tracker filtre.
-
-        Existe por un fallo muy concreto: el servicio dibujaba cero cajas en
-        frames donde el mismo modelo, offline y con los mismos ajustes,
-        encontraba a la persona al 0,81. Con `results.boxes` a secas no se
-        puede distinguir "el detector no vio nada" de "el tracker se lo comió",
-        porque `on_predict_postprocess_end` de ultralytics SUSTITUYE los
-        resultados por los que tengan track.
-
-        Así que se registra un callback propio para el mismo evento. Ultralytics
-        los ejecuta en orden de registro y el suyo ya está puesto, así que este
-        corre después; para ver el crudo se lee `len(predictor.results[i])`
-        antes de que nadie lo toque, lo que obliga a engancharse al evento
-        ANTERIOR (`on_predict_postprocess_end` se dispara una vez por lote, y el
-        del tracker se registró primero). Por eso lo que se apunta aquí es el
-        recuento YA filtrado, y el crudo se obtiene interceptando el propio
-        `tracker.update`, que es el único punto donde ambos números conviven.
-        """
-        try:
-            predictor = getattr(model, "predictor", None)
-            trackers = getattr(predictor, "trackers", None) if predictor else None
-            if not trackers:
-                return  # todavía no hay tracker: se instrumenta en el próximo frame
-            tracker = trackers[0]
-            if getattr(tracker, "_probe_installed", False):
-                return
-            original = tracker.update
-            sesion = self
-
-            def instrumented_update(dets, img=None, **kwargs):
-                sesion._raw_dets_last = len(dets)
-                salida = original(dets, img, **kwargs)
-                sesion._dets_after_tracker = len(salida)
-                if len(dets) > 0 and len(salida) == 0:
-                    sesion._frames_filtered += 1
-                return salida
-
-            tracker.update = instrumented_update
-            tracker._probe_installed = True
-        except Exception as e:
-            # La instrumentación NO puede tumbar el pipeline de vídeo.
-            print(f"[{self.cfg.camera_id}] no se pudo instrumentar el tracker: {e!r}")
-
-    def latest_frame(self):
-        """El último frame decodificado, tal cual lo vio la inferencia."""
-        return self._latest_frame
-
-    def cached_model(self):
-        """El objeto YOLO que está usando esta sesión, o None si no hay.
-
-        Devuelve el MISMO objeto, no uno nuevo: el selftest necesita examinar
-        precisamente el que lleva horas vivo.
-        """
-        return _loaded_models.get(model_key(self.cfg.model_name, self.cfg.device, self.cfg.camera_id))
-
     def reset_tracker(self) -> bool:
         """Tira el estado de ByteTrack para que se reconstruya en el próximo frame.
 
         Hace falta porque no hay otra forma: `on_predict_start` hace
         `if hasattr(predictor, "trackers") and persist: return`, y el predictor
         vive en el modelo cacheado de `_loaded_models`, que sobrevive a
-        `stop()`/`start()`. Sin esto, un tracker degradado solo se arregla
-        reiniciando el proceso entero.
+        `stop()`/`start()`. Se llama en cada arranque de la sesión.
         """
         try:
             model = _loaded_models.get(model_key(self.cfg.model_name, self.cfg.device, self.cfg.camera_id))
@@ -1196,7 +996,6 @@ class CameraSession:
             if predictor is None or not hasattr(predictor, "trackers"):
                 return False
             del predictor.trackers
-            self._frames_filtered = 0
             print(f"[{self.cfg.camera_id}] tracker reseteado")
             return True
         except Exception as e:
@@ -1214,11 +1013,10 @@ class CameraSession:
 
         model = get_model(self.cfg.model_name, self.cfg.device, self.cfg.camera_id)
         is_cuda = self.cfg.device.startswith("cuda")
-        self._instrument_tracker(model)
 
-        # Tensor de la dummy, reservado UNA vez: no tiene sentido asignar
-        # memoria de GPU veinte veces por segundo para mandar siempre ceros.
+        # Tensor de la dummy del keep-alive, reservado UNA vez.
         dummy_tensor = None
+        dummy_ms = 0.0     # coste medido de una dummy (media móvil)
         if is_cuda:
             try:
                 dummy_tensor = torch.zeros(
@@ -1234,51 +1032,29 @@ class CameraSession:
             """¿Da tiempo a meter un dummy antes del frame siguiente?
 
             El dummy cuesta lo mismo que una inferencia real, así que con un
-            modelo pesado NO cabe: medido con yolo26m a 16,7 fps, el hueco entre
-            frames es de 30 ms y el dummy cuesta 37. Lanzarlo igual metía el
-            ciclo en 72 ms contra los 60 de la cámara, o sea perder en torno al
-            17 % de los frames.
+            modelo pesado NO cabe: con yolo26m a 16,7 fps lanzarlo igual hacía
+            perder en torno al 17 % de los frames.
             """
-            if not self._ka_dummy_ms or self.pipeline_fps <= 0:
+            if not dummy_ms or self.pipeline_fps <= 0:
                 return True                      # todavía sin datos: se prueba
-            periodo_ms = 1000.0 / self.pipeline_fps
-            hueco_ms = periodo_ms - (self.last_inference_ms or 0.0)
-            return hueco_ms > self._ka_dummy_ms
+            gap_ms = 1000.0 / self.pipeline_fps - (self.last_inference_ms or 0.0)
+            return gap_ms > dummy_ms
 
         def warm_up():
-            """Mantiene la GPU ocupada SIN pasar por el predictor de ultralytics.
+            """Mantiene la GPU ocupada con un forward crudo sobre la red.
 
-            Antes esto era `model.predict(...)`, y tenía un efecto secundario
-            que costó encontrar: `register_tracker` engancha los callbacks del
-            tracker al MODELO, y `predict()` reutiliza el predictor que montó
-            `track()`. O sea que cada dummy metía un frame negro y vacío en
-            ByteTrack, le avanzaba el `frame_id` y mandaba todos los tracks a
-            "perdidos" (medido: de `activos=2` a `perdidos=2` con una sola
-            dummy). Y como el modelo se cachea en `_loaded_models` y
-            `on_predict_start` no reconstruye los trackers con `persist=True`,
-            ese estado degradado no se limpiaba ni parando la cámara.
-
-            Un forward crudo sobre el módulo ejercita exactamente los mismos
-            kernels —es la misma red— así que sigue sirviendo igual como
-            workaround del P-state, pero no puede tocar el estado de nadie.
+            No usa `model.predict()` porque reutiliza el predictor de `track()`
+            y cada dummy metería un frame negro en ByteTrack.
             """
+            nonlocal dummy_ms
+            if dummy_tensor is None:
+                return
             t_dummy = time.perf_counter()
             try:
-                if dummy_tensor is not None:
-                    with torch.no_grad():
-                        model.model(dummy_tensor)
-                else:
-                    # Sin CUDA el keep-alive no llega a llamarse (lo corta
-                    # _should_keepalive), pero si alguien lo fuerza, que al
-                    # menos no reviente.
-                    model.predict(np.zeros((640, 640, 3), dtype=np.uint8),
-                                  imgsz=640, verbose=False)
-                self._ka_dummies += 1
-                # Media móvil suave del coste: es lo que decide si el dummy
-                # siguiente cabe o no.
+                with torch.no_grad():
+                    model.model(dummy_tensor)
                 ms = (time.perf_counter() - t_dummy) * 1000
-                self._ka_dummy_ms = (ms if not self._ka_dummy_ms
-                                     else 0.8 * self._ka_dummy_ms + 0.2 * ms)
+                dummy_ms = ms if not dummy_ms else 0.8 * dummy_ms + 0.2 * ms
             except Exception as e:
                 print(f"[{self.cfg.camera_id}] keep-alive de GPU falló:", repr(e))
 
@@ -1287,41 +1063,20 @@ class CameraSession:
 
         while not stop_event.is_set():
             keepalive_on = GLOBAL_CONFIG.keepalive_enabled
-            # Se recalculan en cada vuelta y ANTES del get(), porque el
-            # keep-alive necesita saber si va a haber inferencia para decidir si
-            # calienta y cuánto espera. Releerlos cada vez es además lo que
-            # permite tocar default_infer o always_infer por API y que los
-            # streams ya abiertos cambien sin reconectar.
-            #
+            # Se recalculan en cada vuelta: así cambiar default_infer o
+            # always_infer por API afecta a los streams ya abiertos.
             want_draw, want_infer, want_raw = self._work_needed()
 
-            idle_limit = GLOBAL_CONFIG.keepalive_idle_limit_sec
             since_frame = time.monotonic() - last_frame
-
-            # UNA sola condición. Llegó a haber dos —"armado" y "calentando"—
-            # porque un chequeo de relojes por NVML podía cancelar el
-            # calentamiento sin que el keep-alive estuviera en pausa; se
-            # confundieron en este mismo bucle y el log acabó repitiendo
-            # "en pausa / reanudado" en cada frame. Con una sola no puede pasar.
             warming = _should_keepalive(is_cuda, keepalive_on, since_frame,
-                                        idle_limit, want_infer)
-            # Si ya no toca calentar, esperar 1s en vez de 5ms: así el hilo
-            # queda de verdad en reposo en lugar de girar sin hacer nada.
-            #
-            # Se relee del cfg en cada vuelta, como want_infer, para que un POST
-            # a /config/inference se note sin relanzar la sesión. Y ojo al doble
-            # papel: esto es el timeout del get() de abajo, así que un intervalo
-            # mayor que el hueco entre frames significa que no se lanza NINGUNA
-            # dummy. No añade latencia, porque el get() vuelve en cuanto llega
-            # el frame.
+                                        KEEPALIVE_IDLE_LIMIT_SEC, want_infer)
+            # Es el timeout del get(): sin keep-alive el hilo espera en reposo.
             wait_timeout = self.cfg.keepalive_interval_sec if warming else 1.0
-            self._ka_warming = warming
 
             if is_cuda and keepalive_on and not warming and not idle:
                 idle = True
-                self._ka_idle = True
                 reason = ("nadie pide inferencia" if not want_infer
-                          else f"{idle_limit:.0f}s sin frames")
+                          else f"{KEEPALIVE_IDLE_LIMIT_SEC:.0f}s sin frames")
                 print(f"[{self.cfg.camera_id}] {reason} -> keep-alive de GPU en pausa")
 
             try:
@@ -1330,20 +1085,13 @@ class CameraSession:
                 # Sin frame: que los consumidores puedan caducar su objetivo en
                 # vez de quedarse apuntando a algo que ya no se ve.
                 self._notify_consumers("on_idle")
-                # `warming` ya incluye que la GPU esté baja de relojes: si está
-                # a pleno rendimiento no se calienta, pero tampoco se considera
-                # que el keep-alive esté en pausa.
-                if warming:
-                    if dummy_fits():
-                        warm_up()
-                    else:
-                        self._ka_skipped += 1
+                if warming and dummy_fits():
+                    warm_up()
                 if stop_event.is_set():
                     break
                 continue
 
             last_frame = time.monotonic()
-            self._latest_frame = frame
 
             self._update_fps(fps_window)
 
@@ -1353,16 +1101,12 @@ class CameraSession:
             if want_infer:
                 try:
                     if idle:
-                        # Veníamos de dejar enfriar la GPU (sin frames, o sin
-                        # nadie que pidiera inferencia). Una dummy justo antes
-                        # de la primera de verdad conserva la garantía del
-                        # workaround de P-state: la buena no sale corrupta.
-                        # Aquí y no al recibir el frame, para no calentar por un
-                        # frame que no se va a inferir.
+                        # Veníamos de dejar enfriar la GPU: una dummy justo
+                        # antes de la primera inferencia de verdad la despierta.
                         idle = False
-                        self._ka_idle = False
-                        print(f"[{self.cfg.camera_id}] keep-alive de GPU reanudado")
-                        warm_up()
+                        if keepalive_on:
+                            print(f"[{self.cfg.camera_id}] keep-alive de GPU reanudado")
+                            warm_up()
                     t0 = time.time()
                     results = model.track(
                         frame, persist=True, conf=self.cfg.confidence,
@@ -1370,10 +1114,6 @@ class CameraSession:
                         tracker="bytetrack.yaml", classes=self.cfg.classes,
                     )[0]
                     inference_ms = (time.time() - t0) * 1000
-
-                    # El tracker no existe hasta que corre el primer track(),
-                    # así que la sonda se coloca aquí. Es idempotente.
-                    self._instrument_tracker(model)
 
                     # Las cajas se traducen UNA vez a objetos planos: los usan
                     # tanto el dibujo como los consumidores, y así estos últimos
@@ -1426,20 +1166,6 @@ class CameraSession:
                     else:
                         self._frames_without_box += 1
                         self._consecutive_without_box += 1
-                        # El aviso que faltaba: el detector vio algo y no ha
-                        # llegado nada al dibujo. Se loguea una vez por racha
-                        # para no inundar el log a 15 fps.
-                        # `corrupt` en la condición: si el frame se quedó sin
-                        # cajas porque el canario las descartó, el tracker no ha
-                        # tenido nada que ver. Mandar a alguien a /tracker/reset
-                        # por un problema de GPU es mandarlo al sitio
-                        # equivocado, y encontrar el sitio correcto en este
-                        # fallo costó una sesión entera.
-                        if (self._raw_dets_last > 0 and not corrupt
-                                and self._consecutive_without_box == 1):
-                            print(f"[{self.cfg.camera_id}] el tracker se ha comido "
-                                  f"las {self._raw_dets_last} cajas del detector "
-                                  f"(POST /cameras/{self.cfg.camera_id}/tracker/reset)")
 
                     if want_draw:
                         annotated = frame.copy()
@@ -1563,46 +1289,16 @@ class CameraSession:
             "last_error": self.last_error,
             "esphome_connected": self.esphome.is_connected if self.esphome else None,
             "consumers": {type(c).__name__: c.status() for c in self._consumers},
-            # Lo que contesta "¿por qué no veo cajas?" sin tener que adivinar:
-            # si raw_dets > 0 y dets_after_tracker == 0, las pierde el tracker;
-            # si raw_dets == 0, no las está viendo el detector.
             "inference_health": {
                 "frames_inferred": self._frames_inferred,
                 "frames_without_box": self._frames_without_box,
                 "consecutive_without_box": self._consecutive_without_box,
-                "raw_dets": self._raw_dets_last,
-                "dets_after_tracker": self._dets_after_tracker,
-                "frames_filtered_by_tracker": self._frames_filtered,
                 "corrupt_detections": self._corrupt_dets,
                 "last_corruption": self._last_corruption,
                 "last_conf_range": self._last_conf_range,
                 "last_detection_ago_sec": (
                     round(time.time() - self._last_detection, 1)
                     if self._last_detection else None),
-            },
-            "gpu_keepalive": {
-                # Ya resueltos contra GLOBAL_CONFIG: antes había que deducirlos.
-                "enabled": GLOBAL_CONFIG.keepalive_enabled,
-                # De esta cámara, no global: se ajusta en /config/inference.
-                # Junto a dummy_ms cuenta la historia entera — si interval_sec
-                # es menor que el hueco entre frames, se calienta casi en cada
-                # frame y la GPU paga otra inferencia.
-                "interval_sec": self.cfg.keepalive_interval_sec,
-                "warming": self._ka_warming,
-                "idle": self._ka_idle,
-                "dummies": self._ka_dummies,
-                "dummy_ms": round(self._ka_dummy_ms, 1) or None,
-                # Dummies que no se lanzaron porque no cabían antes del frame
-                # siguiente. Si esto sube sin parar, el modelo es demasiado
-                # pesado para calentar entre frames (y probablemente no lo
-                # necesita).
-                "dummies_skipped": self._ka_skipped,
-                # El único dato de hardware que se queda aquí, porque es el que
-                # explica todo lo demás de un vistazo: por debajo de ~95 la GPU
-                # se ha dormido y la inferencia empieza a salir corrupta. Los
-                # relojes en crudo, el P-state y los ajustes globales están en
-                # GET /gpu y GET /config; repetirlos en cada cámara era ruido.
-                "gpu_clock_pct": gpu_clock_pct(),
             },
             "config": self.cfg.dict(),
         }

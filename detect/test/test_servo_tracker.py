@@ -436,6 +436,9 @@ check("el keep-alive ya no tiene ruta por cámara",
 check("y ya no quedan las rutas viejas",
       not ({"/cameras/{camera_id}/inference/config", "/cameras/{camera_id}/stream/config",
             "/cameras/{camera_id}/servo/tracking"} & routes))
+check("ni las de diagnóstico",
+      not ({"/gpu", "/cameras/{camera_id}/selftest",
+            "/cameras/{camera_id}/tracker/reset"} & routes))
 
 for cid in ("no-servo", "disconnected", "no-firmware", "turret-ok"):
     registry.CAMERAS.pop(cid, None)

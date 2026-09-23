@@ -241,9 +241,11 @@ check("_should_keepalive tiene 5 parametros, no 6",
       len(_inspect.signature(camera._should_keepalive).parameters) == 5,
       f"({list(_inspect.signature(camera._should_keepalive).parameters)})")
 
-# El intervalo por defecto es un valor medido: a 0.01 esta GTX 1080 se quedaba
-# en 847 MHz y daba 570 detecciones corruptas en 48.967 frames. Se puede subir
-# por camara, pero el defecto no se toca sin volver a medir.
+# El intervalo es un valor medido: a 0.01 esta GTX 1080 se quedaba en 847 MHz y
+# daba 570 detecciones corruptas en 48.967 frames; a 0.005, cero.
+check("el modelo por defecto es yolo26m",
+      camera.DEFAULT_MODEL == "yolo26m"
+      and camera.CameraConfig.model_fields["model_name"].default is camera.DEFAULT_MODEL)
 check("el intervalo por defecto vale 0.005",
       camera.KEEPALIVE_INTERVAL_SEC == 0.005,
       f"({camera.KEEPALIVE_INTERVAL_SEC})")
@@ -251,26 +253,23 @@ check("y es el defecto de CameraConfig, sin copiar el numero",
       camera.CameraConfig.model_fields["keepalive_interval_sec"].default
       is camera.KEEPALIVE_INTERVAL_SEC)
 
-# Ya no hay modo "auto" ni gobierno por relojes ni overrides por camara.
-check("keepalive_enabled es un bool, sin 'auto'",
-      isinstance(camera.GLOBAL_CONFIG.keepalive_enabled, bool))
-for gone in ("resolve_keepalive", "gpu_underclocked", "_is_pascal", "_any_pascal"):
+# Con yolo26m no hace falta: el keep-alive viene apagado.
+check("keepalive_enabled es un bool y viene apagado",
+      camera.GlobalConfig().keepalive_enabled is False)
+for gone in ("resolve_keepalive", "gpu_underclocked", "_is_pascal", "_any_pascal",
+             "gpu_clock_pct", "_gpu_state", "KEEPALIVE_INTERVAL_LIGHT_SEC"):
     check(f"ya no existe {gone}",
           not hasattr(camera, gone) and not hasattr(camera.GLOBAL_CONFIG, gone))
-# El unico ajuste de keep-alive que vive en la camara es el intervalo, porque
-# su coste depende del modelo. El interruptor y el limite de inactividad siguen
-# siendo globales: los overrides por camara de aquellos se quitaron con el resto
-# de la maquinaria del modo "auto".
+for gone in ("_instrument_tracker", "cached_model", "latest_frame"):
+    check(f"CameraSession ya no tiene {gone}",
+          not hasattr(camera.CameraSession, gone))
 check("de keep-alive, CameraConfig solo tiene el intervalo",
       {f for f in camera.CameraConfig.model_fields if f.startswith("keepalive")}
       == {"keepalive_interval_sec"},
       str([f for f in camera.CameraConfig.model_fields if f.startswith("keepalive")]))
-check("/config no expone clock_ratio",
-      "keepalive_clock_ratio" not in camera.GLOBAL_CONFIG.as_dict())
-# Se publicaba leyendo la constante, y eso mentiria en cuanto dos camaras lo
-# tuvieran distinto.
-check("/config tampoco expone el intervalo: ahora es por camara",
-      "keepalive_interval_sec" not in camera.GLOBAL_CONFIG.as_dict())
+check("/config solo expone el interruptor del keep-alive",
+      {k for k in camera.GLOBAL_CONFIG.as_dict() if k.startswith("keepalive")}
+      == {"keepalive_enabled"})
 
 # Un global_config.json de una version anterior trae claves que ya no existen.
 # Tiene que cargar igual, ignorandolas.
@@ -278,54 +277,53 @@ import tempfile as _tmp0  # noqa: E402
 _old_file = camera.GLOBAL_CONFIG_FILE
 camera.GLOBAL_CONFIG_FILE = Path(_tmp0.mkdtemp()) / "global_config.json"
 camera.GLOBAL_CONFIG_FILE.write_text(
-    '{"keepalive_enabled": false, "keepalive_clock_ratio": 0.7,'
+    '{"keepalive_enabled": true, "keepalive_clock_ratio": 0.7,'
     ' "keepalive_interval_sec": 0.05, "keepalive_idle_limit_sec": 9.0}',
     encoding="utf-8")
+camera.GLOBAL_CONFIG.keepalive_enabled = False
 camera.GLOBAL_CONFIG.load()
 check("un global_config.json viejo carga ignorando lo que sobra",
-      camera.GLOBAL_CONFIG.keepalive_enabled is False
-      and camera.GLOBAL_CONFIG.keepalive_idle_limit_sec == 9.0)
+      camera.GLOBAL_CONFIG.keepalive_enabled is True)
 check("y no se cuelan las claves muertas como atributos",
-      not hasattr(camera.GLOBAL_CONFIG, "keepalive_clock_ratio")
-      and not hasattr(camera.GLOBAL_CONFIG, "keepalive_interval_sec"))
+      not any(hasattr(camera.GLOBAL_CONFIG, k) for k in
+              ("keepalive_clock_ratio", "keepalive_interval_sec",
+               "keepalive_idle_limit_sec")))
 
-# El caso que el test anterior NO cubria, y que se escapo en produccion: una
-# clave que SI existe pero con un valor de un tipo que el codigo ya no acepta.
-# keepalive_enabled admitio la cadena "auto", se guardo en disco, y al pasar a
-# solo booleanos el fichero la resucitaba en cada arranque.
+# Una clave que SI existe pero con un tipo que el codigo ya no acepta no puede
+# resucitar: keepalive_enabled llego a admitir la cadena "auto".
 camera.GLOBAL_CONFIG_FILE.write_text(
-    '{"keepalive_enabled": "auto", "keepalive_idle_limit_sec": "tres"}',
+    '{"keepalive_enabled": "auto", "reconnect_delay_sec": "uno"}',
     encoding="utf-8")
-camera.GLOBAL_CONFIG.keepalive_enabled = True
-camera.GLOBAL_CONFIG.keepalive_idle_limit_sec = 3.0
+camera.GLOBAL_CONFIG.keepalive_enabled = False
+camera.GLOBAL_CONFIG.reconnect_delay_sec = 1.0
 camera.GLOBAL_CONFIG.load()
 check("un 'auto' guardado NO resucita: se ignora y manda el defecto",
-      camera.GLOBAL_CONFIG.keepalive_enabled is True,
+      camera.GLOBAL_CONFIG.keepalive_enabled is False,
       f"({camera.GLOBAL_CONFIG.keepalive_enabled!r})")
 check("y un numero mal escrito tampoco",
-      camera.GLOBAL_CONFIG.keepalive_idle_limit_sec == 3.0,
-      f"({camera.GLOBAL_CONFIG.keepalive_idle_limit_sec!r})")
+      camera.GLOBAL_CONFIG.reconnect_delay_sec == 1.0,
+      f"({camera.GLOBAL_CONFIG.reconnect_delay_sec!r})")
 
 # Un entero donde se espera float SI vale: JSON escribe 3 donde el defecto es
 # 3.0. Un bool no, aunque Python lo considere subclase de int.
 camera.GLOBAL_CONFIG_FILE.write_text(
-    '{"keepalive_idle_limit_sec": 12}', encoding="utf-8")
+    '{"reconnect_delay_sec": 12}', encoding="utf-8")
 camera.GLOBAL_CONFIG.load()
 check("un int donde se espera float se acepta y se convierte",
-      camera.GLOBAL_CONFIG.keepalive_idle_limit_sec == 12.0
-      and isinstance(camera.GLOBAL_CONFIG.keepalive_idle_limit_sec, float))
+      camera.GLOBAL_CONFIG.reconnect_delay_sec == 12.0
+      and isinstance(camera.GLOBAL_CONFIG.reconnect_delay_sec, float))
 camera.GLOBAL_CONFIG_FILE.write_text(
-    '{"keepalive_idle_limit_sec": true}', encoding="utf-8")
+    '{"reconnect_delay_sec": true}', encoding="utf-8")
 camera.GLOBAL_CONFIG.load()
 check("pero un bool donde se espera float, no",
-      camera.GLOBAL_CONFIG.keepalive_idle_limit_sec == 12.0)
+      camera.GLOBAL_CONFIG.reconnect_delay_sec == 12.0)
 
 camera.GLOBAL_CONFIG_FILE.write_text('[1, 2, 3]', encoding="utf-8")
 camera.GLOBAL_CONFIG.load()
 check("un JSON que no es un objeto tampoco rompe nada",
-      camera.GLOBAL_CONFIG.keepalive_enabled is True)
-camera.GLOBAL_CONFIG.keepalive_enabled = True
-camera.GLOBAL_CONFIG.keepalive_idle_limit_sec = 3.0
+      camera.GLOBAL_CONFIG.keepalive_enabled is False)
+camera.GLOBAL_CONFIG.keepalive_enabled = False
+camera.GLOBAL_CONFIG.reconnect_delay_sec = 1.0
 camera.GLOBAL_CONFIG_FILE = _old_file
 
 # El canario del bug de P-state. En produccion se vieron una confianza de 1.812
@@ -350,45 +348,23 @@ for nombre, d, esperado in [
 ]:
     check(nombre, camera._is_corrupt(d) is esperado)
 
-# El aviso del tracker no debe dispararse cuando fue el canario quien vacio el
-# frame: mandar a alguien a /tracker/reset por un problema de GPU es mandarlo al
-# sitio equivocado, y encontrar el sitio correcto costo una sesion entera.
-# Espejo de la condicion real de _process_loop.
-def _avisaria_del_tracker(det_crudas, corrupt, consecutivos_sin_caja):
-    return det_crudas > 0 and not corrupt and consecutivos_sin_caja == 1
-
-
-_basura = _Det(x1=1, y1=1, x2=2, y2=2, cls=0, label="cat", conf=9.9)
-check("si el canario filtro las cajas, NO se culpa al tracker",
-      _avisaria_del_tracker(1, [_basura], 1) is False)
-check("si el tracker se las comio de verdad, SI se avisa",
-      _avisaria_del_tracker(1, [], 1) is True)
-check("y no se repite el aviso en los frames siguientes",
-      _avisaria_del_tracker(1, [], 7) is False)
-check("sin cajas del detector no hay nada que avisar",
-      _avisaria_del_tracker(0, [], 1) is False)
-
-
-
 
 # GLOBAL_CONFIG se persiste. Antes no, y cada reinicio se llevaba por delante lo
 # ajustado por API: cuesta explicar que un POST "no haya servido de nada".
 import tempfile as _tmp  # noqa: E402
 _cfg_before = camera.GLOBAL_CONFIG_FILE
 camera.GLOBAL_CONFIG_FILE = Path(_tmp.mkdtemp()) / "global_config.json"
-_idle_before = camera.GLOBAL_CONFIG.keepalive_idle_limit_sec
-camera.GLOBAL_CONFIG.keepalive_idle_limit_sec = 7.5
+camera.GLOBAL_CONFIG.keepalive_enabled = True
 camera.GLOBAL_CONFIG.save()
-camera.GLOBAL_CONFIG.keepalive_idle_limit_sec = 1.0       # simula un reinicio
+camera.GLOBAL_CONFIG.keepalive_enabled = False       # simula un reinicio
 camera.GLOBAL_CONFIG.load()
 check("los ajustes globales sobreviven a un reinicio",
-      camera.GLOBAL_CONFIG.keepalive_idle_limit_sec == 7.5,
-      f"({camera.GLOBAL_CONFIG.keepalive_idle_limit_sec})")
+      camera.GLOBAL_CONFIG.keepalive_enabled is True)
 camera.GLOBAL_CONFIG_FILE.write_text("{esto no es json", encoding="utf-8")
 camera.GLOBAL_CONFIG.load()
 check("un global_config.json roto no impide arrancar",
-      camera.GLOBAL_CONFIG.keepalive_idle_limit_sec == 7.5)
-camera.GLOBAL_CONFIG.keepalive_idle_limit_sec = _idle_before
+      camera.GLOBAL_CONFIG.keepalive_enabled is True)
+camera.GLOBAL_CONFIG.keepalive_enabled = False
 camera.GLOBAL_CONFIG_FILE = _cfg_before
 
 

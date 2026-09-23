@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from shutdown import _install_shutdown_signal_hook
 from camera import (
     DEFAULT_DEVICE,
+    DEFAULT_MODEL,
     GLOBAL_CONFIG,
     CameraConfig,
     CameraSession,  # solo para la anotación de _shutdown_one
@@ -38,7 +39,6 @@ from clips import (
     load_recordings_config,
     save_recordings_config,
 )
-from diagnostics import gpu_report, selftest
 from encoders import encoder_capabilities
 from log import print
 from recorder import RecordingConfig
@@ -201,49 +201,16 @@ async def get_config():
     return GLOBAL_CONFIG.as_dict()
 
 
-@app.get("/gpu", summary="Estado de la GPU: relojes, P-state y quién la usa")
-async def gpu_status():
-    """El hardware, que es de la máquina y no de cada cámara.
-
-    Estaba repetido dentro de `gpu_keepalive` en el `/status` de cada cámara y
-    era puro ruido: los mismos relojes copiados N veces. Allí solo queda
-    `gpu_clock_pct`, que resume esto en un número.
-
-    Lo que hay que mirar cuando la inferencia va lenta o devuelve basura:
-    `clock_pct` (100 = a pleno rendimiento; por debajo de 95 la GTX 1080
-    empieza a dar detecciones corruptas).
-
-    Si además sospechas que otro programa está usando la tarjeta, compara
-    `memory_used_mb` con lo que ocupa el servicio (~1 GB con un modelo
-    cargado). No se listan los procesos porque en Windows NVML no da ese dato
-    de forma fiable; para eso, `nvidia-smi`.
-    """
-    return await asyncio.to_thread(gpu_report)
-
-
 @app.post("/config/keepalive")
 async def set_global_keepalive(
-    enabled: Optional[bool] = Form(None, description="Mantener la GPU ocupada con inferencias mínimas entre frames, para que el driver no le baje los relojes y devuelva detecciones corruptas. Vacío = no tocar. Ojo: en una tarjeta que ya sostenga sus relojes esto solo gasta."),
-    idle_limit_sec: Optional[float] = Form(None, gt=0.0, description="Segundos sin recibir ningún frame tras los cuales se deja de calentar: si la cámara no da imagen, ocupar la GPU es gastar para nada. Vacío = no tocar."),
+    enabled: bool = Form(..., description="Mantener la GPU ocupada con inferencias mínimas entre frames para que el driver no le baje los relojes. Solo hace falta en una GTX 10xx con un modelo ligero (yolo26n); con yolo26m, apagado."),
 ):
     """Keep-alive de GPU, global para todas las cámaras. **Se persiste.**
 
-    Los campos vacíos **no se tocan**: una llamada parcial no resetea el resto.
-
-    Es todo lo que hay de global. El **intervalo** entre comprobaciones se
-    ajusta por cámara, en `POST /cameras/{id}/config/inference`, porque su coste
-    depende del modelo: una dummy de `yolo26m` cuesta 30,7 ms, más que su propia
-    inferencia real, así que calentar duplica el gasto de esa cámara.
-
-    Y conviene saber lo que este workaround **no** hace: no arregla el problema
-    de fondo. Con un modelo ligero (`yolo26n`) seguían saliendo 6 corrupciones
-    por minuto aun con el keep-alive activo. Lo que lo resuelve es usar un
-    modelo lo bastante pesado como para que la GPU no se duerma sola.
+    Viene apagado. El intervalo se ajusta por cámara en
+    `POST /cameras/{id}/config/inference`. Ver docs/GPU.md.
     """
-    if enabled is not None:
-        GLOBAL_CONFIG.keepalive_enabled = enabled
-    if idle_limit_sec is not None:
-        GLOBAL_CONFIG.keepalive_idle_limit_sec = idle_limit_sec
+    GLOBAL_CONFIG.keepalive_enabled = enabled
     GLOBAL_CONFIG.save()
     return GLOBAL_CONFIG.as_dict()
 
@@ -281,7 +248,7 @@ def _validate_device(device: str) -> str:
 async def add_camera(
     camera_id: str = Form(..., description="Identificador único; es el que va en el resto de rutas."),
     stream_url: str = Form(..., description="URL del stream MJPEG del ESP32, p.ej. http://192.168.1.50:8080/"),
-    model_name: str = Form("yolo11m", description="Pesos YOLO a usar, sin el .pt. Se descargan solos la primera vez."),
+    model_name: str = Form(DEFAULT_MODEL, description="Pesos YOLO a usar, sin el .pt. Se descargan solos la primera vez."),
     device: str = Form("cuda", description="Dónde corre la inferencia: 'cuda' o 'cpu'."),
     confidence: float = Form(0.5, ge=0.0, le=1.0, description="Confianza mínima para dar una detección por buena. Por defecto 0.5."),
     imgsz: int = Form(640, description="Lado al que YOLO reescala el frame antes de inferir. Más grande ve objetos más pequeños, pero cuesta más. Por defecto 640."),
@@ -400,7 +367,7 @@ class InferenceConfig(BaseModel):
     classes: Optional[list[int]] = Field(None, description="IDs de clase COCO (0 = personas, 16 = pájaros). null = todas las clases.")
     model_name: Optional[str] = Field(None, description="Pesos YOLO, sin el .pt. Cambiarlo relanza la sesión.")
     device: Optional[str] = Field(None, description="'cuda' o 'cpu'. Cambiarlo relanza la sesión.")
-    keepalive_interval_sec: Optional[float] = Field(None, gt=0.0, le=1.0, description="Cada cuánto se comprueba si hay que calentar la GPU mientras se espera el frame siguiente. Si lo pones POR ENCIMA del hueco entre frames (1/pipeline_fps menos last_inference_ms) no se lanza ninguna inferencia dummy: es la forma de apagar el keep-alive en una cámara cuyo modelo ya mantiene despierta la GPU por sí solo. Bajarlo calienta más y gasta más, porque una dummy cuesta casi lo mismo que una inferencia real (medido con yolo26m: 30,7 ms la dummy contra 27,5 ms la real). Ojo al otro extremo: a 0,01 esta GTX 1080 se quedó en 847 MHz y dio 570 detecciones corruptas en 48.967 frames.")
+    keepalive_interval_sec: Optional[float] = Field(None, gt=0.0, le=1.0, description="Cada cuánto se comprueba si hay que calentar la GPU mientras se espera el frame siguiente. Solo actúa con el keep-alive global encendido (POST /config/keepalive). Por defecto 0,005; a 0,01 la GTX 1080 ya se dormía.")
 
 
 @app.post("/cameras/{camera_id}/config/inference")
@@ -482,10 +449,6 @@ def _openapi_with_camera_examples():
 
 app.openapi = _openapi_with_camera_examples
 
-
-# El keep-alive ya no se puede ajustar por cámara: hubo overrides
-# (`POST /cameras/{id}/config/keepalive`) y se quitaron con el resto de la
-# maquinaria. Es global, en `POST /config/keepalive`.
 
 
 # ---------------------------------------------------------------------------
@@ -703,55 +666,6 @@ async def record_stop(camera_id: str):
         clip["url"] = f"/recordings/{clip['clip_id']}"
         clip["thumbnail_url"] = f"/recordings/{clip['clip_id']}/thumbnail"
     return res
-
-
-@app.post("/cameras/{camera_id}/selftest",
-          summary="Diagnostica por qué una cámara no está detectando")
-async def camera_selftest(camera_id: str):
-    """Corre cuatro caminos de inferencia sobre el frame ACTUAL y los compara.
-
-    Es la herramienta para cuando el stream no pinta cajas y no se sabe por
-    qué. Mira dentro del propio proceso del servicio, que es lo único que no se
-    puede hacer desde fuera, y compara:
-
-    - `track()`, el camino real del servicio;
-    - `predict()`, el mismo modelo sin el tracker;
-    - un *forward* crudo, la red sin postproceso, para ver si saca algo antes
-      del NMS;
-    - una instancia del modelo recién cargada, en este mismo proceso.
-
-    El campo `verdict` traduce la combinación a una frase y a la acción que
-    toca. Llámalo **mientras el fallo está presente**: si reinicias antes, el
-    proceso vuelve al estado bueno y no hay nada que diagnosticar.
-    """
-    session = get_camera(camera_id)
-    model = session.cached_model()
-    if model is None:
-        raise HTTPException(409, "esta cámara todavía no ha cargado ningún modelo "
-                                 "(¿ha llegado a inferir algún frame?)")
-    return await asyncio.to_thread(
-        selftest, session, model, f"{session.cfg.model_name}.pt")
-
-
-@app.post("/cameras/{camera_id}/tracker/reset",
-          summary="Reinicia el seguimiento (ByteTrack) de una cámara")
-async def reset_tracker(camera_id: str):
-    """Tira el estado del tracker para que se reconstruya en el próximo frame.
-
-    Existe porque no había otra forma de recuperarse: ultralytics no reconstruye
-    los trackers mientras se le pida `persist=True`, y el modelo vive cacheado,
-    así que un tracker degradado sobrevivía a parar y arrancar la cámara y solo
-    se arreglaba reiniciando el servicio entero.
-
-    Úsalo si `/status` muestra `inference_health.raw_dets` mayor que cero con
-    `dets_after_tracker` a cero: eso es el detector viendo cosas que el tracker se
-    está comiendo.
-    """
-    session = get_camera(camera_id)
-    if not session.reset_tracker():
-        raise HTTPException(409, "esta cámara todavía no tiene un tracker montado "
-                                 "(¿ha llegado a inferir algún frame?)")
-    return session.status()
 
 
 @app.get("/cameras/{camera_id}/record/status",

@@ -76,6 +76,9 @@ Debería imprimir `True` y el nombre de la tarjeta (p. ej. `NVIDIA GeForce GTX 1
 > El servicio dice siempre en el log en qué modo arrancó y dónde cambiarlo. No
 > hay detección automática de arquitectura a propósito: una constante a la
 > vista se entiende de un vistazo y no depende de adivinar el hardware.
+>
+> Este y el otro problema de la 1080 (la bajada de reloj), con las mediciones y
+> qué cambia con otra tarjeta: [`docs/GPU.md`](docs/GPU.md).
 
 ### Resto de dependencias
 
@@ -231,12 +234,10 @@ el siguiente `/start`, aunque la placa despierte o reconecte y republique
 ### Otros endpoints
 
 - `GET /health` — vivo / no vivo
-- `GET /config`, `POST /config/keepalive` — keep-alive de GPU, global y
-  **persistido** en `global_config.json`. Dos campos, `enabled` e
-  `idle_limit_sec`, y los que no mandes **no se tocan**. El intervalo va
-  aparte, por cámara (`keepalive_interval_sec`), porque su coste depende del
-  modelo; ver [`docs/CICLO-DE-VIDA.md`](docs/CICLO-DE-VIDA.md)
-- `GET /gpu` — relojes, P-state, temperatura y memoria de la tarjeta
+- `GET /config`, `POST /config/keepalive` — interruptor del keep-alive de GPU,
+  global, **apagado por defecto** y persistido en `global_config.json`. Solo
+  hace falta en una GTX 10xx con un modelo ligero; el intervalo va por cámara
+  (`keepalive_interval_sec`). Ver [`docs/GPU.md`](docs/GPU.md)
 - `GET /cameras`, `POST /cameras`, `DELETE /cameras/{camera_id}` — alta/baja
 - `POST /cameras/{camera_id}/esphome/awake` — forzar "despierto"
 
@@ -309,16 +310,11 @@ de la parcela: mantenlo en la LAN.
 
 ## Cuando no detecta, o detecta cosas raras
 
-Antes de sospechar del modelo, mira `GET /cameras/{camera_id}/status`. Hay dos
-bloques que contestan casi siempre:
+Antes de sospechar del modelo, mira `inference_health` en
+`GET /cameras/{camera_id}/status`:
 
 ```jsonc
-"gpu_keepalive": {
-  "gpu_clock_pct": 98, "warming": true, "interval_sec": 0.005,
-  "dummies": 344, "dummy_ms": 30.7, "dummies_skipped": 0
-},
 "inference_health": {
-  "raw_dets": 2, "dets_after_tracker": 2,
   "corrupt_detections": 0, "consecutive_without_box": 0,
   "last_conf_range": [0.71, 0.91]
 }
@@ -326,16 +322,9 @@ bloques que contestan casi siempre:
 
 | Síntoma | Qué mirar |
 | --- | --- |
-| No detecta nada con algo delante | `raw_dets`. Si es 0, no lo ve el detector; si es mayor que 0 con `dets_after_tracker` a 0, se lo come el tracker → `POST /cameras/{id}/tracker/reset` |
-| Cajas absurdas, o deja de detectar tras un rato | `corrupt_detections` y `gpu_clock_pct`. Por debajo de ~95 la GPU se ha dormido y devuelve basura (bug de P-state de la GTX 1080); el detalle en `GET /gpu` |
+| Cajas absurdas, o deja de detectar tras un rato | `corrupt_detections`. Si sube, la GPU se ha dormido y devuelve basura: usa un modelo más pesado (`yolo26m`) o enciende el keep-alive. El porqué, en [`docs/GPU.md`](docs/GPU.md#2-la-bajada-de-reloj-p-state); los relojes, con `nvidia-smi` |
 | La inferencia va 2-3 veces más lenta de lo normal | Lo mismo: es el reloj, no el modelo |
 | Detecta poco, pero limpio | `last_conf_range`. Si ronda tu `confidence`, es cuestión de umbral o de modelo, no un fallo |
-| Una sola cámara se come media GPU | `dummies` contra `frames_inferred`. Si van casi a la par, estás pagando dos inferencias por frame: `dummy_ms` suele ser igual o mayor que `last_inference_ms`. Con `corrupt_detections` a 0 el keep-alive no te está protegiendo de nada, así que sube el `keepalive_interval_sec` de esa cámara por encima de su hueco entre frames (`1/pipeline_fps - last_inference_ms`) y deja de calentar |
-
-Si nada de eso lo aclara, `POST /cameras/{camera_id}/selftest` pasa el frame
-actual por cuatro caminos dentro del propio proceso (con tracker, sin tracker,
-la red cruda y una instancia recién cargada) y te dice en una frase de quién es
-la culpa.
 
 ---
 
@@ -432,6 +421,7 @@ El resto de scripts de `test/` son pruebas manuales que sí necesitan la placa.
 
 ## Historial de depuración
 
-Las notas sobre los P-states de la GTX 1080 y sobre por qué el filtrado de
-confianza / ByteTrack **no** era la causa de los cuelgues están en los
-comentarios de `_process_loop` dentro de `camera.py`.
+Los problemas de la GTX 1080 (cuDNN y P-states), con las mediciones y la
+historia de lo que se probó, están en [`docs/GPU.md`](docs/GPU.md). Por qué el
+filtrado de confianza / ByteTrack **no** era la causa de los cuelgues está en
+los comentarios de `_process_loop` dentro de `camera.py`.

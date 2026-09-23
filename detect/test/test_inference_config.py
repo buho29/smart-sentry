@@ -119,22 +119,21 @@ check("defecto = la constante medida",
       s.cfg.keepalive_interval_sec == camera.KEEPALIVE_INTERVAL_SEC,
       f"({s.cfg.keepalive_interval_sec})")
 
-# Subirlo por encima del hueco entre frames es la forma de apagar el keep-alive
-# en una cámara cuyo modelo ya mantiene despierta la GPU. No debe relanzar: se
-# relee en cada vuelta del bucle, y relanzar cortaría el stream por un ajuste
-# que no lo necesita.
-r = client.post(URL, json={"keepalive_interval_sec": 0.06})
+# No debe relanzar: se relee en cada vuelta del bucle, y relanzar cortaría el
+# stream por un ajuste que no lo necesita.
+LIGHT = 0.02
+r = client.post(URL, json={"keepalive_interval_sec": LIGHT})
 check("200", r.status_code == 200, r.text[:120])
-check("aplicado", s.cfg.keepalive_interval_sec == 0.06)
+check("aplicado", s.cfg.keepalive_interval_sec == LIGHT)
 check("NO relanza la sesión", r.json()["relaunched"] is False and _registry.CAMERAS["cam"] is s)
-check("visible en gpu_keepalive.interval_sec",
-      s.status()["gpu_keepalive"]["interval_sec"] == 0.06)
+check("visible en config.keepalive_interval_sec",
+      s.status()["config"]["keepalive_interval_sec"] == LIGHT)
 check("persistido a disco", any(
-    c["camera_id"] == "cam" and c["keepalive_interval_sec"] == 0.06
+    c["camera_id"] == "cam" and c["keepalive_interval_sec"] == LIGHT
     for c in json.loads(_registry.CAMERAS_CONFIG_FILE.read_text())))
 
 r = client.post(URL, json={"keepalive_interval_sec": None, "confidence": 0.55})
-check("null = no tocar", r.status_code == 200 and s.cfg.keepalive_interval_sec == 0.06
+check("null = no tocar", r.status_code == 200 and s.cfg.keepalive_interval_sec == LIGHT
       and s.cfg.confidence == 0.55, r.text[:120])
 
 # 0 dejaría el bucle girando sin esperar; por encima de 1 s ya no es un
@@ -142,7 +141,7 @@ check("null = no tocar", r.status_code == 200 and s.cfg.keepalive_interval_sec =
 for bad in (0, -0.01, 2.0):
     r = client.post(URL, json={"keepalive_interval_sec": bad})
     check(f"{bad} -> 422", r.status_code == 422, f"({r.status_code})")
-check("tras los rechazos, sin tocar", s.cfg.keepalive_interval_sec == 0.06)
+check("tras los rechazos, sin tocar", s.cfg.keepalive_interval_sec == LIGHT)
 
 # Una cámara guardada por una versión anterior no trae la clave.
 old = camera.CameraConfig(**{k: v for k, v in s.cfg.model_dump().items()

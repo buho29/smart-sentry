@@ -55,7 +55,9 @@ Contrapartida de persistir: **lo guardado manda sobre los valores por defecto
 del código**, así que un defecto que cambie en una versión nueva no llega a una
 máquina que ya tenga su fichero. Es el mismo trato que `cameras_config.json`.
 
-El keep-alive no se puede ajustar por cámara: es global, en `POST /config/keepalive`, con solo `enabled` e `idle_limit_sec`. Hubo overrides por cámara y se quitaron con el resto de la maquinaria.
+Del keep-alive, lo global es solo el interruptor (`POST /config/keepalive`,
+apagado por defecto). El intervalo es por cámara (`keepalive_interval_sec`, ver
+más abajo).
 
 ### Cache de modelos YOLO
 
@@ -66,8 +68,8 @@ y varias cámaras suelen usar el mismo modelo. Pero dos cámaras con el mismo
 predictor y **el mismo ByteTrack**.
 
 Con una sola cámara no se nota. Con dos: el estado de seguimiento de ambas
-escenas se mezcla en un único tracker, los `track_id` saltan de una a otra, un
-`POST /tracker/reset` en una afecta a la otra, y dos hilos `yolo-*` llaman a
+escenas se mezcla en un único tracker, los `track_id` saltan de una a otra, el
+reset del tracker al arrancar una afecta a la otra, y dos hilos `yolo-*` llaman a
 `model.track()` sobre el mismo predictor sin ningún lock.
 
 Por eso `get_model(name, device, owner)` incluye el `camera_id` en la clave. El
@@ -80,216 +82,39 @@ Y como ahora la caché crece con el número de cámaras, `DELETE /cameras/{id}`
 llama a `release_model()`: antes no liberar era una nota al pie, ahora un
 alta/baja repetida sería una fuga de VRAM de verdad.
 
-### El keep-alive de GPU tiene fecha de caducidad
+### El keep-alive de GPU
 
-`_process_loop` lanza una inferencia dummy cada `keepalive_interval_sec`
-(0,005 s por defecto, ajustable por cámara) cuando la cola está vacía, para que
-el driver de la GTX 1080 no baje de P-state entre frames y devuelva inferencias
-corruptas.
+**Viene apagado**: con `yolo26m`, el modelo por defecto, la GTX 1080 no se
+duerme entre frames y no hace falta. Es un workaround para volver a un modelo
+ligero; el problema de fondo, las mediciones y qué cambiaría con otra tarjeta
+están en [`GPU.md`](GPU.md). Aquí solo va lo que toca al ciclo de vida del
+hilo.
 
-Eso **solo tiene sentido entre frames de un stream vivo**, en huecos de decenas
-de milisegundos. Sin ese límite, una cámara desaparecida dejaba el hilo de
-proceso lanzando 20 inferencias por segundo indefinidamente: medido con
-`nvidia-smi`, **29 % de una GTX 1080 con cero frames entrando**, para siempre.
+Encendido (`POST /config/keepalive`), `_process_loop` lanza una inferencia
+dummy —un forward crudo sobre la red, que no toca el tracker— cada
+`keepalive_interval_sec` (0,005 s por defecto) mientras la cola está vacía.
+Ese intervalo es el `timeout` del `raw_queue.get()`, así que no añade latencia:
+el `get()` devuelve el frame en cuanto llega. Y por encima del hueco entre
+frames no se lanza ninguna dummy. Es por cámara porque lo que decide si hace
+falta, y lo que cuesta, es el modelo de cada una.
 
-Tampoco tiene sentido **si no va a haber ninguna inferencia real que
-proteger**: con `always_infer` a `false`, nadie mirando el stream y ningún
-consumidor pidiéndolo, `model.track()` no llega a ejecutarse, así que calentar
-la GPU no protege nada. Eran ~10 puntos de GPU gastados en reposo con la cámara
-despierta. Por eso `_should_keepalive()` recibe también `has_inference`.
+`_should_keepalive()`, una función pura para poder probarla sin GPU, solo
+calienta si:
 
-Pasados `keepalive_idle_limit_sec` (3 s, configurable en `GLOBAL_CONFIG` y por
-`POST /config/keepalive`) sin un frame real, el keep-alive se pausa y el
-`queue.get()` pasa a esperar 1 s en vez de 5 ms, así que el hilo queda de
-verdad en reposo. Medido: **29 % → 2 %**, con el reposo del sistema en 4 %.
+- **la cámara sigue dando frames**: pasados `KEEPALIVE_IDLE_LIMIT_SEC` (3 s)
+  sin un frame real se pausa y el `get()` pasa a esperar 1 s. Sin ese límite,
+  una cámara desaparecida dejaba el hilo calentando para siempre: medido,
+  **29 % de una GTX 1080 con cero frames entrando**;
+- **va a haber una inferencia real que proteger**: con `always_infer` a
+  `false`, nadie mirando y ningún consumidor, calentar no protege nada.
 
-Al salir del reposo se lanza **una** dummy justo antes de la primera inferencia
-real, para recalentar: así se conserva la garantía del workaround de P-state,
-que es justo lo que el keep-alive protege. Va ahí, y no al recibir el frame,
-porque cubre de una vez los dos motivos de haberse enfriado (sin frames o sin
-inferencia pedida) y no calienta por un frame que no se va a inferir. Medido:
-vuelve a 29 %.
+Al salir de la pausa se lanza **una** dummy justo antes de la primera
+inferencia real, para recalentar.
 
-La decisión vive en `_should_keepalive()`, una función pura precisamente para
-poder probarla sin GPU.
-
-### Y no bastaba: el keep-alive estaba muerto en funcionamiento normal
-
-Todo lo anterior protege el caso "la cámara deja de dar frames". El caso que se
-escapaba es el contrario, y es el que rompía la detección en producción.
-
-El keep-alive solo se ejecuta cuando salta `queue.Empty`. Con la cámara a
-16,7 fps (un frame cada 60 ms) y una inferencia de ~20 ms, **el frame siguiente
-llegaba siempre antes del timeout de 50 ms**, así que nunca saltaba: medido,
-**19 dummies en 11.280 frames**. La GPU pasaba dos tercios de cada ciclo sin
-trabajo y caía a **P5 / 759 MHz de los 1961** de la GTX 1080.
-
-A esos relojes la inferencia no es solo lenta, es **incorrecta**: se midieron
-confianzas de `1.812` —imposibles, salen de una sigmoide— y frames enteros sin
-detectar a una persona que estaba delante de la cámara. Es el mismo bug que
-reproduce `test/gpu_yolo_stress_test.py`, pero disparándose en uso normal.
-
-De ahí venía además una dependencia del modelo que despistó mucho: `yolo26m`
-ocupa 30 ms de cada 60 y mantiene la GPU despierta él solo, así que nunca
-fallaba; `yolo26n` solo ocupa 10 y la dejaba dormirse. Parecía que el modelo
-pequeño "detectaba peor", y lo que pasaba es que al ser más rápido dejaba que
-la tarjeta se durmiera.
-
-### Y la conclusión, después de intentarlo de varias formas
-
-Todo lo que viene a continuación quedó **desmontado a propósito**. Se llegó a
-gobernar el keep-alive por el reloj real de la GPU (NVML), con detección de
-arquitectura Pascal, un `clock_ratio` ajustable y overrides por cámara. Mucha
-maquinaria para afinar un workaround que **no llega a arreglar el problema**:
-con `yolo26n` y el keep-alive activo seguían saliendo **6 detecciones corruptas
-por minuto**.
-
-Lo que sí lo resuelve es usar un modelo lo bastante pesado como para que la GPU
-no se duerma sola. Medido en la misma máquina y la misma escena:
-
-| Configuración | ms/inferencia | Inferencia | Dummies | Total | Reloj | Corrupciones |
-| --- | --- | --- | --- | --- | --- | --- |
-| `yolo26n` sin keep-alive | 33,1 | 55,2 % | 0 % | **55 %** | 40 % | — |
-| `yolo26n` con keep-alive | 15,0 | 25,1 % | 27,0 % | **52 %** | 61 % | 6/min |
-| **`yolo26m`** | 22,6 | 36,8 % | ~0 % | **~37 %** | **97 %** | **0 en 4935** |
-
-La paradoja: en esta tarjeta **gastar menos sale más caro**. El driver castiga
-la carga baja bajando los relojes, y entonces el mismo trabajo cuesta el doble.
-Apagar el keep-alive con el modelo ligero es la opción **más** cara de las tres.
-
-Así que hoy el keep-alive es: un interruptor global (`keepalive_enabled`), un
-intervalo por cámara (`keepalive_interval_sec`, 0,005 s por defecto) y la guarda
-`dummy_fits`. Nada más. La guarda es lo que impide que un modelo pesado pierda
-frames: su dummy cuesta 37,2 ms y el hueco entre frames es de 30, así que sin
-ella el ciclo se va a ~72 ms contra los 60 de la cámara. Hace el mismo trabajo
-que hacía el gobierno por relojes, sin NVML ni estado que mantener.
-
-NVML sigue ahí, pero solo para **mirar**: `GET /gpu` y `gpu_clock_pct` en
-`/status`. No decide nada.
-
-### Por qué el intervalo es por cámara, y no global
-
-Porque **lo que decide si el keep-alive hace falta, y lo que cuesta, es el
-modelo**, y cada cámara tiene el suyo. Un valor global no puede servir a la vez
-a un `yolo26n`, que se duerme si no lo calientas, y a un `yolo26m`, que se
-mantiene despierto solo.
-
-El caso que lo forzó: una única cámara con `yolo26m` consumiendo el **65 % de la
-GPU**, de los que unos 40 puntos eran dummies.
-
-```jsonc
-"last_inference_ms": 27.5, "pipeline_fps": 16.5,
-"gpu_keepalive": { "dummies": 3697, "dummy_ms": 30.7 },
-"inference_health": { "frames_inferred": 4609, "corrupt_detections": 0 }
-```
-
-Una dummy de ese modelo cuesta **30,7 ms, más que su propia inferencia real**
-(27,5 ms): no tiene nada de "mínima", es un forward completo de la misma red. Y
-`corrupt_detections` a 0 dice que no estaba protegiendo de nada.
-
-La tabla de más arriba daba ~0 % de dummies para `yolo26m`, y no se contradice:
-la guarda `dummy_fits` compara el hueco entre frames (60,6 − 27,5 = **33,1 ms**)
-con el coste de la dummy (30,7 ms), y ahí cabe **por 2,4 ms**. El
-comportamiento está en un filo, así que unos fps arriba o abajo duplican el
-consumo sin que nadie toque nada.
-
-Subir el intervalo lo arregla por un camino que conviene entender, porque no es
-obvio: `keepalive_interval_sec` es el `timeout` del `raw_queue.get()`, así que
-**por encima del hueco entre frames el `get()` nunca expira y no se lanza
-ninguna dummy**. Poner `0.06` en esa cámara apaga su keep-alive de hecho. Y no
-añade latencia, porque el `get()` devuelve el frame en cuanto llega.
-
-Se ajusta en `POST /cameras/{id}/config/inference`, se relee en cada vuelta del
-bucle (no relanza la sesión) y se ve en `gpu_keepalive.interval_sec`. El
-interruptor y `keepalive_idle_limit_sec` siguen siendo globales: ninguno de los
-dos depende del modelo.
-
-<details>
-<summary>El camino que se recorrió hasta llegar aquí (histórico)</summary>
-
-### La solución intermedia: gobernar por el reloj, no por un temporizador
-
-Bajar el intervalo arregla el síntoma (medido en caliente: 759 → 1265 MHz,
-22,2 → 9,8-16,6 ms, confianzas de vuelta a 0,71-0,91) pero introduce otro
-problema, porque **el dummy cuesta lo mismo que una inferencia real**:
-
-| Modelo | Inferencia | Dummy | Hueco por frame |
-| --- | --- | --- | --- |
-| `yolo26n` | 10,7 ms | 9,3 ms | 49,2 ms → caben ~3 |
-| `yolo26m` | 29,9 ms | **37,2 ms** | **30,0 ms** → no cabe ninguno |
-
-Con el medium, lanzar el dummy igualmente metía el ciclo en ~72 ms contra los
-60 de la cámara: **se perdía en torno al 17 % de los frames** y la GPU subía al
-93 %, todo ello sin necesitarlo.
-
-Así que la condición ya no es un temporizador sino el **reloj real de la GPU**:
-`gpu_underclocked()` lee `sm_clock` por NVML (cacheado 0,5 s) y calienta
-mientras esté por debajo de `keepalive_clock_ratio` (**0,95**) del **máximo
-observado**. Más una guarda: si el dummy no cabe antes del frame siguiente, no
-se lanza (`dummies_skipped` en `/status`). Esa guarda es la que protege al
-modelo pesado.
-
-**La referencia es el reloj observado, no el que declara NVML.**
-`nvmlDeviceGetMaxClockInfo` devuelve 1961 MHz en la GTX 1080, pero ese es el de
-P0: bajo carga de cómputo la tarjeta se queda en **P2**, con un techo real en
-torno a 1290 MHz. Los dos valores salen en **`GET /gpu`** (`sm_clock_max_mhz` y
-`sm_clock_max_seen_mhz`); en el `/status` de cada cámara solo queda
-`gpu_clock_pct`, que es el actual como porcentaje del observado. Repetir los
-mismos relojes en cada cámara era ruido: son de la máquina, no de la cámara.
-
-**Y el ratio va alto a propósito.** La regla es "calienta salvo que la tarjeta
-esté prácticamente en su tope sostenido", no "calienta solo si ha caído un
-30 %". Estuvo en 0,7 y fue un error caro: con el máximo observado en 1657 MHz el
-umbral quedaba en 1160, y esta tarjeta se sostiene en 1177 —justo por encima—,
-así que no se calentaba nunca. Medido: **58 detecciones corruptas en 7486
-frames**, frente a **1 en 5986** cuando sí calentaba.
-
-Puntos de operación medidos en esta GTX 1080:
-
-| Reloj | Resultado |
-| --- | --- |
-| 759 MHz | corrupción masiva, deja de detectar |
-| 1177 MHz | 58 corruptas en 7486 frames |
-| 1290 MHz | 1 corrupta en 5986 frames |
-
-**El intervalo importa tanto como el ratio.** El driver decide por utilización,
-y con huecos de 10 ms entre dummies ve la tarjeta ociosa: `nvidia-smi` lo dice
-con todas las letras —`Clocks Event Reasons -> Idle: Active`, con 45 W de los
-210 disponibles— y baja los relojes aunque el keep-alive esté disparando sin
-parar. Medido en la misma cámara y con el mismo modelo:
-
-| `interval_sec` | Reloj sostenido | Detecciones corruptas |
-| --- | --- | --- |
-| 0,01 | 847 MHz (P5) | **570 en 48.967 frames** (1,16 %), con 54.753 dummies |
-| **0,005** | ~1290 MHz | **0 en 4147 frames seguidos** |
-
-Por eso el defecto es 0,005: no hay que dejarle hueco al driver. Se puede subir
-por cámara si su modelo es lento, porque el dummy cuesta lo mismo que una
-inferencia y con uno pesado no cabe en el hueco entre frames.
-
-Nota: en esta tarjeta **no se pueden fijar los relojes** (`nvidia-smi -lgc`
-responde "not supported for GPU"), y en Windows tampoco hay modo persistencia.
-La vía alternativa, si algún día el keep-alive no basta, es el panel de NVIDIA:
-*Administrar configuración 3D → Configuración del programa →* el `python.exe`
-del venv *→ Modo de administración de energía → Preferir rendimiento máximo*.
-
-En una GPU sana que sostiene sus relojes, el actual es prácticamente igual al
-observado, así que **no se calienta nada**: ahí está la portabilidad. Y sin
-lecturas de reloj (`pynvml` ausente, o una AMD con ROCm, donde PyTorch también
-llama `"cuda"` al device) se devuelve `False` y no se calienta a ciegas; el
-criterio de tiempo sin frames sigue cubriendo el caso que sí lo necesita.
-
-</details>
-
-**Qué mirar en `/status` cuando la inferencia vaya lenta o dé resultados
-raros**: `gpu_keepalive.gpu_clock_pct` (100 = a pleno rendimiento) y, para el
-detalle, `GET /gpu`; más `inference_health.corrupt_detections`, que cuenta las
-confianzas fuera de `[0,1]`. Esas detecciones se descartan antes de propagarse:
-una caja con confianza 1,8 movería los servos hacia un fantasma y dispararía una
-grabación.
-
-Y si `gpu_clock_pct` está bajo, la respuesta no es tocar el keep-alive: es usar
-un modelo más pesado. Suena al revés y está medido.
+La guarda `dummy_fits` no lanza la dummy si no cabe antes del frame siguiente:
+la de `yolo26m` cuesta unos 37 ms y el hueco entre frames es de 30, así que sin
+ella el ciclo se iba a ~72 ms contra los 60 de la cámara y se perdía en torno
+al 17 % de los frames.
 
 ### `lifespan`
 
@@ -576,7 +401,7 @@ Latencia real de salida de cada hilo:
 
 | Hilo | Sale en | Por qué |
 | --- | --- | --- |
-| Proceso (`yolo-*`) | ≤ 50 ms con keep-alive, ≤ 1 s sin él | Es el timeout de su `queue.get()` |
+| Proceso (`yolo-*`) | ≤ `keepalive_interval_sec` con keep-alive (60 ms por defecto, 5 ms con modelo ligero), ≤ 1 s sin él | Es el timeout de su `queue.get()` |
 | Lector, dentro de `iter_content` | ~0,01 s | Le rompen el socket |
 | Lector, dentro de `requests.get` | ≤ 3 s | Connect timeout contra una placa dormida |
 
