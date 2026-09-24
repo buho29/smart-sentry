@@ -277,7 +277,7 @@ El flujo mínimo:
 
 ```
 GET  /recordings/capabilities                  ¿hay H.264? (ver aviso de abajo)
-POST /cameras/huerta/config/recording          source=raw, trigger_classes=14,15,16
+POST /cameras/huerta/config/recording          source=raw (dispara con las classes de la cámara)
 ...                                            (esperar a que pase algo)
 GET  /recordings?camera_id=huerta&limit=1      el último clip, con su url
 ```
@@ -292,7 +292,7 @@ GET  /recordings?camera_id=huerta&limit=1      el último clip, con su url
 | Miniatura | `GET /recordings/{clip_id}/thumbnail` |
 | Borrar | `DELETE /recordings/{clip_id}` |
 | Ocupación y disco libre | `GET /recordings/stats` |
-| Retención | `GET`/`POST /recordings/config`, `POST /recordings/sweep` |
+| Retención y codificación (comunes a todas las cámaras) | `GET`/`POST /recordings/config`, `POST /recordings/sweep` |
 | Qué encoder hay | `GET /recordings/capabilities` |
 
 **Aviso: hace falta H.264.** El FFmpeg que trae `opencv-python` es LGPL y no
@@ -315,21 +315,14 @@ de la parcela: mantenlo en la LAN.
 
 ## Cuando no detecta, o detecta cosas raras
 
-Antes de sospechar del modelo, mira `inference_health` en
-`GET /cameras/{camera_id}/status`:
-
-```jsonc
-"inference_health": {
-  "corrupt_detections": 0, "consecutive_without_box": 0,
-  "last_conf_range": [0.71, 0.91]
-}
-```
+Antes de sospechar del modelo, mira `corrupt_detections` en
+`GET /cameras/{camera_id}/status`. Tiene que estar a 0.
 
 | Síntoma | Qué mirar |
 | --- | --- |
 | Cajas absurdas, o deja de detectar tras un rato | `corrupt_detections`. Si sube, la GPU se ha dormido y devuelve basura: usa un modelo más pesado (`yolo26m`) o enciende el keep-alive. El porqué, en [`docs/GPU.md`](docs/GPU.md#2-la-bajada-de-reloj-p-state); los relojes, con `nvidia-smi` |
 | La inferencia va 2-3 veces más lenta de lo normal | Lo mismo: es el reloj, no el modelo |
-| Detecta poco, pero limpio | `last_conf_range`. Si ronda tu `confidence`, es cuestión de umbral o de modelo, no un fallo |
+| Detecta poco, pero limpio | Es cuestión de umbral (`confidence`) o de modelo, no un fallo |
 
 ---
 

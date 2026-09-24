@@ -554,8 +554,6 @@ async def set_recording_config(
     enabled: bool = Form(True, description="Grabación activa. A false el coste vuelve a ser cero: no se guarda pre-roll ni se codifica ningún JPEG de más."),
     source: str = Form("annotated", description="'annotated' = vídeo con las cajas de YOLO pintadas; 'raw' = imagen limpia. OJO: 'annotated' ENCIENDE la inferencia en esta cámara aunque no haya nadie mirando el stream, con su coste de GPU. Si solo quieres vídeo, usa 'raw'."),
     trigger_on_detection: bool = Form(True, description="Abrir un clip solo cuando YOLO detecte algo. A false la cámara solo graba cuando se le manda a mano por /record/start."),
-    trigger_classes: Optional[str] = Form(None, description="IDs de clase COCO separados por comas que disparan la grabación (p.ej. '0,15,16' = persona, gato, perro). Vacío = cualquiera de las que la cámara ya esté detectando."),
-    min_conf: float = Form(0.5, ge=0.0, le=1.0, description="Confianza mínima para que una detección cuente como disparo. Por defecto 0.5."),
     min_hits: int = Form(2, ge=1, description="Frames CONSECUTIVOS con detección antes de abrir el clip. A 1, un falso positivo suelto (una hoja movida) ya genera un fichero. Por defecto 2."),
     pre_roll_sec: float = Form(5.0, ge=0.0, le=60.0, description="Segundos ANTERIORES al disparo que se incluyen en el clip. Es lo que hace que el vídeo empiece antes de que aparezca el bicho. Se guardan en memoria: 5 s a 15 fps son unos 3,4 MB a 640x480."),
     post_roll_sec: float = Form(8.0, gt=0.0, description="Segundos sin detecciones tras los cuales se cierra el clip. Si lo pones más corto que las pausas del bicho, un evento sale partido en diez ficheros. Por defecto 8 s."),
@@ -563,14 +561,6 @@ async def set_recording_config(
     min_clip_sec: float = Form(2.0, ge=0.0, description="Los clips más cortos que esto se descartan al cerrarlos. Casi siempre son falsos positivos. Por defecto 2 s."),
     cooldown_sec: float = Form(3.0, ge=0.0, description="Tiempo muerto tras cerrar un clip antes de poder disparar otro. Una orden manual se lo salta."),
     fps: Optional[float] = Form(None, description="FPS del fichero MP4. Vacío = se mide del propio pipeline al abrir cada clip, que es lo recomendable."),
-    encoder: str = Form("auto", description="'auto' (ffmpeg si lo hay, si no OpenCV), 'ffmpeg' o 'opencv'. Mira GET /recordings/capabilities para ver qué hay disponible."),
-    fourcc: str = Form("avc1", description="Solo para el encoder 'opencv'. 'mp4v' produce ficheros que VLC abre pero que NO se reproducen en el navegador ni en Home Assistant."),
-    ffmpeg_path: Optional[str] = Form(None, description="Ruta a un ffmpeg concreto. Vacío = se busca en el PATH y luego el de imageio-ffmpeg."),
-    crf: int = Form(23, ge=0, le=51, description="Calidad de x264: más bajo = mejor imagen y fichero más gordo. 18 es casi sin pérdidas, 28 es pequeño y basto. Por defecto 23."),
-    preset: str = Form("veryfast", description="Preset de x264: cuánta CPU se gasta en comprimir mejor. 'ultrafast' a 'veryslow'. Por defecto 'veryfast', que deja la CPU para YOLO."),
-    save_thumbnail: bool = Form(True, description="Guardar junto al clip el frame que lo disparó, como JPEG. Es gratis (ya está codificado) y le da a Home Assistant una imagen sin abrir el vídeo."),
-    queue_maxsize: int = Form(120, ge=8, description="Frames en vuelo hacia el disco. Si se llena se descartan frames NUEVOS en vez de frenar el pipeline de vídeo. 120 son unos 8 s a 15 fps."),
-    preroll_max_mb: float = Form(32.0, gt=0.0, description="Tope de memoria del pre-roll, por si la resolución sube y los mismos segundos ocupan diez veces más."),
 ):
     """Pone o cambia la grabación de clips de una cámara.
 
@@ -578,36 +568,29 @@ async def set_recording_config(
     pide, así que la primera llamada a este endpoint es la que la monta. No
     necesita ningún hardware, solo disco.
 
-    Casi todo se aplica en caliente. Las excepciones son `source`, `encoder` y
-    `fourcc`, que los lee el hilo escritor al abrir el fichero: si cambias uno a
-    media grabación, surte efecto en el clip siguiente.
+    Dispara cualquier detección de la cámara: qué clases y con qué confianza
+    se deciden en su `classes` y su `confidence`. La codificación (encoder,
+    calidad, miniatura) es común a todas las cámaras y va en
+    POST /recordings/config.
 
-    Ejemplo típico para la huerta (gatos y pájaros, vídeo limpio):
-    `trigger_classes=14,15,16`, `source=raw`, `pre_roll_sec=5`, `post_roll_sec=10`.
+    Casi todo se aplica en caliente. La excepción es `source`, que lo lee el
+    hilo escritor al abrir el fichero: si lo cambias a media grabación, surte
+    efecto en el clip siguiente.
+
+    Ejemplo típico para la huerta (vídeo limpio, eventos con pausas largas):
+    `source=raw`, `pre_roll_sec=5`, `post_roll_sec=10`.
     """
     session = get_camera(camera_id)
-    try:
-        clases = ([int(c) for c in trigger_classes.replace(" ", "").split(",") if c]
-                  if trigger_classes else None)
-    except ValueError:
-        raise HTTPException(422, "trigger_classes debe ser una lista de enteros "
-                                 "separados por comas, p.ej. '0,15,16'")
     if source not in ("annotated", "raw"):
         raise HTTPException(422, "source debe ser 'annotated' o 'raw'")
-    if encoder not in ("auto", "ffmpeg", "opencv"):
-        raise HTTPException(422, "encoder debe ser 'auto', 'ffmpeg' u 'opencv'")
 
     first_time = session.clip_recorder is None
     session.configure_recording(RecordingConfig(
         enabled=enabled, source=source,
-        trigger_on_detection=trigger_on_detection, trigger_classes=clases,
-        min_conf=min_conf, min_hits=min_hits,
+        trigger_on_detection=trigger_on_detection, min_hits=min_hits,
         pre_roll_sec=pre_roll_sec, post_roll_sec=post_roll_sec,
         max_clip_sec=max_clip_sec, min_clip_sec=min_clip_sec,
         cooldown_sec=cooldown_sec, fps=fps,
-        encoder=encoder, fourcc=fourcc, ffmpeg_path=ffmpeg_path,
-        crf=crf, preset=preset, save_thumbnail=save_thumbnail,
-        queue_maxsize=queue_maxsize, preroll_max_mb=preroll_max_mb,
     ))
     if first_time:
         print(f"[{camera_id}] grabación configurada ({source}, "
@@ -674,8 +657,9 @@ async def record_status(camera_id: str):
     """Atajo de lo que también sale en /cameras/{id}/status, bajo `consumers`.
 
     Lo que hay que mirar cuando algo no cuadra: `state`, `dropped_frames` (si
-    sube, el disco no da abasto y el clip tendrá saltos), `disk_free_gb` y
-    `last_error`.
+    sube, el disco no da abasto y el clip tendrá saltos) y `last_error` (por
+    qué no se abrió o no se publicó un clip). El disco libre está en
+    /recordings/stats.
     """
     return get_recorder(camera_id).status()
 
@@ -926,18 +910,41 @@ async def set_recordings_config(
     max_total_gb: Optional[float] = Form(None, ge=0, description="Tope de ocupación de la carpeta entera; al pasarse se borran los más antiguos. 0 = sin límite por tamaño."),
     sweep_interval_sec: Optional[float] = Form(None, ge=30, description="Cada cuánto corre el barrido. Además se barre al arrancar y tras cerrar cada clip."),
     min_free_gb: Optional[float] = Form(None, ge=0, description="Por debajo de este hueco libre NO se abren clips nuevos, para no tumbar el disco donde también corre YOLO."),
+    encoder: Optional[str] = Form(None, description="'auto' (ffmpeg si lo hay, si no OpenCV), 'ffmpeg' o 'opencv'. Mira GET /recordings/capabilities para ver qué hay disponible."),
+    fourcc: Optional[str] = Form(None, description="Solo para el encoder 'opencv'. 'mp4v' produce ficheros que VLC abre pero que NO se reproducen en el navegador ni en Home Assistant."),
+    ffmpeg_path: Optional[str] = Form(None, description="Ruta a un ffmpeg concreto. Vacío = se busca en el PATH y luego el de imageio-ffmpeg."),
+    crf: Optional[int] = Form(None, ge=0, le=51, description="Calidad de x264: más bajo = mejor imagen y fichero más gordo. 18 es casi sin pérdidas, 28 es pequeño y basto. Por defecto 23."),
+    preset: Optional[str] = Form(None, description="Preset de x264: cuánta CPU se gasta en comprimir mejor. 'ultrafast' a 'veryslow'. Por defecto 'veryfast', que deja la CPU para YOLO."),
+    fps_min: Optional[float] = Form(None, gt=0.0, description="FPS mínimo con el que se abre un clip cuando la cámara no fija `fps` y se usa el medido. Por defecto 4."),
+    fps_max: Optional[float] = Form(None, gt=0.0, description="FPS máximo con el que se abre un clip cuando se usa el medido. Por defecto 30."),
+    save_thumbnail: Optional[bool] = Form(None, description="Guardar junto al clip el frame que lo disparó, como JPEG. Es gratis (ya está codificado) y le da a Home Assistant una imagen sin abrir el vídeo."),
+    queue_maxsize: Optional[int] = Form(None, ge=8, description="Frames en vuelo hacia el disco, por cámara. Si se llena se descartan frames NUEVOS en vez de frenar el pipeline de vídeo. 120 son unos 8 s a 15 fps. Se aplica a los grabadores que se creen después (reinicio)."),
+    preroll_max_mb: Optional[float] = Form(None, gt=0.0, description="Tope de memoria del pre-roll de cada cámara, por si la resolución sube y los mismos segundos ocupan diez veces más."),
 ):
     """Los campos que no mandes se quedan como estaban.
+
+    Almacenamiento, retención y codificación son de la máquina, no de cada
+    cámara: valen para todas. `encoder` y `fourcc` los lee el hilo escritor al
+    abrir el fichero, así que un cambio a media grabación surte efecto en el
+    clip siguiente.
 
     Aviso: cambiar `root_dir` no mueve los clips que ya hay, y la retención deja
     de vigilar la carpeta antigua. La respuesta trae `warning` cuando pasa.
     """
+    if encoder is not None and encoder not in ("auto", "ffmpeg", "opencv"):
+        raise HTTPException(422, "encoder debe ser 'auto', 'ffmpeg' u 'opencv'")
     cfg = STORE.cfg
     antiguo = str(STORE.root)
     for campo, valor in (("root_dir", root_dir), ("max_age_days", max_age_days),
                          ("max_total_gb", max_total_gb),
                          ("sweep_interval_sec", sweep_interval_sec),
-                         ("min_free_gb", min_free_gb)):
+                         ("min_free_gb", min_free_gb),
+                         ("encoder", encoder), ("fourcc", fourcc),
+                         ("ffmpeg_path", ffmpeg_path), ("crf", crf),
+                         ("preset", preset), ("fps_min", fps_min),
+                         ("fps_max", fps_max), ("save_thumbnail", save_thumbnail),
+                         ("queue_maxsize", queue_maxsize),
+                         ("preroll_max_mb", preroll_max_mb)):
         if valor is not None:
             setattr(cfg, campo, valor)
     save_recordings_config(cfg)

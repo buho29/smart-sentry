@@ -15,24 +15,18 @@
     "always_infer": true,
     "noise_psk": "",
     "esphome_state_object_id": "huerta_estado",
-    "_comentario_recording": "Grabación de clips a disco. Sección opcional: sin ella la cámara no graba y el coste es cero. Normalmente no se escribe a mano, se configura con POST /cameras/{camera_id}/config/recording y se guarda aquí sola. Ojo con source: 'annotated' graba las cajas de YOLO pero ENCIENDE la inferencia aunque nadie mire el stream; 'raw' graba imagen limpia y no gasta GPU. Los clips se listan y se descargan por GET /recordings.",
+    "_comentario_recording": "Grabación de clips a disco. Sección opcional: sin ella la cámara no graba y el coste es cero. Normalmente no se escribe a mano, se configura con POST /cameras/{camera_id}/config/recording y se guarda aquí sola. Ojo con source: 'annotated' graba las cajas de YOLO pero ENCIENDE la inferencia aunque nadie mire el stream; 'raw' graba imagen limpia y no gasta GPU. Dispara cualquier detección de la cámara (su 'classes' y su 'confidence'). La codificación (encoder, crf, preset, miniatura) es común a todas las cámaras y va en POST /recordings/config. Los clips se listan y se descargan por GET /recordings.",
     "recording": {
       "enabled": true,
       "source": "raw",
       "trigger_on_detection": true,
-      "trigger_classes": [14, 15, 16],
-      "min_conf": 0.5,
       "min_hits": 2,
       "pre_roll_sec": 5.0,
       "post_roll_sec": 8.0,
       "max_clip_sec": 120.0,
       "min_clip_sec": 2.0,
       "cooldown_sec": 3.0,
-      "fps": null,
-      "encoder": "auto",
-      "crf": 23,
-      "preset": "veryfast",
-      "save_thumbnail": true
+      "fps": null
     }
   },
   {

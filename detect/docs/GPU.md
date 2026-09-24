@@ -123,7 +123,7 @@ afecte a CUDA.
 
 ## 3. Diagnóstico
 
-En `/status` de cada cámara, `inference_health.corrupt_detections` cuenta las
+En `/status` de cada cámara, `corrupt_detections` cuenta las
 confianzas fuera de `[0,1]`. Esas detecciones se descartan antes de propagarse,
 porque una caja con confianza 1,8 movería los servos hacia un fantasma y
 dispararía una grabación.

@@ -112,8 +112,7 @@ def _reason(e: BaseException, max_len: int = 90) -> str:
 
     Los errores de urllib3 anidan MaxRetryError/HTTPConnectionPool/... y su
     repr() ocupa unos 400 caracteres. Repetido una vez por segundo y por cámara
-    mientras se reintenta, ahoga el log. El repr completo se sigue guardando en
-    self.last_error, que se expone en /status.
+    mientras se reintenta, ahoga el log.
     """
     txt = " ".join(str(e).split())
     if len(txt) > max_len:
@@ -466,18 +465,10 @@ class CameraSession:
         self.last_frame_time: Optional[float] = None
         self.last_inference_ms: Optional[float] = None
         self.pipeline_fps: float = 0.0
-        self.last_error: Optional[str] = None
 
-        # Salud de la inferencia, para /status.
-        self._frames_inferred = 0
-        self._frames_without_box = 0
-        self._consecutive_without_box = 0
-        self._last_conf_range: Optional[list] = None
-        self._last_detection: Optional[float] = None
         # Detecciones imposibles (confianza fuera de [0,1] o coordenadas no
         # finitas). Son la señal inequívoca del bug de P-state.
         self._corrupt_dets = 0
-        self._last_corruption: Optional[dict] = None
 
         # Conexión opcional a la API nativa de ESPHome de la misma placa,
         # para arrancar/parar la sesión según el estado real del hardware
@@ -523,9 +514,9 @@ class CameraSession:
         grabación a una cámara que no la tenía.
 
         Casi todo se aplica en caliente porque la config se relee en cada frame.
-        Las excepciones son `source`, `encoder` y `fourcc`: esos los lee el hilo
-        escritor al abrir el fichero, así que un cambio a media grabación no
-        surte efecto hasta el clip siguiente.
+        La excepción es `source`: lo lee el hilo escritor al abrir el fichero,
+        así que un cambio a media grabación no surte efecto hasta el clip
+        siguiente.
         """
         self.cfg.recording = cfg
         if self.clip_recorder is None:
@@ -839,7 +830,6 @@ class CameraSession:
                     # Parada pedida: la excepción es la consecuencia, no la
                     # causa. Salimos sin log de error ni espera de reconexión.
                     break
-                self.last_error = repr(e)
                 # Si nadie quiere ya la cámara (p.ej. se durmió por el PIR y no hay
                 # clientes ni arranque explícito), dejamos de insistir en reconectar.
                 if not self.explicit_start and self.client_count == 0:
@@ -916,7 +906,6 @@ class CameraSession:
             try:
                 fn(*args)
             except Exception as e:
-                self.last_error = repr(e)
                 print(f"[{self.cfg.camera_id}] {type(c).__name__}.{method} falló:", repr(e))
 
     def _work_needed(self) -> tuple[bool, bool, bool]:
@@ -1138,11 +1127,6 @@ class CameraSession:
                     if corrupt:
                         self._corrupt_dets += len(corrupt)
                         peor = max(corrupt, key=lambda d: abs(d.conf))
-                        self._last_corruption = {
-                            "when": time.time(),
-                            "conf": round(peor.conf, 3),
-                            "label": peor.label,
-                        }
                         if self._corrupt_dets - len(corrupt) == 0 or \
                                 self._corrupt_dets % 50 < len(corrupt):
                             print(f"[{self.cfg.camera_id}] INFERENCIA CORRUPTA: "
@@ -1155,17 +1139,6 @@ class CameraSession:
                         # `d not in corrupt` compara por VALOR, así que dos
                         # detecciones idénticas se irían las dos.
                         dets = [d for d in dets if not _is_corrupt(d)]
-
-                    self._frames_inferred += 1
-                    if dets:
-                        self._consecutive_without_box = 0
-                        self._last_detection = time.time()
-                        confs = [d.conf for d in dets]
-                        self._last_conf_range = [round(min(confs), 3),
-                                                   round(max(confs), 3)]
-                    else:
-                        self._frames_without_box += 1
-                        self._consecutive_without_box += 1
 
                     if want_draw:
                         annotated = frame.copy()
@@ -1190,7 +1163,6 @@ class CameraSession:
                     h, w = frame.shape[:2]
                     self._notify_consumers("on_detections", dets, w, h)
                 except Exception as e:
-                    self.last_error = repr(e)
                     print(f"[{self.cfg.camera_id}] error en track/dibujo:", repr(e))
 
             # Solo se codifica el crudo si alguien lo va a leer. Antes la
@@ -1280,25 +1252,14 @@ class CameraSession:
             "running": self.is_running,
             "explicit_start": self.explicit_start,
             "manual_stop": self.cfg.manual_stop,
-            "raw_clients": self._raw_clients,
-            "infer_clients": self._infer_clients,
-            "follow_clients": self._follow_clients,
+            # Los tres contadores de clientes se publican sumados: el reparto
+            # por modo solo le importa a _work_needed().
+            "clients": self.client_count,
             "last_frame_time": self.last_frame_time,
             "last_inference_ms": self.last_inference_ms,
             "pipeline_fps": round(self.pipeline_fps, 1),
-            "last_error": self.last_error,
             "esphome_connected": self.esphome.is_connected if self.esphome else None,
+            "corrupt_detections": self._corrupt_dets,
             "consumers": {type(c).__name__: c.status() for c in self._consumers},
-            "inference_health": {
-                "frames_inferred": self._frames_inferred,
-                "frames_without_box": self._frames_without_box,
-                "consecutive_without_box": self._consecutive_without_box,
-                "corrupt_detections": self._corrupt_dets,
-                "last_corruption": self._last_corruption,
-                "last_conf_range": self._last_conf_range,
-                "last_detection_ago_sec": (
-                    round(time.time() - self._last_detection, 1)
-                    if self._last_detection else None),
-            },
             "config": self.cfg.dict(),
         }

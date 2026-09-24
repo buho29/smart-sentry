@@ -545,7 +545,8 @@ Crea todo el estado:
   generadores.
 - `_infer_clients` / `_raw_clients` / `_follow_clients` — **tres** contadores
   de clientes según qué stream piden (anotado fijo / crudo fijo / "sigue
-  `default_infer` en caliente").
+  `default_infer` en caliente"). En `/status` se publican sumados, como
+  `clients`: el reparto por modo solo le importa a `_work_needed()`.
 - `explicit_start` — flag "arrancada a mano por API, no parar aunque no haya
   clientes".
 - `_current_response` — referencia a la conexión HTTP viva, para cerrarla a la
@@ -553,7 +554,7 @@ Crea todo el estado:
 - `_fps_window` (`deque`) — ventana deslizante de ~1 s para calcular FPS
   estable.
 - Métricas para `/status`: `last_frame_time`, `last_inference_ms`,
-  `pipeline_fps`, `last_error`.
+  `pipeline_fps` y `_corrupt_dets` (sale como `corrupt_detections`).
 - Si `cfg.noise_psk`: saca el host de `stream_url` y crea el
   `EsphomeController` con `on_state_value=self._on_esphome_state`.
 
@@ -655,7 +656,6 @@ Toma referencias **locales** de `_stop_event` y `_raw_queue` (clave: ver
    un traceback). Por orden:
    - si `stop_event` está marcado → **rompe** sin log ni espera: la excepción
      es la consecuencia de la parada, no la causa;
-   - guarda `last_error`;
    - si nadie quiere ya la cámara (`not explicit_start and client_count == 0`)
      → **rompe**;
    - si la sesión la gobierna ESPHome y la API nativa también está caída → la
@@ -716,7 +716,7 @@ Referencias locales otra vez. Obtiene el modelo con `get_model()`. Bucle:
    - y en cualquier caso la entrega a los consumidores con
      `on_detections(dets, w, h)`.
 
-   Guarda `last_inference_ms`. Errores → `last_error`.
+   Guarda `last_inference_ms`. Los errores solo van al log.
 7. **Si `want_raw` o falló la inferencia:** `cv2.imencode` del frame crudo →
    `raw_bytes`.
 8. Bajo `_cond`: actualiza `_latest_raw_jpeg` / `_latest_annotated_jpeg`,
@@ -741,9 +741,10 @@ frame.
 
 ### `status()` — [`camera.py`](../camera.py)
 
-Dict de diagnóstico para `/status`: running, `explicit_start`, los tres
-contadores, últimas métricas, `last_error`, `esphome_connected`, el `status()`
-de cada consumidor bajo `consumers` y la config entera.
+Dict de diagnóstico para `/status`: running, `explicit_start`, `clients` (los
+tres contadores sumados), últimas métricas, `corrupt_detections`,
+`esphome_connected`, el `status()` de cada consumidor bajo `consumers` y la
+config entera.
 
 ---
 

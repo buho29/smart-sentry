@@ -48,6 +48,12 @@ class RecordingConfig(BaseModel):
     Una cámara que no graba simplemente no trae esta sección (`recording:
     None`), igual que pasa con `servo`, y entonces no se crea el consumidor ni
     se codifica un JPEG de más.
+
+    Solo lleva lo que tiene sentido distinto en cada cámara. Cómo se codifica
+    el vídeo y los topes de memoria son de la máquina y viven en
+    `RecordingsConfig` (clips.py). Qué clases y con qué confianza disparan
+    tampoco está aquí: el grabador recibe las detecciones ya filtradas por
+    `classes` y `confidence` de la propia cámara.
     """
 
     enabled: bool = True
@@ -61,10 +67,6 @@ class RecordingConfig(BaseModel):
 
     # -- disparo por detección ----------------------------------------------
     trigger_on_detection: bool = True
-    # IDs de clase COCO que disparan. None = cualquiera de las que la cámara ya
-    # esté detectando (su propio filtro `classes`).
-    trigger_classes: Optional[list[int]] = None
-    min_conf: float = 0.5
     # Frames consecutivos con detección antes de abrir un clip. A 1, un falso
     # positivo suelto —una hoja movida que YOLO ve como un pájaro— genera un
     # clip; a 2 hay que fallar dos veces seguidas en el mismo sitio.
@@ -90,20 +92,6 @@ class RecordingConfig(BaseModel):
     # -- fichero -------------------------------------------------------------
     # FPS del MP4. None = se mide del pipeline al abrir cada clip.
     fps: Optional[float] = None
-    fps_min: float = 4.0
-    fps_max: float = 30.0
-    encoder: str = "auto"          # "auto" | "ffmpeg" | "opencv"
-    fourcc: str = "avc1"           # solo para el encoder "opencv"
-    ffmpeg_path: Optional[str] = None
-    crf: int = 23
-    preset: str = "veryfast"
-    save_thumbnail: bool = True
-
-    # -- topes de memoria ----------------------------------------------------
-    # Frames en vuelo hacia el disco. 120 son unos 8 s a 15 fps: suficiente para
-    # absorber un pico de I/O o el arranque de ffmpeg sin comerse la RAM.
-    queue_maxsize: int = 120
-    preroll_max_mb: float = 32.0
 
 
 # Tipos de mensaje del hilo escritor. El estado (abrir/cerrar) viaja por la
@@ -178,7 +166,7 @@ class ClipRecorder:
         self._pre_bytes = 0
 
         # -- hilo escritor ----------------------------------------------------
-        self._q: queue.Queue = queue.Queue(maxsize=max(8, cfg.queue_maxsize))
+        self._q: queue.Queue = queue.Queue(maxsize=max(8, store.cfg.queue_maxsize))
         self._thread: Optional[threading.Thread] = None
         self._opened_evt = threading.Event()
         self._closed_evt = threading.Event()
@@ -199,11 +187,9 @@ class ClipRecorder:
         if not self.cfg.enabled or not self.cfg.trigger_on_detection:
             return
 
-        interesantes = [d for d in dets
-                        if d.conf >= self.cfg.min_conf
-                        and (self.cfg.trigger_classes is None
-                             or d.cls in self.cfg.trigger_classes)]
-        if not interesantes:
+        # Cualquier detección vale: la sesión ya las ha filtrado por `classes`
+        # y `confidence` de la cámara (y ha quitado las corruptas).
+        if not dets:
             self._hits = 0
             return
 
@@ -212,13 +198,13 @@ class ClipRecorder:
             self._hits += 1
             if self._state == "recording":
                 self._last_det_ts = now
-                self._tally(interesantes)
+                self._tally(dets)
             elif (self._hits >= self.cfg.min_hits
                     and self._pending_open is None
                     and now >= self._cooldown_until):
                 self._pending_open = "detection"
                 self._last_det_ts = now
-                self._tally(interesantes)
+                self._tally(dets)
 
     def on_jpeg(self, raw: Optional[bytes], annotated: Optional[bytes], ts: float) -> None:
         """Un frame nuevo ya codificado. TODO lo de aquí es O(1).
@@ -282,14 +268,13 @@ class ClipRecorder:
     def status(self) -> dict:
         with self._lock:
             now = time.time()
+            # `enabled` y `source` ya salen en config.recording, y el disco
+            # libre es de la máquina: está en /recordings/stats.
             return {
-                "enabled": self.cfg.enabled,
                 "state": self._state,
-                "source": self.cfg.source,
                 "trigger": self._trigger,
                 "encoder": self.encoder_name,
                 "current_clip": self._clip_id,
-                "recording_since": self._started_at or None,
                 "elapsed_sec": round(now - self._started_at, 1) if self._state == "recording" else 0.0,
                 "frames": self._frames,
                 # Si esto sube, el disco no da abasto y el clip tendrá saltos.
@@ -300,8 +285,6 @@ class ClipRecorder:
                 "clips_written": self.clips_written,
                 "last_clip": self.last_clip,
                 "last_error": self.last_error,
-                "disk_free_gb": round(self._store.free_bytes() / 1024 ** 3, 2),
-                "disk_ok": self._store.has_room(),
             }
 
     def shutdown(self) -> None:
@@ -381,7 +364,7 @@ class ClipRecorder:
         """
         self._pre.append((jpg, ts))
         self._pre_bytes += len(jpg)
-        max_bytes = self.cfg.preroll_max_mb * 1024 ** 2
+        max_bytes = self._store.cfg.preroll_max_mb * 1024 ** 2
         while self._pre and (ts - self._pre[0][1] > self.cfg.pre_roll_sec
                              or self._pre_bytes > max_bytes):
             old, _ = self._pre.popleft()
@@ -451,7 +434,7 @@ class ClipRecorder:
 
         # La miniatura es el frame que disparó, tal cual: no cuesta codificar
         # nada y le da a HA una imagen para la tarjeta sin abrir el vídeo.
-        if self.cfg.save_thumbnail:
+        if self._store.cfg.save_thumbnail:
             try:
                 final.with_suffix(".jpg").write_bytes(jpg)
             except OSError as e:
@@ -557,7 +540,8 @@ class ClipRecorder:
             pass
         if medido <= 0:
             return 12.0
-        return max(self.cfg.fps_min, min(self.cfg.fps_max, medido))
+        g = self._store.cfg
+        return max(g.fps_min, min(g.fps_max, medido))
 
     # -- el hilo escritor ----------------------------------------------------
 
@@ -581,8 +565,8 @@ class ClipRecorder:
     def _make_encoder(self) -> tuple[VideoEncoder, str]:
         if self._encoder_factory is not None:
             return self._encoder_factory()
-        return resolve_encoder(self.cfg.encoder, self.cfg.ffmpeg_path,
-                               self.cfg.fourcc, self.cfg.crf, self.cfg.preset)
+        g = self._store.cfg
+        return resolve_encoder(g.encoder, g.ffmpeg_path, g.fourcc, g.crf, g.preset)
 
     def _writer_loop(self) -> None:
         """El único hilo que toca el encoder y el disco.

@@ -76,7 +76,6 @@ más difícil de achacar.
 ```
 POST /cameras/huerta/config/recording
     source=raw
-    trigger_classes=14,15,16      (pájaro, gato, perro)
     pre_roll_sec=5
     post_roll_sec=10
 ```
@@ -85,10 +84,19 @@ Esa primera llamada es la que **monta** la grabación: al dar de alta una cámar
 no se pide, igual que pasa con los servos. Se persiste en `cameras_config.json`,
 así que sobrevive a un reinicio.
 
+Dispara **cualquier detección de la cámara**: qué clases y con qué confianza se
+deciden en su `classes` y su `confidence`, no aquí. Para grabar solo gatos,
+la cámara tiene que detectar solo gatos.
+
+Lo que es de la máquina y no de cada cámara va en `POST /recordings/config`, y
+vale para todas: `encoder`, `fourcc`, `ffmpeg_path`, `crf`, `preset`,
+`fps_min`/`fps_max`, `save_thumbnail`, `queue_maxsize` y `preroll_max_mb`, junto
+a la retención. Se guarda en `recordings_config.json`.
+
 Casi todo se aplica en caliente porque la configuración se relee en cada frame.
 Las excepciones son `source`, `encoder` y `fourcc`, que los lee el hilo escritor
 al abrir el fichero: si se cambian a media grabación, surten efecto en el clip
-siguiente.
+siguiente. `queue_maxsize` se lee al crear el grabador, así que pide reinicio.
 
 ### `source`: la decisión que cuesta GPU
 
@@ -168,7 +176,7 @@ Memoria aproximada a 640×480 (JPEG de ~45 KB):
 | 5 s | 2,3 MB | 3,4 MB | 5,6 MB |
 | 10 s | 4,5 MB | 6,8 MB | 11,3 MB |
 
-El tope duro es `preroll_max_mb` (32 MB por defecto).
+El tope duro es `preroll_max_mb` (32 MB por defecto, en `/recordings/config`).
 
 ---
 
@@ -349,8 +357,8 @@ permite al reproductor hacer *seek* sin bajarse el clip entero.
 | --- | --- |
 | El vídeo se ve en negro en HA | `GET /recordings/capabilities` → `h264: false`. Instala `imageio-ffmpeg`. |
 | El clip tiene saltos | `dropped_frames` en `/cameras/{id}/record/status`. El disco no da abasto, o el encoder está a `preset` demasiado lento. |
-| No graba nada | `state`, `enabled` y `disk_ok` en `/record/status`. Y que la cámara esté arrancada: sin frames no hay clip. |
-| Graba de más | `min_hits` a 1, o `min_conf` muy bajo, o `trigger_classes` vacío (dispara con cualquier clase). |
+| No graba nada | `state` y `last_error` en `/record/status`, `enabled` en `config.recording` y `free_gb` en `/recordings/stats`. Y que la cámara esté arrancada: sin frames no hay clip. |
+| Graba de más | `min_hits` a 1, o la cámara con un `confidence` muy bajo o sin filtro de `classes` (dispara con cualquier clase). |
 | Un evento sale partido en varios clips | `post_roll_sec` más corto que las pausas del bicho. Súbelo. |
 | Se borran clips antes de tiempo | `GET /recordings/stats` → `config` y `last_sweep`. Probablemente el tope de `max_total_gb`. |
 | La GPU va al 100 % | `source=annotated` enciende la inferencia. Pásalo a `raw` si no necesitas las cajas en el vídeo. |

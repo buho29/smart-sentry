@@ -78,6 +78,27 @@ class RecordingsConfig(BaseModel):
     # el servicio entero.
     min_free_gb: float = 2.0
 
+    # -- codificación, igual para todas las cámaras -----------------------------
+    # `encoder` y `fourcc` los lee el hilo escritor al abrir cada fichero: un
+    # cambio a media grabación surte efecto en el clip siguiente.
+    encoder: str = "auto"          # "auto" | "ffmpeg" | "opencv"
+    fourcc: str = "avc1"           # solo para el encoder "opencv"
+    ffmpeg_path: Optional[str] = None
+    crf: int = 23
+    preset: str = "veryfast"
+    # Límites del FPS medido con el que se abre un clip (si la cámara no fija
+    # `fps`).
+    fps_min: float = 4.0
+    fps_max: float = 30.0
+    save_thumbnail: bool = True
+
+    # -- topes de memoria, por cámara ------------------------------------------
+    # Frames en vuelo hacia el disco. 120 son unos 8 s a 15 fps: suficiente para
+    # absorber un pico de I/O o el arranque de ffmpeg sin comerse la RAM. Se lee
+    # al crear el grabador de cada cámara, así que un cambio necesita reinicio.
+    queue_maxsize: int = 120
+    preroll_max_mb: float = 32.0
+
     @property
     def max_total_bytes(self) -> int:
         return int(self.max_total_gb * 1024 ** 3)

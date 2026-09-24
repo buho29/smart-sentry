@@ -89,11 +89,18 @@ def det(cls=0, conf=0.9, label="person"):
 
 
 def make_recorder(encoder=None, **cfg):
-    """Grabador listo para usar, con su propio almacén temporal."""
+    """Grabador listo para usar, con su propio almacén temporal.
+
+    Los ajustes que son globales (topes de memoria, codificación) se separan y
+    van al `RecordingsConfig` del almacén; el resto, a la cámara.
+    """
     root = Path(tempfile.mkdtemp(prefix="rectest-"))
     tempdirs.append(root)
+    global_keys = set(RecordingsConfig.__fields__) - {"root_dir"}
+    store_cfg = {k: cfg.pop(k) for k in list(cfg) if k in global_keys
+                 and k not in ("max_age_days", "max_total_gb", "min_free_gb")}
     store = ClipStore(RecordingsConfig(root_dir=str(root), max_age_days=0,
-                                       max_total_gb=0, min_free_gb=0))
+                                       max_total_gb=0, min_free_gb=0, **store_cfg))
     enc = encoder if encoder is not None else FakeEncoder()
     cfg.setdefault("min_clip_sec", 0.0)
     cfg.setdefault("cooldown_sec", 0.0)
@@ -137,18 +144,20 @@ rec.on_jpeg(None, JPG, 100.2)
 check("los hits tienen que ser CONSECUTIVOS", rec.status()["state"] == "idle")
 rec.shutdown()
 
-rec, enc, _ = make_recorder(min_hits=1, trigger_classes=[15], min_conf=0.5)
-rec.on_detections([det(cls=0)], 64, 48)
+# El filtro por clase y confianza es el de la cámara y ya viene aplicado: el
+# grabador dispara con cualquier detección que le llegue, sea cual sea.
+rec, enc, _ = make_recorder(min_hits=1)
+rec.on_detections([det(cls=15, conf=0.3, label="cat")], 64, 48)
 rec.on_jpeg(None, JPG, 100.0)
-check("una clase fuera de trigger_classes no dispara", rec.status()["state"] == "idle")
-rec.on_detections([det(cls=15, conf=0.3)], 64, 48)
-rec.on_jpeg(None, JPG, 100.1)
-check("la clase correcta pero con poca confianza tampoco",
-      rec.status()["state"] == "idle")
-rec.on_detections([det(cls=15, conf=0.8)], 64, 48)
-rec.on_jpeg(None, JPG, 100.2)
-check("la clase correcta con confianza suficiente sí", rec.status()["state"] == "recording")
+check("cualquier detección recibida dispara", rec.status()["state"] == "recording")
 rec.shutdown()
+
+check("un cameras_config.json viejo con trigger_classes/min_conf/encoder carga",
+      RecordingConfig(trigger_classes=[15], min_conf=0.5, encoder="ffmpeg",
+                      min_hits=3).min_hits == 3)
+check("y esas claves no vuelven a salir al guardar",
+      not {"trigger_classes", "min_conf", "encoder"}
+      & set(RecordingConfig(trigger_classes=[15], encoder="ffmpeg").dict()))
 
 
 # ---------------------------------------------------------------------------

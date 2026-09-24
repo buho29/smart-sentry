@@ -92,11 +92,9 @@ check("sin grabación configurada, /record/start da 400", r.status_code == 400,
 check("y el error dice cómo arreglarlo", "config/recording" in r.text)
 
 r = client.post("/cameras/cam/config/recording",
-                data={"source": "raw", "trigger_classes": "0,15,16", "min_hits": 1})
+                data={"source": "raw", "min_hits": 1})
 check("POST /config/recording responde 200", r.status_code == 200, r.text[:150])
 check("y monta el grabador", s.clip_recorder is not None)
-check("con las clases parseadas", s.cfg.recording.trigger_classes == [0, 15, 16],
-      f"({s.cfg.recording.trigger_classes})")
 check("sale en /status bajo consumers",
       "ClipRecorder" in r.json()["consumers"], f"({list(r.json()['consumers'])})")
 
@@ -107,8 +105,6 @@ check("y se persiste en cameras_config.json",
 
 r = client.post("/cameras/cam/config/recording", data={"source": "chorizo"})
 check("un source inválido da 422", r.status_code == 422, f"({r.status_code})")
-r = client.post("/cameras/cam/config/recording", data={"trigger_classes": "gato,perro"})
-check("unas clases no numéricas dan 422", r.status_code == 422, f"({r.status_code})")
 r = client.post("/cameras/nope/config/recording", data={})
 check("una cámara inexistente da 404", r.status_code == 404)
 
@@ -242,6 +238,14 @@ print("\n=== 7. Retención por API ===")
 r = client.post("/recordings/config", data={"max_age_days": 0.00001})
 check("cambiar la config responde 200", r.status_code == 200, r.text[:120])
 check("y se aplica al almacén", _clips.STORE.cfg.max_age_days == 0.00001)
+
+r = client.post("/recordings/config", data={"crf": 28, "encoder": "opencv"})
+check("la codificación se cambia en /recordings/config",
+      r.status_code == 200 and _clips.STORE.cfg.crf == 28
+      and _clips.STORE.cfg.encoder == "opencv", r.text[:120])
+check("sin tocar lo que no se manda", _clips.STORE.cfg.max_age_days == 0.00001)
+r = client.post("/recordings/config", data={"encoder": "chorizo"})
+check("un encoder inválido da 422", r.status_code == 422, f"({r.status_code})")
 
 r = client.post("/recordings/sweep", data={"dry_run": "true"})
 n = len(r.json()["deleted"])
