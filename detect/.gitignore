@@ -27,7 +27,7 @@ clips/
 # Ajustes de almacenamiento: sin secretos, pero con rutas de esta máquina
 recordings_config.json
 
-# Ajustes globales (keep-alive de GPU): calibrados para una tarjeta concreta
+# Ajustes globales: propios de esta máquina
 global_config.json
 
 # Configuración con secretos (contiene noise_psk e IPs de la LAN)

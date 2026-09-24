@@ -201,20 +201,6 @@ async def get_config():
     return GLOBAL_CONFIG.as_dict()
 
 
-@app.post("/config/keepalive")
-async def set_global_keepalive(
-    enabled: bool = Form(..., description="Mantener la GPU ocupada con inferencias mínimas entre frames para que el driver no le baje los relojes. Solo hace falta en una GTX 10xx con un modelo ligero (yolo26n); con yolo26m, apagado."),
-):
-    """Keep-alive de GPU, global para todas las cámaras. **Se persiste.**
-
-    Viene apagado. El intervalo se ajusta por cámara en
-    `POST /cameras/{id}/config/inference`. Ver docs/GPU.md.
-    """
-    GLOBAL_CONFIG.keepalive_enabled = enabled
-    GLOBAL_CONFIG.save()
-    return GLOBAL_CONFIG.as_dict()
-
-
 @app.get("/cameras")
 async def list_cameras():
     return [s.status() for s in CAMERAS.values()]
@@ -248,7 +234,7 @@ def _validate_device(device: str) -> str:
 async def add_camera(
     camera_id: str = Form(..., description="Identificador único; es el que va en el resto de rutas."),
     stream_url: str = Form(..., description="URL del stream MJPEG del ESP32, p.ej. http://192.168.1.50:8080/"),
-    model_name: str = Form(DEFAULT_MODEL, description="Pesos YOLO a usar, sin el .pt. Se descargan solos la primera vez."),
+    model_name: str = Form(DEFAULT_MODEL, description="Pesos YOLO a usar, sin el .pt. Se descargan solos la primera vez. En la GTX 1080, con una sola cámara se recomienda yolo26m: con yolo26n la GPU baja a P5 y da detecciones corruptas."),
     device: str = Form("cuda", description="Dónde corre la inferencia: 'cuda' o 'cpu'."),
     confidence: float = Form(0.5, ge=0.0, le=1.0, description="Confianza mínima para dar una detección por buena. Por defecto 0.5."),
     imgsz: int = Form(640, description="Lado al que YOLO reescala el frame antes de inferir. Más grande ve objetos más pequeños, pero cuesta más. Por defecto 640."),
@@ -365,9 +351,8 @@ class InferenceConfig(BaseModel):
     imgsz: Optional[int] = Field(None, gt=0, description="Lado al que YOLO reescala el frame antes de inferir. Más grande ve objetos más pequeños, pero cuesta más GPU.")
     always_infer: Optional[bool] = Field(None, description="Correr YOLO aunque nadie mire el stream, para seguir detectando con el navegador cerrado.")
     classes: Optional[list[int]] = Field(None, description="IDs de clase COCO (0 = personas, 16 = pájaros). null = todas las clases.")
-    model_name: Optional[str] = Field(None, description="Pesos YOLO, sin el .pt. Cambiarlo relanza la sesión.")
+    model_name: Optional[str] = Field(None, description="Pesos YOLO, sin el .pt. Cambiarlo relanza la sesión. En la GTX 1080, con una sola cámara se recomienda yolo26m: con yolo26n la GPU baja a P5 entre frames y da detecciones corruptas (se descartan y se cuentan en corrupt_detections).")
     device: Optional[str] = Field(None, description="'cuda' o 'cpu'. Cambiarlo relanza la sesión.")
-    keepalive_interval_sec: Optional[float] = Field(None, gt=0.0, le=1.0, description="Cada cuánto se comprueba si hay que calentar la GPU mientras se espera el frame siguiente. Solo actúa con el keep-alive global encendido (POST /config/keepalive). Por defecto 0,005; a 0,01 la GTX 1080 ya se dormía.")
 
 
 @app.post("/cameras/{camera_id}/config/inference")
@@ -379,9 +364,8 @@ async def set_inference_config(camera_id: str, body: InferenceConfig):
     que quieras y envía. Lo que no se envía se conserva, y reenviar valores
     iguales no cuesta nada.
 
-    `confidence`, `imgsz`, `always_infer`, `classes` y
-    `keepalive_interval_sec` se releen en cada frame, así que el cambio se
-    nota al instante. `model_name` y `device`, en cambio, solo se resuelven al
+    `confidence`, `imgsz`, `always_infer` y `classes` se releen en cada
+    frame, así que el cambio se nota al instante. `model_name` y `device`, en cambio, solo se resuelven al
     arrancar los hilos: cuando cambian la sesión se relanza sola.
     """
     session = get_camera(camera_id)
@@ -389,8 +373,7 @@ async def set_inference_config(camera_id: str, body: InferenceConfig):
 
     changes = body.model_dump(exclude_unset=True)
     # Solo classes admite null; en el resto, null o vacío = no tocar.
-    for k in ("confidence", "imgsz", "always_infer", "model_name", "device",
-              "keepalive_interval_sec"):
+    for k in ("confidence", "imgsz", "always_infer", "model_name", "device"):
         if k in changes:
             v = changes[k]
             if v is None or (isinstance(v, str) and not v.strip()):

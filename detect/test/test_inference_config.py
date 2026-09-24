@@ -70,7 +70,7 @@ check("persistido a disco", any(c["camera_id"] == "cam" and c["confidence"] == 0
 print("\n=== 3. Reenviar la config entera (el ejemplo de Swagger) no relanza ===")
 s = fresh()
 full = s.cfg.model_dump(include=set(_main.InferenceConfig.model_fields))
-check("el ejemplo cubre todos los campos", set(full) == {"confidence", "imgsz", "always_infer", "classes", "model_name", "device", "keepalive_interval_sec"}, str(full))
+check("el ejemplo cubre todos los campos", set(full) == {"confidence", "imgsz", "always_infer", "classes", "model_name", "device"}, str(full))
 r = client.post(URL, json=full)
 check("200", r.status_code == 200, r.text[:120])
 check("no relaunched", r.json()["relaunched"] is False)
@@ -113,45 +113,21 @@ _registry.CAMERAS.pop("otra", None)
 check("se regenera en cada carga", set(examples()) == {"cam"})
 _registry.CAMERAS.pop("cam", None)
 
-print("\n=== 8. keepalive_interval_sec: por cámara, en caliente y acotado ===")
+print("\n=== 8. keepalive_interval_sec ya no existe ===")
 s = fresh()
-check("defecto = la constante medida",
-      s.cfg.keepalive_interval_sec == camera.KEEPALIVE_INTERVAL_SEC,
-      f"({s.cfg.keepalive_interval_sec})")
-
-# No debe relanzar: se relee en cada vuelta del bucle, y relanzar cortaría el
-# stream por un ajuste que no lo necesita.
-LIGHT = 0.02
-r = client.post(URL, json={"keepalive_interval_sec": LIGHT})
+# Un cliente viejo (o un ejemplo de Swagger cacheado) puede seguir mandándolo:
+# se ignora sin romper el resto del body.
+r = client.post(URL, json={"keepalive_interval_sec": 0.005, "confidence": 0.55})
 check("200", r.status_code == 200, r.text[:120])
-check("aplicado", s.cfg.keepalive_interval_sec == LIGHT)
-check("NO relanza la sesión", r.json()["relaunched"] is False and _registry.CAMERAS["cam"] is s)
-check("visible en config.keepalive_interval_sec",
-      s.status()["config"]["keepalive_interval_sec"] == LIGHT)
-check("persistido a disco", any(
-    c["camera_id"] == "cam" and c["keepalive_interval_sec"] == LIGHT
-    for c in json.loads(_registry.CAMERAS_CONFIG_FILE.read_text())))
+check("el resto del body se aplica", s.cfg.confidence == 0.55)
+check("no aparece en la config de la cámara",
+      "keepalive_interval_sec" not in s.status()["config"])
 
-r = client.post(URL, json={"keepalive_interval_sec": None, "confidence": 0.55})
-check("null = no tocar", r.status_code == 200 and s.cfg.keepalive_interval_sec == LIGHT
-      and s.cfg.confidence == 0.55, r.text[:120])
-
-# 0 dejaría el bucle girando sin esperar; por encima de 1 s ya no es un
-# keep-alive, y además hay un camino de 1 s para cuando no toca calentar.
-for bad in (0, -0.01, 2.0):
-    r = client.post(URL, json={"keepalive_interval_sec": bad})
-    check(f"{bad} -> 422", r.status_code == 422, f"({r.status_code})")
-check("tras los rechazos, sin tocar", s.cfg.keepalive_interval_sec == LIGHT)
-
-# Una cámara guardada por una versión anterior no trae la clave.
-old = camera.CameraConfig(**{k: v for k, v in s.cfg.model_dump().items()
-                             if k != "keepalive_interval_sec"})
-check("un cfg antiguo sin la clave coge el defecto",
-      old.keepalive_interval_sec == camera.KEEPALIVE_INTERVAL_SEC)
-
-check("ya no es global: no sale en /config",
-      "keepalive_interval_sec" not in client.get("/config").json(),
-      str(client.get("/config").json()))
+# Una cámara guardada por una versión anterior sí trae la clave: tiene que
+# cargar igual, ignorándola.
+old = camera.CameraConfig(**s.cfg.model_dump(), keepalive_interval_sec=0.1)
+check("un cfg antiguo con la clave carga ignorándola",
+      not hasattr(old, "keepalive_interval_sec"))
 _registry.CAMERAS.pop("cam", None)
 
 print()

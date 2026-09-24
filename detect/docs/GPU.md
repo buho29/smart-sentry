@@ -13,8 +13,8 @@ Son **dos problemas distintos** que se confunden porque dan síntomas parecidos
 | --- | --- | --- |
 | Qué pasa | Error CUDA intermitente o detecciones erráticas | El driver baja el reloj con carga ligera: la inferencia va 2-3 veces más lenta y, **en esta tarjeta**, sale corrupta |
 | A quién afecta | Pascal (GTX 10xx) | Cualquier GeForce en Windows; la corrupción, probablemente solo Pascal |
-| Qué se hace hoy | `CUDNN_ENABLED = False` en `main.py` | Modelo pesado (`yolo26m`) + keep-alive |
-| Con una RTX 20 o posterior | Desaparece: cuDNN activado | Se fija el reloj con `nvidia-smi -lgc` y el keep-alive sobra |
+| Qué se hace hoy | `CUDNN_ENABLED = False` en `main.py` | Con una sola cámara se recomienda `yolo26m`. Con `yolo26n` la GPU baja a P5 y da detecciones corruptas, que se descartan |
+| Con una RTX 20 o posterior | Desaparece: cuDNN activado | Se fija el reloj con `nvidia-smi -lgc` |
 
 Configuración actual en esta máquina: GTX 1080, driver 581.80, torch
 2.6.0+cu124, cuDNN 9.1.0.
@@ -84,42 +84,54 @@ Medido en la misma máquina y la misma escena:
 
 | Configuración | ms/inferencia | Inferencia | Dummies | Total | Reloj | Corrupciones |
 | --- | --- | --- | --- | --- | --- | --- |
-| `yolo26n` sin keep-alive | 33,1 | 55,2 % | 0 % | **55 %** | 40 % | — |
+| `yolo26n` sin keep-alive | 33,1 | 55,2 % | 0 % | **55 %** | 40 % | ~23/min (medido aparte, con Force P2 = Off) |
 | `yolo26n` con keep-alive | 15,0 | 25,1 % | 27,0 % | **52 %** | 61 % | 6/min |
 | **`yolo26m`** | 22,6 | 36,8 % | ~0 % | **~37 %** | **97 %** | **0 en 4935** |
 
 El driver castiga la carga baja bajando los relojes, y entonces el mismo trabajo
-cuesta el doble. Apagar el keep-alive con el modelo ligero es la opción **más**
-cara de las tres, y ni siquiera con keep-alive deja de corromper.
+cuesta el doble. El modelo ligero sin keep-alive es la opción **más** cara de
+las tres, y ni siquiera con keep-alive dejaba de corromper.
 
 ### Qué se hace hoy
 
-1. **Un modelo lo bastante pesado** para que la GPU no se duerma sola:
-   `yolo26m`. Es lo que de verdad lo resuelve.
-2. **El keep-alive**, **apagado por defecto**: una inferencia dummy cuando la
-   cola de frames se queda vacía. Solo hace falta si se vuelve a un modelo
-   ligero. Se enciende con `POST /config/keepalive` (global y persistido);
-   el intervalo es por cámara (`keepalive_interval_sec`, 0,005 s por defecto),
-   se pausa solo tras 3 s sin frames (`KEEPALIVE_IDLE_LIMIT_SEC`) y la guarda
-   `dummy_fits` no lanza la dummy si no cabe antes del frame siguiente, así que
-   con un modelo pesado apenas actúa.
+**Con una sola cámara se recomienda `yolo26m`**, que es además el modelo por
+defecto (`DEFAULT_MODEL`). Ocupa la GPU lo bastante para que no se duerma sola.
 
-**El intervalo, 0,005 a propósito.** Con huecos de 10 ms entre dummies, el
-driver sigue viendo la tarjeta ociosa y baja los relojes aunque el keep-alive
-esté disparando sin parar:
-
-| `interval_sec` | Reloj sostenido | Detecciones corruptas |
-| --- | --- | --- |
-| 0,01 | 847 MHz (P5) | **570 en 48.967 frames** (1,16 %), con 54.753 dummies |
-| **0,005** | ~1290 MHz | **0 en 4147 frames seguidos** |
+**`yolo26n` se puede seguir usando**, pero en esta tarjeta da corrupciones cada
+vez que el driver baja a P5. Las detecciones corruptas se descartan antes de
+llegar a los servos y a la grabación, y se cuentan en `corrupt_detections` (§3).
+El precio es que en cada bajada a P5 se pierden unos segundos de detección
+fiable: no se ven los frames en que la persona desaparece sin más.
 
 **Fijar los relojes no es posible en esta tarjeta.** `nvidia-smi -lgc`
 responde "not supported for GPU", porque solo funciona desde Volta y Turing. En
-Windows tampoco hay modo persistencia. La única palanca que queda es el panel de
-NVIDIA: *Administrar configuración 3D → Configuración del programa →* el
-`python.exe` del venv *→ Modo de administración de energía → Preferir
-rendimiento máximo*. Está pensada para aplicaciones 3D y no está comprobado que
-afecte a CUDA.
+Windows tampoco hay modo persistencia.
+
+### Los ajustes del driver no lo evitan
+
+Medido el 24/09/2026 con NVIDIA Profile Inspector, `yolo26n` y una cámara:
+
+| Ajuste | Qué cambia | ¿Deja de bajar a P5? |
+| --- | --- | --- |
+| *CUDA - Force P2 State* = **Off** | El techo en P2 sube de 1189 a 1657 MHz | **No**: sigue cayendo a P5 (772–911 MHz) en tandas de 8–16 s |
+| *Power Management - Mode* = **Prefer maximum performance** | — | **No** |
+
+Con *Force P2 State* en Off la tarjeta sale antes de P5 y ya no se queda ciega
+del todo, pero en 73 minutos salieron unas **1.700 detecciones corruptas
+(~23/min)**. Merece la pena dejarlo en Off, pero no sustituye a un modelo
+pesado. Lo que se cambia en el Profile Inspector sobrevive a los reinicios. Una
+actualización del driver puede borrarlo (una instalación limpia lo borra
+seguro), así que conviene exportar el perfil.
+
+### El keep-alive, quitado
+
+Hubo un **keep-alive de GPU**: una inferencia dummy cada pocos milisegundos
+mientras se esperaba el frame siguiente, para que el driver no viera la tarjeta
+ociosa. Con un intervalo de 0,005 s llegó a dar 0 corrupciones en 4147 frames
+(a 0,01 s, 570 en 48.967). Aun así, en otras medidas seguía corrompiendo
+(6/min, tabla de arriba), costaba casi lo mismo que un modelo pesado y era mucho
+código para un workaround de una sola tarjeta. Se quitó en septiembre de 2026.
+La historia completa está al final, en el apartado histórico.
 
 ## 3. Diagnóstico
 
@@ -135,7 +147,7 @@ segundo:
 nvidia-smi --query-gpu=pstate,clocks.gr,utilization.gpu,power.draw --format=csv -l 1
 ```
 
-Si el reloj está bajo, la respuesta no es tocar el keep-alive: es usar un
+Si el reloj está bajo y `corrupt_detections` sube, la respuesta es usar un
 modelo más pesado. Suena al revés y está medido.
 
 ## 4. ¿Solo pasa en esta tarjeta?
@@ -195,11 +207,11 @@ nvidia-smi -lgc 1800,1800
 
 - Se pierde al reiniciar: hay que relanzarlo con una tarea programada al
   arrancar Windows.
-- Con el reloj fijo, el keep-alive sobra (`keepalive_enabled = false`) y
-  `yolo26n` rinde a su velocidad real.
+- Con el reloj fijo, `yolo26n` rinde a su velocidad real y deja de hacer falta
+  un modelo pesado para mantener la GPU despierta.
 - Nadie lo ha documentado con inferencia de YOLO en una GeForce con Windows.
   Lo usa mucha gente para minería y overclock. Medirlo con
-  `test/barrido_modelos.py` antes de quitar el keep-alive.
+  `test/barrido_modelos.py` antes de volver a `yolo26n`.
 
 **Consumo con el reloj fijo.** No se iguala al de ir al 100 %. El consumo tiene
 una parte fija (fugas, que dependen sobre todo del voltaje) y otra que depende
@@ -215,10 +227,9 @@ Orden de magnitud estimado para una RTX 4060, sin medir:
 | Al 100 % | ~115 W (su límite) |
 
 La diferencia es de unas decenas de vatios en 24 h: por ejemplo, 30 W de más
-son ~260 kWh/año, **40–60 €/año** según tarifa. El keep-alive actual tampoco es
-gratis: mantiene el reloj alto y además suma cálculo de verdad. Fijar el reloj
-debería salir más barato que el keep-alive o que un modelo pesado puesto solo
-para que la GPU no se duerma.
+son ~260 kWh/año, **40–60 €/año** según tarifa. Un modelo pesado puesto solo
+para que la GPU no se duerma tampoco es gratis: mantiene el reloj alto y además
+suma cálculo de verdad. Fijar el reloj debería salir más barato.
 
 **TensorRT.** Es la recomendación principal de la comunidad de Ultralytics:
 exportar con `model.export(format="engine", half=True)` y cargar el `.engine`.
@@ -248,7 +259,25 @@ por el reloj real de la GPU (NVML), con detección de arquitectura Pascal, un
 `clock_ratio` ajustable y overrides por cámara. Mucha maquinaria para afinar un
 workaround que no llegaba a arreglar el problema. Después se quitaron también
 las lecturas de NVML que quedaban para mirar (`GET /gpu`, `gpu_clock_pct`), el
-`selftest` y la sonda del tracker.
+`selftest` y la sonda del tracker. Al final, en septiembre de 2026, se quitó
+el keep-alive entero (ver "El keep-alive, quitado" en §2).
+
+### El último keep-alive: temporizador fijo
+
+Antes de quitarlo, el keep-alive estaba **apagado por defecto**. Se encendía con
+`POST /config/keepalive`, global y persistido. El intervalo era por cámara
+(`keepalive_interval_sec`, 0,005 s por defecto). Se pausaba solo tras 3 s sin
+frames (`KEEPALIVE_IDLE_LIMIT_SEC`), y la guarda `dummy_fits` no lanzaba la dummy
+si no cabía antes del frame siguiente.
+
+**El intervalo, 0,005 a propósito.** Con huecos de 10 ms entre dummies, el
+driver seguía viendo la tarjeta ociosa y bajaba los relojes aunque el keep-alive
+estuviera disparando sin parar:
+
+| `interval_sec` | Reloj sostenido | Detecciones corruptas |
+| --- | --- | --- |
+| 0,01 | 847 MHz (P5) | **570 en 48.967 frames** (1,16 %), con 54.753 dummies |
+| **0,005** | ~1290 MHz | **0 en 4147 frames seguidos** |
 
 ### La solución intermedia: gobernar por el reloj, no por un temporizador
 
@@ -269,8 +298,8 @@ Así que la condición ya no es un temporizador sino el **reloj real de la GPU**
 `gpu_underclocked()` lee `sm_clock` por NVML (cacheado 0,5 s) y calienta
 mientras esté por debajo de `keepalive_clock_ratio` (**0,95**) del **máximo
 observado**. Más una guarda: si el dummy no cabe antes del frame siguiente, no
-se lanza. Esa guarda (`dummy_fits`) es la que protege al modelo pesado, y es lo
-único de esta fase que sigue en el código.
+se lanza. Esa guarda (`dummy_fits`) es la que protegía al modelo pesado, y fue
+lo único de esta fase que sobrevivió, hasta que se quitó el keep-alive entero.
 
 **La referencia es el reloj observado, no el que declara NVML.**
 `nvmlDeviceGetMaxClockInfo` devuelve 1961 MHz en la GTX 1080, pero ese es el de

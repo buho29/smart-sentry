@@ -9,7 +9,6 @@
     "classes": [
       0
     ],
-    "keepalive_enabled": true,
     "default_infer": true,
     "_comentario_always_infer": "always_infer: correr YOLO aunque nadie mire el stream, para que la cámara siga detectando con el navegador cerrado. No es lo mismo que default_infer, que solo decide si /stream y /snapshot devuelven anotado o crudo. A false ahorra GPU en una cámara que solo sirva vídeo.",
     "always_infer": true,

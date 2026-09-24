@@ -239,18 +239,16 @@ el siguiente `/start`, aunque la placa despierte o reconecte y republique
 ### Otros endpoints
 
 - `GET /health` — vivo / no vivo
-- `GET /config`, `POST /config/keepalive` — interruptor del keep-alive de GPU,
-  global, **apagado por defecto** y persistido en `global_config.json`. Solo
-  hace falta en una GTX 10xx con un modelo ligero; el intervalo va por cámara
-  (`keepalive_interval_sec`). Ver [`docs/GPU.md`](docs/GPU.md)
+- `GET /config` — ajustes globales (persistidos en `global_config.json`)
 - `GET /cameras`, `POST /cameras`, `DELETE /cameras/{camera_id}` — alta/baja
 - `POST /cameras/{camera_id}/esphome/awake` — forzar "despierto"
 
 Los ajustes de una cámara cuelgan de `/config/`:
 
 - `POST /cameras/{camera_id}/config/inference` — `confidence`, `imgsz`,
-  `classes`, `always_infer`, `keepalive_interval_sec`, y también el
-  `model_name` y el `device`. Va en JSON: en Swagger el desplegable
+  `classes`, `always_infer`, y también el `model_name` y el `device`. En la
+  GTX 1080, con una sola cámara se recomienda `yolo26m` (ver la tabla de
+  síntomas más abajo). Va en JSON: en Swagger el desplegable
   **Examples** del body lista cada cámara con sus valores actuales, así que
   eliges la tuya, tocas lo que quieras y envías (recarga `/docs` para ver
   cambios recientes). Lo que no se envía se conserva, `classes: null` = todas
@@ -320,7 +318,7 @@ Antes de sospechar del modelo, mira `corrupt_detections` en
 
 | Síntoma | Qué mirar |
 | --- | --- |
-| Cajas absurdas, o deja de detectar tras un rato | `corrupt_detections`. Si sube, la GPU se ha dormido y devuelve basura: usa un modelo más pesado (`yolo26m`) o enciende el keep-alive. El porqué, en [`docs/GPU.md`](docs/GPU.md#2-la-bajada-de-reloj-p-state); los relojes, con `nvidia-smi` |
+| Cajas absurdas, o deja de detectar tras un rato | `corrupt_detections`. Si sube con `yolo26n`, es la GTX 1080 bajando a P5 entre frames: las cajas corruptas se descartan, pero en cada bajada se pierden unos segundos de detección. Con una sola cámara se recomienda `yolo26m`. Los ajustes del driver no lo evitan. El porqué, en [`docs/GPU.md`](docs/GPU.md#2-la-bajada-de-reloj-p-state); los relojes, con `nvidia-smi` |
 | La inferencia va 2-3 veces más lenta de lo normal | Lo mismo: es el reloj, no el modelo |
 | Detecta poco, pero limpio | Es cuestión de umbral (`confidence`) o de modelo, no un fallo |
 

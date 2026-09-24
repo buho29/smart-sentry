@@ -41,9 +41,10 @@ ni su `EsphomeController`.
 
 ### `GLOBAL_CONFIG`
 
-Instancia única creada al importar el módulo. Se muta desde
-`POST /config/keepalive` y **se persiste** en `global_config.json`, que se
-relee en el `lifespan` antes de dar de alta las cámaras. No tiene cierre.
+Instancia única creada al importar el módulo. Hoy solo guarda
+`reconnect_delay_sec`, sin ruta para cambiarlo (se lee con `GET /config`).
+**Se persiste** en `global_config.json`, que se relee en el `lifespan` antes de
+dar de alta las cámaras. No tiene cierre.
 
 Estuvo viviendo solo en memoria, y cada reinicio se llevaba por delante lo que
 se hubiera ajustado por API — cuesta explicar que un `POST` "no haya servido de
@@ -54,10 +55,8 @@ su propio fichero precisamente por esto.
 Contrapartida de persistir: **lo guardado manda sobre los valores por defecto
 del código**, así que un defecto que cambie en una versión nueva no llega a una
 máquina que ya tenga su fichero. Es el mismo trato que `cameras_config.json`.
-
-Del keep-alive, lo global es solo el interruptor (`POST /config/keepalive`,
-apagado por defecto). El intervalo es por cámara (`keepalive_interval_sec`, ver
-más abajo).
+Las claves que ya no existen (como el `keepalive_enabled` del keep-alive de GPU,
+ya quitado) se ignoran al cargar y desaparecen en el siguiente guardado.
 
 ### Cache de modelos YOLO
 
@@ -81,40 +80,6 @@ Quien no necesita tracking (`/detect-file`, los scripts de `test/`) llama sin
 Y como ahora la caché crece con el número de cámaras, `DELETE /cameras/{id}`
 llama a `release_model()`: antes no liberar era una nota al pie, ahora un
 alta/baja repetida sería una fuga de VRAM de verdad.
-
-### El keep-alive de GPU
-
-**Viene apagado**: con `yolo26m`, el modelo por defecto, la GTX 1080 no se
-duerme entre frames y no hace falta. Es un workaround para volver a un modelo
-ligero; el problema de fondo, las mediciones y qué cambiaría con otra tarjeta
-están en [`GPU.md`](GPU.md). Aquí solo va lo que toca al ciclo de vida del
-hilo.
-
-Encendido (`POST /config/keepalive`), `_process_loop` lanza una inferencia
-dummy —un forward crudo sobre la red, que no toca el tracker— cada
-`keepalive_interval_sec` (0,005 s por defecto) mientras la cola está vacía.
-Ese intervalo es el `timeout` del `raw_queue.get()`, así que no añade latencia:
-el `get()` devuelve el frame en cuanto llega. Y por encima del hueco entre
-frames no se lanza ninguna dummy. Es por cámara porque lo que decide si hace
-falta, y lo que cuesta, es el modelo de cada una.
-
-`_should_keepalive()`, una función pura para poder probarla sin GPU, solo
-calienta si:
-
-- **la cámara sigue dando frames**: pasados `KEEPALIVE_IDLE_LIMIT_SEC` (3 s)
-  sin un frame real se pausa y el `get()` pasa a esperar 1 s. Sin ese límite,
-  una cámara desaparecida dejaba el hilo calentando para siempre: medido,
-  **29 % de una GTX 1080 con cero frames entrando**;
-- **va a haber una inferencia real que proteger**: con `always_infer` a
-  `false`, nadie mirando y ningún consumidor, calentar no protege nada.
-
-Al salir de la pausa se lanza **una** dummy justo antes de la primera
-inferencia real, para recalentar.
-
-La guarda `dummy_fits` no lanza la dummy si no cabe antes del frame siguiente:
-la de `yolo26m` cuesta unos 37 ms y el hueco entre frames es de 30, así que sin
-ella el ciclo se iba a ~72 ms contra los 60 de la cámara y se perdía en torno
-al 17 % de los frames.
 
 ### `lifespan`
 
@@ -401,7 +366,7 @@ Latencia real de salida de cada hilo:
 
 | Hilo | Sale en | Por qué |
 | --- | --- | --- |
-| Proceso (`yolo-*`) | ≤ `keepalive_interval_sec` con keep-alive (60 ms por defecto, 5 ms con modelo ligero), ≤ 1 s sin él | Es el timeout de su `queue.get()` |
+| Proceso (`yolo-*`) | ≤ 1 s | Es el timeout de su `queue.get()` |
 | Lector, dentro de `iter_content` | ~0,01 s | Le rompen el socket |
 | Lector, dentro de `requests.get` | ≤ 3 s | Connect timeout contra una placa dormida |
 
@@ -459,8 +424,9 @@ cliente lento no acumula memoria, solo se salta frames.
 - Un `Event.clear()` puede borrar una señal de parada que acaba de llegar. Si
   se añade otro, comprobar `_stopping` justo después (ver §4).
 - **Que muera un hilo no para la sesión.** Cuando `_read_loop` se rinde tiene
-  que llamar a `stop()`, o el hilo de proceso se queda vivo quemando GPU con el
-  keep-alive (§2). Y esa llamada debe ir guardada por
+  que llamar a `stop()`, o el hilo de proceso se queda vivo para siempre con la
+  cola vacía (cuando existía el keep-alive de GPU, además quemando GPU). Y esa
+  llamada debe ir guardada por
   `self._stop_event is stop_event`: sin esa comparación por identidad, un
   lector agonizante mataría a la generación **nueva** si ya hubiera arrancado
   otra (§3).
