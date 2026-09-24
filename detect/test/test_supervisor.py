@@ -145,6 +145,41 @@ with TestClient(supervisor.app) as client:
 print("\n=== al cerrar el supervisor muere el hijo ===")
 check("running=false tras el lifespan", wait_until(lambda: not svc.running, timeout=5))
 
+print("\n=== log a fichero: supervisor + salida del hijo, con rotación ===")
+LOGDIR = Path(tempfile.mkdtemp())
+LOGFILE = LOGDIR / "supervisor.log"
+supervisor.log.enable_file(LOGFILE, max_bytes=4096, backups=2)
+
+
+def run_child(code: str) -> str:
+    """Lanza un hijo que ejecuta `code`, espera a que acabe y devuelve el log."""
+    script = FAKE.with_name("talker.py")
+    script.write_text(code, encoding="utf-8")
+    child = supervisor.Service([sys.executable, str(script)], script.parent)
+    child.start()
+    check("el hijo termina", wait_until(lambda: not child.running, timeout=10))
+    time.sleep(0.5)  # que _pump vacíe el pipe
+    return "".join(p.read_text(encoding="utf-8") for p in sorted(LOGDIR.glob("supervisor.log*")))
+
+
+text = run_child(
+    "import sys\n"
+    "print('hola cámara ñandú')\n"
+    "print('esto va por stderr', file=sys.stderr)\n"
+    "raise SystemExit(3)\n"
+)
+check("mensaje del supervisor en el log", "servicio lanzado" in text)
+check("stdout del hijo con tildes intactas", "hola cámara ñandú" in text)
+check("stderr del hijo también", "esto va por stderr" in text)
+
+text = run_child("for i in range(400): print(f'relleno {i:04d} ' + 'x' * 40)\n")
+check("la última línea no se pierde (sin buffer)", "relleno 0399" in text)
+files = sorted(p.name for p in LOGDIR.glob("supervisor.log*"))
+check("rota y guarda como mucho backups copias",
+      files == ["supervisor.log", "supervisor.log.1", "supervisor.log.2"], str(files))
+check("ningún fichero pasa de max_bytes",
+      all(p.stat().st_size <= 4096 for p in LOGDIR.glob("supervisor.log*")))
+
 print()
 if failures:
     print(f"{len(failures)} FALLO(S): {failures}")

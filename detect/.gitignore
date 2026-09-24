@@ -13,6 +13,7 @@ __pycache__/
 # Logs y salidas de runtime
 gpu_log*.csv
 *.log
+logs/
 
 # Código viejo / descartado
 old/

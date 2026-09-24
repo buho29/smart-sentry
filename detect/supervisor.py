@@ -15,6 +15,10 @@ Swagger propio en http://<host>:8081/docs. main.py expone /service/restart,
 Parar a mano (POST /service/stop) es definitivo: el watchdog no relanza el
 servicio hasta el siguiente POST /service/start. Si uvicorn se cae solo, si lo
 relanza (con backoff). Misma semantica que el manual_stop de las camaras.
+
+Todo lo que sale por consola (lo del supervisor y la salida de uvicorn) se
+copia a logs/supervisor.log, que rota a los 5 MB y guarda 3 copias
+(--log-file, --log-max-mb, --log-backups).
 """
 
 from __future__ import annotations
@@ -34,7 +38,8 @@ from typing import Optional
 import uvicorn
 from fastapi import FastAPI
 
-from log import print
+import log
+from log import print, write_raw
 
 
 DETECT = Path(__file__).resolve().parent
@@ -45,6 +50,11 @@ if not PY.exists():  # fuera de Windows o sin venv
 SERVICE_HOST = "0.0.0.0"
 SERVICE_PORT = 8080
 SUPERVISOR_PORT = 8081
+
+# Log a fichero (supervisor + salida de uvicorn), rotando por tamaño
+LOG_FILE = DETECT / "logs" / "supervisor.log"
+LOG_MAX_MB = 5
+LOG_BACKUPS = 3
 
 
 def service_cmd(port: int = SERVICE_PORT) -> list[str]:
@@ -120,11 +130,21 @@ class Service:
             # Grupo de procesos propio en Windows: así se le puede mandar un
             # CTRL_BREAK_EVENT solo a él (CTRL_C_EVENT iría a toda la consola,
             # supervisor incluido). Ver send_stop_signal.
+            # La salida del hijo pasa por aquí (_pump) para que acabe también
+            # en el fichero de log. Con stdout en pipe Python bufferiza por
+            # bloques y un crash se llevaría las últimas líneas, justo las que
+            # interesan: de ahí PYTHONUNBUFFERED. PYTHONIOENCODING para que las
+            # tildes no dependan de la codificación de pipe de Windows.
+            env = {**(self.env or os.environ),
+                   "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
             self._proc = subprocess.Popen(
-                self.cmd, cwd=self.cwd, env=self.env,
+                self.cmd, cwd=self.cwd, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
                    if sys.platform == "win32" else {}),
             )
+            threading.Thread(target=_pump, args=(self._proc,), daemon=True,
+                             name=f"pump-{self._proc.pid}").start()
             self._started_at = time.monotonic()
             print(f"servicio lanzado (pid {self._proc.pid}): {' '.join(self.cmd)}")
             return True
@@ -193,6 +213,14 @@ class Service:
             if self._watchdog_stop.wait(delay):
                 return
             self.start()
+
+
+def _pump(proc: subprocess.Popen):
+    """Reenvía la salida del hijo, línea a línea, a consola y al fichero de log.
+    Acaba sola al EOF, cuando muere el hijo (también tras un kill_tree)."""
+    for raw in proc.stdout:
+        write_raw(raw.decode("utf-8", errors="replace"))
+    proc.stdout.close()
 
 
 def send_stop_signal(proc: subprocess.Popen):
@@ -286,12 +314,23 @@ def main():
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--service-port", type=int, default=SERVICE_PORT, help="puerto de uvicorn (default 8080)")
     ap.add_argument("--no-autostart", action="store_true", help="no lanzar el servicio al arrancar")
+    ap.add_argument("--log-file", default=str(LOG_FILE),
+                    help=f"fichero de log; \"\" para no escribir ninguno (default {LOG_FILE})")
+    ap.add_argument("--log-max-mb", type=float, default=LOG_MAX_MB,
+                    help=f"tamaño al que rota el log (default {LOG_MAX_MB})")
+    ap.add_argument("--log-backups", type=int, default=LOG_BACKUPS,
+                    help=f"copias rotadas que se guardan (default {LOG_BACKUPS})")
     args = ap.parse_args()
     AUTOSTART = not args.no_autostart
+    # Que un carácter que la consola no sepa pintar no tumbe el hilo de _pump
+    sys.stdout.reconfigure(errors="replace")
+    if args.log_file:
+        log.enable_file(Path(args.log_file), int(args.log_max_mb * 1024 * 1024), args.log_backups)
     # El hijo necesita saber dónde estamos para sus proxies /service/*
     service = Service(service_cmd(args.service_port), DETECT,
                       env={**os.environ, "DETECT_SUPERVISOR_PORT": str(args.port)})
-    print(f"supervisor en http://{args.host}:{args.port}/docs (servicio en :{args.service_port})")
+    print(f"supervisor en http://{args.host}:{args.port}/docs (servicio en :{args.service_port})"
+          + (f", log en {args.log_file}" if args.log_file else ""))
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 

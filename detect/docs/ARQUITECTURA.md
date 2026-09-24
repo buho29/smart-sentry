@@ -25,16 +25,16 @@ cuando la placa se duerme, ver [`CICLO-DE-VIDA.md`](CICLO-DE-VIDA.md).
 | [`recorder.py`](../recorder.py) | `ClipRecorder`: cuándo se graba un clip y cómo se encolan los frames sin frenar la inferencia. El segundo consumidor de detecciones. Ver [GRABACION.md](GRABACION.md). | 699 |
 | [`clips.py`](../clips.py) | Los clips que hay en disco: rutas, listado, y la retención por días y por GB. Global, no por cámara. | 550 |
 | [`encoders.py`](../encoders.py) | Convertir JPEG en MP4 **H.264**. Dos implementaciones (ffmpeg externo y OpenCV) y la corrección de fps variable. | 302 |
-| [`supervisor.py`](../supervisor.py) | Proceso padre que lanza y vigila a uvicorn y expone `/service/*` en `:8081` (parar, arrancar, reiniciar). No importa nada del proyecto. | 243 |
+| [`supervisor.py`](../supervisor.py) | Proceso padre que lanza y vigila a uvicorn y expone `/service/*` en `:8081` (parar, arrancar, reiniciar). Copia su salida y la de uvicorn a `logs/supervisor.log` (rota a 5 MB × 3). Del proyecto solo importa `log`. | 243 |
 | [`esphome_api.py`](../esphome_api.py) | `EsphomeController`: la conexión con la API nativa de la placa. No sabe nada de cámaras, ni de YOLO, ni del hardware concreto: cada variante llama a los servicios que publique su YAML. | 318 |
 | [`servo_tracker.py`](../servo_tracker.py) | La torreta pan/tilt, como consumidor de detecciones. | 181 |
 | [`detections.py`](../detections.py) | `Detection` y el protocolo `DetectionConsumer`: la frontera entre el pipeline y lo que se hace con lo que ve. | 114 |
 | [`shutdown.py`](../shutdown.py) | La bandera de apagado y el hook de señal encadenado a uvicorn. | 61 |
 | [`registry.py`](../registry.py) | Alta, baja y persistencia de las cámaras en `cameras_config.json`. | 54 |
-| [`log.py`](../log.py) | El `print` con marca de hora. Los demás hacen `from log import print`. | 15 |
+| [`log.py`](../log.py) | El `print` con marca de hora (y copia opcional a fichero rotado). Los demás hacen `from log import print`. | 15 |
 
-Sin ciclos de importación: `log`, `detections` y `supervisor` no importan nada
-del proyecto; `servo_tracker` ← `detections`; `esphome_api` ← `log`;
+Sin ciclos de importación: `log` y `detections` no importan nada del
+proyecto; `supervisor` ← `log`; `servo_tracker` ← `detections`; `esphome_api` ← `log`;
 `encoders` ← `log`; `clips` ← `log`; `recorder` ← `detections` + `clips` +
 `encoders`; `camera` ← todos los anteriores + `shutdown`; `registry` ←
 `camera`; `main` ← todos.
@@ -290,6 +290,11 @@ classDiagram
 Envoltura sobre el `print` nativo (guardado en `_orig_print`) que antepone la
 hora local en formato `[HH:MM:SS.mmm]`, el mismo que usa el log de ESPHome,
 para poder cotejar tiempos entre ambos logs.
+
+`enable_file(path, max_bytes, backups)` copia además cada línea a un fichero
+con `RotatingFileHandler`; `write_raw(line)` escribe una línea sin añadirle
+hora (la salida del hijo que reenvía el supervisor). Solo `supervisor.py` los
+usa: en uvicorn el fichero no se activa y `print` se comporta igual que antes.
 
 ### `CUDNN_ENABLED` — [`main.py`](../main.py)
 

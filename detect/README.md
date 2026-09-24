@@ -115,6 +115,11 @@ a mano, se queda parado hasta que le des a `start`.
 Opciones: `--port` (supervisor, 8081), `--service-port` (uvicorn, 8080),
 `--no-autostart`.
 
+Todo lo que sale por consola (el supervisor y la salida de uvicorn, tracebacks
+incluidos) se copia a `logs/supervisor.log`. Rota al llegar a 5 MB y guarda 3
+copias (`supervisor.log.1..3`), así que nunca ocupa más de ~20 MB. Se cambia
+con `--log-file` (`""` para no escribir log), `--log-max-mb` y `--log-backups`.
+
 Uvicorn a pelo, sin supervisor (entonces `/service/*` en el `:8080` devuelve 503):
 
 ```powershell
