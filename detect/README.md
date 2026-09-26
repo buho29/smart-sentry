@@ -240,6 +240,10 @@ el siguiente `/start`, aunque la placa despierte o reconecte y republique
 
 - `GET /health` — vivo / no vivo
 - `GET /config` — ajustes globales (persistidos en `global_config.json`)
+- `POST /config/gl-keeper` — ventana OpenGL oculta que impide que una GTX 10xx
+  baje a P5 con `yolo26n` (para usar el nano con varias cámaras). Apagada por
+  defecto; necesita *Prefer maximum performance* en el perfil de `python.exe`.
+  Ver [`docs/GPU.md`](docs/GPU.md)
 - `GET /cameras`, `POST /cameras`, `DELETE /cameras/{camera_id}` — alta/baja
 - `POST /cameras/{camera_id}/esphome/awake` — forzar "despierto"
 
@@ -313,12 +317,13 @@ de la parcela: mantenlo en la LAN.
 
 ## Cuando no detecta, o detecta cosas raras
 
-Antes de sospechar del modelo, mira `corrupt_detections` en
-`GET /cameras/{camera_id}/status`. Tiene que estar a 0.
+Antes de sospechar del modelo, mira `corrupt_frames` en
+`GET /cameras/{camera_id}/status` (frames con alguna caja imposible). Tiene que
+estar a 0.
 
 | Síntoma | Qué mirar |
 | --- | --- |
-| Cajas absurdas, o deja de detectar tras un rato | `corrupt_detections`. Si sube con `yolo26n`, es la GTX 1080 bajando a P5 entre frames: las cajas corruptas se descartan, pero en cada bajada se pierden unos segundos de detección. Con una sola cámara se recomienda `yolo26m`. Los ajustes del driver no lo evitan. El porqué, en [`docs/GPU.md`](docs/GPU.md#2-la-bajada-de-reloj-p-state); los relojes, con `nvidia-smi` |
+| Cajas absurdas, o deja de detectar tras un rato | `corrupt_frames`. Si sube, o si con `yolo26n` deja de detectar sin más, es la GTX 1080 bajando a P5 entre frames (el fallo silencioso no sube el contador). Con una cámara, `yolo26m`. Con varias, `yolo26n` + `POST /config/gl-keeper` + *Prefer maximum performance* en el perfil de `python.exe`. El porqué, en [`docs/GPU.md`](docs/GPU.md#2-la-bajada-de-reloj-p-state); los relojes, con `nvidia-smi` |
 | La inferencia va 2-3 veces más lenta de lo normal | Lo mismo: es el reloj, no el modelo |
 | Detecta poco, pero limpio | Es cuestión de umbral (`confidence`) o de modelo, no un fallo |
 

@@ -85,8 +85,12 @@ alta/baja repetida sería una fuga de VRAM de verdad.
 
 - **Arranque:** `load_cameras_from_disk()` reconstruye las sesiones guardadas
   en `cameras_config.json`. Se crean paradas; las que tienen `noise_psk`
-  levantan ya su `EsphomeController`, que empieza a intentar conectar.
-- **Apagado:** `session.shutdown()` de todas **en paralelo**
+  levantan ya su `EsphomeController`, que empieza a intentar conectar. Después
+  arranca el hilo del GL keeper (`GL_KEEPER.start()`), que solo lanza su proceso
+  hijo si el interruptor está encendido y hay cámaras en CUDA.
+- **Apagado:** primero `GL_KEEPER.stop()`, que termina el proceso de la ventana
+  si lo hay (y si el servicio muere sin llegar aquí, el hijo se cierra solo al
+  quedarse sin stdin). Después, `session.shutdown()` de todas **en paralelo**
   (`asyncio.gather`), cada una en un hilo (`asyncio.to_thread`) y con
   `timeout=5s`. Va en un hilo porque `shutdown()` hace `join()` y bloquear el
   event loop impedía a uvicorn cerrar las conexiones de clientes a tiempo.

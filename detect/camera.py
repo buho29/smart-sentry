@@ -188,16 +188,21 @@ DEFAULT_MODEL = "yolo26m"
 class GlobalConfig:
     def __init__(self):
         self.reconnect_delay_sec: float = 1.0
+        # Ventana OpenGL oculta para que la GTX 1080 no baje a P5 con yolo26n
+        # (gl_keeper.py). Apagada por defecto: solo sirve con el perfil del
+        # driver en Prefer maximum performance.
+        self.gl_keeper_enabled: bool = False
 
     def as_dict(self):
         return {
             "reconnect_delay_sec": self.reconnect_delay_sec,
+            "gl_keeper_enabled": self.gl_keeper_enabled,
         }
 
     # Un global_config.json de una versión anterior traerá claves que ya no
     # existen (`keepalive_enabled`, por ejemplo). No pasa nada: se recorre
     # esta lista y lo que sobra se ignora.
-    _PERSISTED = ("reconnect_delay_sec",)
+    _PERSISTED = ("reconnect_delay_sec", "gl_keeper_enabled")
 
     def save(self) -> None:
         try:
@@ -438,9 +443,11 @@ class CameraSession:
         self.last_inference_ms: Optional[float] = None
         self.pipeline_fps: float = 0.0
 
-        # Detecciones imposibles (confianza fuera de [0,1] o coordenadas no
-        # finitas). Son la señal inequívoca del bug de P-state.
-        self._corrupt_dets = 0
+        # Frames con alguna detección imposible (confianza fuera de [0,1] o
+        # coordenadas no finitas). Son la señal inequívoca del bug de P-state.
+        # Se cuentan frames y no cajas: un frame roto puede traer cientos de
+        # cajas basura, y contarlas hacía parecer mil fallos lo que eran tres.
+        self._corrupt_frames = 0
 
         # Conexión opcional a la API nativa de ESPHome de la misma placa,
         # para arrancar/parar la sesión según el estado real del hardware
@@ -963,6 +970,33 @@ class CameraSession:
             print(f"[{self.cfg.camera_id}] no se pudo resetear el tracker: {e!r}")
             return False
 
+    def _drop_corrupt(self, dets: list[Detection]) -> list[Detection]:
+        """Canario del bug de P-state: descarta el frame si trae basura.
+
+        La confianza sale de una sigmoide, así que un valor fuera de [0,1] no
+        es "una detección rara", es la GPU devolviendo basura (sale en los
+        cambios de P-state, ver docs/GPU.md). Se vio un 1.812 en producción y
+        nadie se enteró, porque nada lo miraba.
+
+        Se descarta el frame **entero**, no solo las cajas imposibles: si la
+        inferencia ha salido rota, las cajas con confianza normal de ese mismo
+        frame tampoco son de fiar, y una caja fantasma movería los servos o
+        dispararía una grabación. El frame cuenta como "no se ha visto nada".
+        """
+        corrupt = [d for d in dets if _is_corrupt(d)]
+        if not corrupt:
+            return dets
+        self._corrupt_frames += 1
+        peor = max(corrupt, key=lambda d: abs(d.conf))
+        if self._corrupt_frames == 1 or self._corrupt_frames % 50 == 0:
+            print(f"[{self.cfg.camera_id}] INFERENCIA CORRUPTA "
+                  f"(frame n.º {self._corrupt_frames}): "
+                  f"{len(corrupt)} caja(s) imposible(s) de {len(dets)}, la peor "
+                  f"con confianza {peor.conf:.3f}. La GPU ha cambiado de "
+                  f"P-state y da resultados basura; se descarta el frame. Con "
+                  f"una sola cámara se recomienda yolo26m (ver docs/GPU.md).")
+        return []
+
     def _process_loop(self):
         # Referencias LOCALES de esta generación (ver comentario en _read_loop
         # sobre por qué no se puede usar self._stop_event/self._raw_queue
@@ -1019,29 +1053,7 @@ class CameraSession:
                         )
                         for box in results.boxes
                     ]
-
-                    # Canario del bug de P-state: la confianza sale de una
-                    # sigmoide, así que un valor fuera de [0,1] no es "una
-                    # detección rara", es la GPU devolviendo basura porque está
-                    # a los relojes del escritorio. Se vio un 1.812 en
-                    # producción y nadie se enteró, porque nada lo miraba.
-                    corrupt = [d for d in dets if _is_corrupt(d)]
-                    if corrupt:
-                        self._corrupt_dets += len(corrupt)
-                        peor = max(corrupt, key=lambda d: abs(d.conf))
-                        if self._corrupt_dets - len(corrupt) == 0 or \
-                                self._corrupt_dets % 50 < len(corrupt):
-                            print(f"[{self.cfg.camera_id}] INFERENCIA CORRUPTA: "
-                                  f"confianza {peor.conf:.3f} fuera de [0,1]. "
-                                  f"La GPU ha bajado a P5 y da resultados basura; "
-                                  f"se descartan. Con una sola cámara se "
-                                  f"recomienda yolo26m (ver docs/GPU.md).")
-                        # No se propagan: una caja con confianza 1.8 movería los
-                        # servos hacia un fantasma y dispararía una grabación.
-                        # Se filtra por el mismo predicado y no por pertenencia:
-                        # `d not in corrupt` compara por VALOR, así que dos
-                        # detecciones idénticas se irían las dos.
-                        dets = [d for d in dets if not _is_corrupt(d)]
+                    dets = self._drop_corrupt(dets)
 
                     if want_draw:
                         annotated = frame.copy()
@@ -1162,7 +1174,7 @@ class CameraSession:
             "last_inference_ms": self.last_inference_ms,
             "pipeline_fps": round(self.pipeline_fps, 1),
             "esphome_connected": self.esphome.is_connected if self.esphome else None,
-            "corrupt_detections": self._corrupt_dets,
+            "corrupt_frames": self._corrupt_frames,
             "consumers": {type(c).__name__: c.status() for c in self._consumers},
             "config": self.cfg.dict(),
         }

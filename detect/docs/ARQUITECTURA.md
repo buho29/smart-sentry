@@ -20,8 +20,9 @@ cuando la placa se duerme, ver [`CICLO-DE-VIDA.md`](CICLO-DE-VIDA.md).
 
 | Fichero | Qué es | Líneas |
 | --- | --- | --- |
-| [`camera.py`](../camera.py) | El pipeline de vídeo: leer del ESP32, inferir con YOLO y repartir el stream. Todo lo que ocurre por frame. | 1168 |
-| [`main.py`](../main.py) | Solo la API HTTP: el `lifespan` y los endpoints. | 991 |
+| [`camera.py`](../camera.py) | El pipeline de vídeo: leer del ESP32, inferir con YOLO y repartir el stream. Todo lo que ocurre por frame. | 1180 |
+| [`main.py`](../main.py) | Solo la API HTTP: el `lifespan` y los endpoints. | 1019 |
+| [`gl_keeper.py`](../gl_keeper.py) | Lanza un `python.exe` hijo con una ventana OpenGL oculta mientras haya cámaras en CUDA, para que la GTX 1080 no baje a P5 con `yolo26n`. Aislado a propósito para poder quitarlo: los pasos están en su docstring. Ver [GPU.md](GPU.md). | 219 |
 | [`recorder.py`](../recorder.py) | `ClipRecorder`: cuándo se graba un clip y cómo se encolan los frames sin frenar la inferencia. El segundo consumidor de detecciones. Ver [GRABACION.md](GRABACION.md). | 699 |
 | [`clips.py`](../clips.py) | Los clips que hay en disco: rutas, listado, y la retención por días y por GB. Global, no por cámara. | 550 |
 | [`encoders.py`](../encoders.py) | Convertir JPEG en MP4 **H.264**. Dos implementaciones (ffmpeg externo y OpenCV) y la corrección de fps variable. | 302 |
@@ -37,7 +38,8 @@ Sin ciclos de importación: `log` y `detections` no importan nada del
 proyecto; `supervisor` ← `log`; `servo_tracker` ← `detections`; `esphome_api` ← `log`;
 `encoders` ← `log`; `clips` ← `log`; `recorder` ← `detections` + `clips` +
 `encoders`; `camera` ← todos los anteriores + `shutdown`; `registry` ←
-`camera`; `main` ← todos.
+`camera`; `gl_keeper` ← `camera` + `log` (importados dentro de las funciones,
+para que el proceso hijo no cargue torch); `main` ← todos.
 
 **Por qué la grabación son tres módulos y no uno.** `recorder.py` es *lo que
 pasa por frame en una cámara* y nace y muere con su sesión; `clips.py` es *lo
@@ -549,7 +551,8 @@ Crea todo el estado:
 - `_fps_window` (`deque`) — ventana deslizante de ~1 s para calcular FPS
   estable.
 - Métricas para `/status`: `last_frame_time`, `last_inference_ms`,
-  `pipeline_fps` y `_corrupt_dets` (sale como `corrupt_detections`).
+  `pipeline_fps` y `_corrupt_frames` (sale como `corrupt_frames`: frames con
+  alguna caja imposible, no cajas).
 - Si `cfg.noise_psk`: saca el host de `stream_url` y crea el
   `EsphomeController` con `on_state_value=self._on_esphome_state`.
 
@@ -690,7 +693,9 @@ Referencias locales otra vez. Obtiene el modelo con `get_model()`. Bucle:
 5. **Si `want_infer`:** `model.track(frame, persist=True,
    tracker="bytetrack.yaml", classes=...)`, y las cajas se traducen **una sola
    vez** a una lista de `Detection` (objetos planos, sin dependencia de
-   ultralytics). Con esa lista:
+   ultralytics). `_drop_corrupt()` la vacía si trae alguna caja imposible
+   (confianza fuera de `[0,1]`): un frame así se descarta **entero** y suma 1 a
+   `corrupt_frames`. Con esa lista:
    - **si `want_draw`**, dibuja rectángulo, punto central y
      `label conf #track_id` por detección, añade el overlay de `ms`/device/fps y
      `cv2.imencode(".jpg")` → `annotated_bytes`;
@@ -723,7 +728,7 @@ frame.
 ### `status()` — [`camera.py`](../camera.py)
 
 Dict de diagnóstico para `/status`: running, `explicit_start`, `clients` (los
-tres contadores sumados), últimas métricas, `corrupt_detections`,
+tres contadores sumados), últimas métricas, `corrupt_frames`,
 `esphome_connected`, el `status()` de cada consumidor bajo `consumers` y la
 config entera.
 
@@ -827,7 +832,8 @@ de la LAN.
 | Método / ruta | Función | Qué hace |
 | --- | --- | --- |
 | `GET /health` | `health` | `{status, cameras}` — vivo y lista de IDs. |
-| `GET /config` | `get_config` | Devuelve `GLOBAL_CONFIG`. |
+| `GET /config` | `get_config` | Devuelve `GLOBAL_CONFIG` y el estado del GL keeper (`gl_keeper`: `enabled`, `active`, `error`). |
+| `POST /config/gl-keeper` | `set_gl_keeper` | Interruptor del GL keeper (`enabled`, apagado por defecto), por formulario; se persiste en `global_config.json`. Al encenderlo se olvida un fallo anterior y se reintenta. |
 
 ### Gestión de cámaras
 
@@ -920,8 +926,16 @@ re-encoda JPEG.
 **Sin keep-alive de GPU.** Hubo uno (inferencias dummy entre frames para que
 la GTX 1080 no bajara a P5) y se quitó: con un modelo ligero no evitaba del
 todo las corrupciones, y un modelo pesado (`yolo26m`) mantiene la GPU despierta
-él solo. Con `yolo26n` las detecciones corruptas se descartan y se cuentan en
-`corrupt_detections`. El porqué, en [`GPU.md`](GPU.md).
+él solo. Con `yolo26n` las detecciones corruptas se descartan y los frames
+afectados se cuentan en `corrupt_frames`. El porqué, en [`GPU.md`](GPU.md).
+
+**GL keeper en vez de keep-alive.** Para usar `yolo26n` con varias cámaras,
+`gl_keeper.py` mantiene la GPU despierta sin tocar el pipeline: un hilo del
+servicio mira cada 2 s si hay alguna cámara funcionando en CUDA y, si el
+interruptor está encendido, lanza un `python.exe` hijo con una ventana OpenGL
+oculta; cuando no hay cámaras, lo termina. Va en un proceso aparte porque el
+driver deja en P0 al proceso que ha tenido un contexto OpenGL hasta que acaba.
+El hijo se cierra solo si el servicio muere (su stdin se cierra).
 
 **Framing por `Content-Length`, no por marcadores JPEG.** Buscar `\xff\xd8` /
 `\xff\xd9` a mano se desincronizaba con esos bytes dentro de datos

@@ -433,6 +433,8 @@ check("todos los ajustes cuelgan de /config/",
 # bajadas a P5 de la GTX 1080, y la solución es un modelo pesado.
 check("el keep-alive ya no tiene ruta, ni global ni por cámara",
       not ({"/config/keepalive", "/cameras/{camera_id}/config/keepalive"} & routes))
+# gl_keeper: el interruptor de la ventana OpenGL (ver gl_keeper.py).
+check("la ruta de gl_keeper está registrada", "/config/gl-keeper" in routes)
 check("y ya no quedan las rutas viejas",
       not ({"/cameras/{camera_id}/inference/config", "/cameras/{camera_id}/stream/config",
             "/cameras/{camera_id}/servo/tracking"} & routes))

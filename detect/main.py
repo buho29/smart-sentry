@@ -40,6 +40,7 @@ from clips import (
     save_recordings_config,
 )
 from encoders import encoder_capabilities
+import gl_keeper  # gl_keeper
 from log import print
 from recorder import RecordingConfig
 from registry import (
@@ -81,6 +82,12 @@ print(f"cuDNN {'activado' if CUDNN_ENABLED else 'desactivado'} "
 # del disco, no de cada cámara.
 SWEEPER: Optional[RetentionSweeper] = None
 
+# gl_keeper: ventana OpenGL oculta mientras haya cámaras en CUDA, para que la
+# GTX 1080 no baje a P5 con yolo26n. Ver gl_keeper.py (y cómo quitarlo).
+GL_KEEPER = gl_keeper.GlKeeper(  # gl_keeper
+    lambda: any(s.is_running and s.cfg.device.startswith("cuda")  # gl_keeper
+                for s in list(CAMERAS.values())))  # gl_keeper
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -98,8 +105,10 @@ async def lifespan(app: FastAPI):
     SWEEPER = RetentionSweeper(STORE)
     SWEEPER.start()
     load_cameras_from_disk()
+    GL_KEEPER.start()  # gl_keeper
     yield
     print("Apagando: deteniendo todas las cámaras...")
+    GL_KEEPER.stop()  # gl_keeper
     # Antes que las sesiones: el barrido no tiene que competir por el disco con
     # los clips que se están cerrando.
     if SWEEPER is not None:
@@ -198,7 +207,26 @@ async def service_shutdown():
 
 @app.get("/config")
 async def get_config():
-    return GLOBAL_CONFIG.as_dict()
+    return {**GLOBAL_CONFIG.as_dict(),
+            "gl_keeper": GL_KEEPER.status()}  # gl_keeper
+
+
+# gl_keeper: todo este endpoint.
+@app.post("/config/gl-keeper")
+async def set_gl_keeper(
+    enabled: bool = Form(..., description="Abrir una ventana OpenGL oculta mientras haya cámaras en CUDA, para que la GTX 1080 no baje a P5 con yolo26n (ahí deja de detectar). Solo funciona con Power Management = Prefer maximum performance en el perfil de python.exe (NVIDIA Profile Inspector). Con una sola cámara es más sencillo usar yolo26m y dejarlo apagado."),
+):
+    """Ventana OpenGL para mantener la GPU despierta. Global y **se persiste**.
+
+    Viene apagado. Compruébalo con `nvidia-smi`: con cámaras activas la GPU
+    tiene que quedarse en P0/P2 fijo y `gpu_idle` en Not Active. Ver
+    docs/GPU.md.
+    """
+    GLOBAL_CONFIG.gl_keeper_enabled = enabled
+    GLOBAL_CONFIG.save()
+    if enabled:
+        GL_KEEPER.retry()
+    return {**GLOBAL_CONFIG.as_dict(), "gl_keeper": GL_KEEPER.status()}
 
 
 @app.get("/cameras")
@@ -351,7 +379,7 @@ class InferenceConfig(BaseModel):
     imgsz: Optional[int] = Field(None, gt=0, description="Lado al que YOLO reescala el frame antes de inferir. Más grande ve objetos más pequeños, pero cuesta más GPU.")
     always_infer: Optional[bool] = Field(None, description="Correr YOLO aunque nadie mire el stream, para seguir detectando con el navegador cerrado.")
     classes: Optional[list[int]] = Field(None, description="IDs de clase COCO (0 = personas, 16 = pájaros). null = todas las clases.")
-    model_name: Optional[str] = Field(None, description="Pesos YOLO, sin el .pt. Cambiarlo relanza la sesión. En la GTX 1080, con una sola cámara se recomienda yolo26m: con yolo26n la GPU baja a P5 entre frames y da detecciones corruptas (se descartan y se cuentan en corrupt_detections).")
+    model_name: Optional[str] = Field(None, description="Pesos YOLO, sin el .pt. Cambiarlo relanza la sesión. En la GTX 1080, con una sola cámara se recomienda yolo26m: con yolo26n la GPU baja a P5 entre frames y da detecciones corruptas (se descartan y se cuentan en corrupt_frames).")
     device: Optional[str] = Field(None, description="'cuda' o 'cpu'. Cambiarlo relanza la sesión.")
 
 

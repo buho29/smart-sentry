@@ -309,6 +309,30 @@ for nombre, d, esperado in [
 ]:
     check(nombre, camera._is_corrupt(d) is esperado)
 
+# Se cuentan FRAMES corruptos, no cajas: un frame roto puede traer cientos de
+# cajas basura y el contador de cajas hacía parecer mil fallos lo que eran tres.
+_s_st = camera.CameraSession(camera.CameraConfig(
+    camera_id="status-corrupt", stream_url="http://127.0.0.1:1/",
+    device="cpu", model_name="yolo11n"))
+_st = _s_st.status()
+check("/status trae corrupt_frames y empieza en 0", _st.get("corrupt_frames") == 0, str(_st.get("corrupt_frames")))
+check("y ya no corrupt_detections (contaba cajas)", "corrupt_detections" not in _st)
+
+# Un frame con alguna caja imposible se descarta ENTERO: si la inferencia salió
+# rota, las cajas "normales" de ese frame tampoco son de fiar.
+_rota = _Det(x1=10, y1=10, x2=30, y2=40, cls=0, label="person", conf=1.812)
+_out = _s_st._drop_corrupt([_rota, _rota, _rota, _sana])
+check("frame con 3 cajas imposibles y 1 sana -> se descarta entero", _out == [], str(_out))
+check("y cuenta UN frame, no tres cajas", _s_st._corrupt_frames == 1, str(_s_st._corrupt_frames))
+_limpio = [_sana, _sana]
+check("un frame sano pasa entero (también dos cajas idénticas)",
+      _s_st._drop_corrupt(_limpio) == _limpio)
+check("y no toca el contador", _s_st._corrupt_frames == 1)
+_s_st._drop_corrupt([_rota])
+check("otro frame roto -> 2", _s_st._corrupt_frames == 2, str(_s_st._corrupt_frames))
+check("/status lo refleja", _s_st.status()["corrupt_frames"] == 2)
+_s_st.shutdown()
+
 
 # GLOBAL_CONFIG se persiste. Antes no, y cada reinicio se llevaba por delante lo
 # ajustado por API: cuesta explicar que un POST "no haya servido de nada".
@@ -327,6 +351,31 @@ check("un global_config.json roto no impide arrancar",
       camera.GLOBAL_CONFIG.reconnect_delay_sec == 4.0)
 camera.GLOBAL_CONFIG.reconnect_delay_sec = 1.0
 camera.GLOBAL_CONFIG_FILE = _cfg_before
+
+# gl_keeper: ventana OpenGL para que la GTX 1080 no baje a P5 con yolo26n.
+# Tiene que venir apagada (solo sirve con un ajuste concreto del driver) y no
+# abrir nada mientras lo esté.
+import gl_keeper  # noqa: E402
+
+check("gl_keeper_enabled viene apagado", camera.GlobalConfig().gl_keeper_enabled is False)
+check("y se persiste", "gl_keeper_enabled" in camera.GlobalConfig._PERSISTED)
+for nombre, args, esperado in [
+    ("apagado y sin cámaras -> no", (False, False), False),
+    ("apagado con cámaras -> no", (False, True), False),
+    ("encendido sin cámaras -> no (la GPU puede bajar a reposo)", (True, False), False),
+    ("encendido con cámaras -> sí", (True, True), True),
+]:
+    check(f"gl_keeper: {nombre}", gl_keeper._should_run(*args) is esperado)
+
+camera.GLOBAL_CONFIG.gl_keeper_enabled = False
+_keeper = gl_keeper.GlKeeper(lambda: True)
+_keeper.start()
+time.sleep(0.3)
+check("apagado no abre la ventana aunque haya cámaras", _keeper.status()["active"] is False)
+_keeper.stop()
+check("stop() termina el hilo", not _keeper._thread.is_alive())
+_raro = gl_keeper.GlKeeper(lambda: 1 / 0)
+check("un is_needed que falla cuenta como 'no hace falta'", _raro._wants() is False)
 
 
 # Cada camara tiene su PROPIA instancia del modelo. La cache estuvo indexada

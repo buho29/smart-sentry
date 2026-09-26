@@ -13,6 +13,12 @@ pillow==12.3.0
 # Sin este paquete el servicio arranca igual, pero los clips no se ven en HA.
 imageio-ffmpeg==0.6.0
 
+# Solo para gl_keeper.py (ventana OpenGL que mantiene despierta una GTX 10xx
+# con yolo26n; ver docs/GPU.md). Opcionales: sin ellos el servicio arranca y
+# gl_keeper se desactiva avisando en el log.
+glfw==2.10.2
+moderngl==5.12.0
+
 # nvidia-ml-py==13.610.43
 # psutil==7.2.2
 # PyYAML==6.0.3

@@ -13,7 +13,7 @@ Son **dos problemas distintos** que se confunden porque dan síntomas parecidos
 | --- | --- | --- |
 | Qué pasa | Error CUDA intermitente o detecciones erráticas | El driver baja el reloj con carga ligera: la inferencia va 2-3 veces más lenta y, **en esta tarjeta**, sale corrupta |
 | A quién afecta | Pascal (GTX 10xx) | Cualquier GeForce en Windows; la corrupción, probablemente solo Pascal |
-| Qué se hace hoy | `CUDNN_ENABLED = False` en `main.py` | Con una sola cámara se recomienda `yolo26m`. Con `yolo26n` la GPU baja a P5 y da detecciones corruptas, que se descartan |
+| Qué se hace hoy | `CUDNN_ENABLED = False` en `main.py` | Una cámara: `yolo26m`. Varias: `yolo26n` + `gl_keeper` + *Prefer maximum performance* en el perfil de `python.exe` (§2) |
 | Con una RTX 20 o posterior | Desaparece: cuDNN activado | Se fija el reloj con `nvidia-smi -lgc` |
 
 Configuración actual en esta máquina: GTX 1080, driver 581.80, torch
@@ -97,24 +97,34 @@ las tres, y ni siquiera con keep-alive dejaba de corromper.
 **Con una sola cámara se recomienda `yolo26m`**, que es además el modelo por
 defecto (`DEFAULT_MODEL`). Ocupa la GPU lo bastante para que no se duerma sola.
 
-**`yolo26n` se puede seguir usando**, pero en esta tarjeta da corrupciones cada
-vez que el driver baja a P5. Las detecciones corruptas se descartan antes de
-llegar a los servos y a la grabación, y se cuentan en `corrupt_detections` (§3).
-El precio es que en cada bajada a P5 se pierden unos segundos de detección
-fiable: no se ven los frames en que la persona desaparece sin más.
+**Con dos o más cámaras**, varios `yolo26m` se comen la GPU y hace falta
+`yolo26n`. El nano, solo, deja la GPU ociosa y el driver la baja a P5. Ahí, en
+esta tarjeta, **deja de ver a la persona en casi todos los frames**, sin dar
+ningún error: es un fallo silencioso que `corrupt_frames` no cuenta. Además, en
+los cambios de P-state salen confianzas imposibles (esas sí se descartan y se
+cuentan, §3). Para el nano está el **GL keeper**, más abajo.
+
+**`yolo26n` sin GL keeper** se puede usar, pero no es fiable en esta tarjeta.
 
 **Fijar los relojes no es posible en esta tarjeta.** `nvidia-smi -lgc`
 responde "not supported for GPU", porque solo funciona desde Volta y Turing. En
 Windows tampoco hay modo persistencia.
 
-### Los ajustes del driver no lo evitan
+### Ni el driver ni la BIOS lo evitan
 
-Medido el 24/09/2026 con NVIDIA Profile Inspector, `yolo26n` y una cámara:
+Medido el 24 y 25/09/2026 con `yolo26n` y una cámara:
 
 | Ajuste | Qué cambia | ¿Deja de bajar a P5? |
 | --- | --- | --- |
-| *CUDA - Force P2 State* = **Off** | El techo en P2 sube de 1189 a 1657 MHz | **No**: sigue cayendo a P5 (772–911 MHz) en tandas de 8–16 s |
-| *Power Management - Mode* = **Prefer maximum performance** | — | **No** |
+| *CUDA - Force P2 State* = **Off** (Profile Inspector) | El techo en P2 sube de 1189 a 1657 MHz | **No**: sigue cayendo a P5 (772–911 MHz) en tandas de 8–16 s |
+| *Power Management - Mode* = **Prefer maximum performance** (Profile Inspector) | — | **No por sí solo**: es un ajuste para aplicaciones 3D y un proceso solo CUDA no lo activa. Con una ventana OpenGL abierta, sí (ver GL keeper) |
+| `nvidiaInspector.exe -forcepstate` (NVIDIA Inspector antiguo) | — | **No** (probado por el usuario) |
+| ASPM / estado de vínculo PCIe (BIOS o plan de energía de Windows) | — | **No es la causa**: en P5 el enlace sigue en PCIe Gen 3 y el motivo es `gpu_idle`. Es el driver quien baja la GPU, no el bus |
+| Una app 3D abierta (Fusion 360) | Sube a P0 (1657 MHz) solo mientras dibuja | **No**: parada, vuelve a P5. Es carga que se suma, igual que el keep-alive; el driver no tiene ningún modo especial para programas 3D |
+
+Solo con CUDA, el reloj depende de cuánto trabajo le llega a la GPU: con una
+cámara, lo que la mantiene despierta es un modelo pesado. La excepción es el GL
+keeper, más abajo.
 
 Con *Force P2 State* en Off la tarjeta sale antes de P5 y ya no se queda ciega
 del todo, pero en 73 minutos salieron unas **1.700 detecciones corruptas
@@ -122,6 +132,101 @@ del todo, pero en 73 minutos salieron unas **1.700 detecciones corruptas
 pesado. Lo que se cambia en el Profile Inspector sobrevive a los reinicios. Una
 actualización del driver puede borrarlo (una instalación limpia lo borra
 seguro), así que conviene exportar el perfil.
+
+### Un relleno mínimo tampoco compensa
+
+[`test/despertar_gpu.py`](../test/despertar_gpu.py) prueba a engañar al driver
+con un kernel de un solo hilo que solo cuenta ciclos (`torch.cuda._sleep`), en un
+stream aparte. `nvidia-smi` cuenta como "utilización" cualquier rato con un
+kernel en marcha, aunque no haga nada, así que el driver deja de ver la GPU
+ociosa gastando casi nada de cálculo.
+
+Medido el 25/09/2026, 16,7 fps sobre `bus.jpg` de ultralytics, Force P2 en Off:
+
+| Modo | Duración | P-state | Reloj | Consumo | ms/inferencia | Cajas corruptas* | Frames con cajas |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `yolo26n` sin relleno | 60 s | P5 80 % | 895 MHz | 27,8 W | 24,3 | 368 | 238 de 1000 |
+| `yolo26n` + relleno continuo (trozos de ~0,5 ms) | 60 s | P0 100 % | 1954 MHz | 68,6 W | 15,4 | 0 | 1000 de 1000 |
+| `yolo26n` + relleno con 1 ms de hueco | 60 s | P5 4 % | 1347 MHz | 46,6 W | 15,3 | 0 | 1000 de 1000 |
+| `yolo26n` + relleno con 1 ms de hueco | **10 min** | **P5 98 %** | 1126 MHz | 24,7 W | 22,1 | 35 | 8.773 de 10.000 |
+| **`yolo26m`** | **10 min** | P2 98 % | 1149 MHz | **58,4 W** | 32,8 | **0** | **10.000 de 10.000** |
+
+\* Estas medidas contaban **cajas**, no frames. Un solo frame roto puede traer
+cientos de cajas imposibles, así que las cifras altas son pocos frames. Desde
+entonces tanto el script como el servicio (`corrupt_frames`) cuentan frames.
+
+- **El relleno continuo funciona, pero no ahorra:** la GPU sube al reloj máximo
+  y gasta 10 W más que `yolo26m`.
+- **El relleno con huecos engaña al principio:** a los pocos minutos el driver
+  la ve casi ociosa y vuelve a dejarla en P5.
+- **En P5, además de corromper, deja de ver:** sin relleno, la persona solo
+  salió en 238 de 1000 frames. Esos fallos no los cuenta `corrupt_frames`.
+- **`yolo26m` se asienta solo en P2** a ~1150 MHz con carga sostenida. Los ~75 W
+  de las pruebas cortas eran el arranque en P0.
+
+**P5 corrompe aunque el reloj del chip sea parecido.** `yolo26m` en P2 a
+1149 MHz no dio ninguna corrupción, y `yolo26n` en P5 a 1126 MHz sí. En la GTX
+1080, P5 también baja el reloj de la memoria. Es la explicación más probable,
+pero no está comprobada.
+
+Conclusión: con una cámara, `yolo26m` sigue siendo la opción más eficiente.
+
+Baterías posteriores (26/09/2026, 8 combinaciones de modelo, resolución y
+número de cámaras, 3 min cada una) confirmaron que **el relleno no es fiable**:
+- con yolo26n a 640, unas veces mantiene la GPU arriba y otras no;
+- con yolo26n a 480 dejó de detectar en ~9 de cada 10 frames en dos de tres
+  baterías;
+- tras reiniciar el PC mantuvo P0 en todo, pero entonces gasta lo mismo que
+  `yolo26m` o más (el nano, 51–61 W; `yolo26m`, hasta 108 W).
+
+No se integra.
+
+### GL keeper: una ventana OpenGL oculta (la solución para el nano)
+
+[`gl_keeper.py`](../gl_keeper.py) lanza un `python.exe` hijo con una ventana
+OpenGL oculta de 64×64 que dibuja 1 frame por segundo. Solo se lanza mientras
+haya alguna cámara funcionando en CUDA, y se cierra cuando no hay ninguna. Se
+enciende con `POST /config/gl-keeper` (global, persistido y apagado por
+defecto).
+
+**Requisito: en NVIDIA Profile Inspector, el perfil de `python.exe` con
+*Power Management - Mode* = Prefer maximum performance.** Ese ajuste es para
+aplicaciones 3D. Un proceso que solo usa CUDA no lo activa, pero con un
+contexto OpenGL abierto el driver trata a `python.exe` como un juego y mantiene
+los relojes. Sin el ajuste, la ventana no hace nada. Con *Force P2 State* = On
+además, se queda en P2 y gasta un poco menos.
+
+Medido el 26/09/2026 con `test/despertar_gpu.py`, `yolo26n` a 640, 3 min por
+prueba:
+
+| Perfil de `python.exe` | Ventana | P-state | Consumo | GPU/inferencia | Frames corruptos | Frames con cajas |
+| --- | --- | --- | --- | --- | --- | --- |
+| Prefer max. performance, Force P2 Off | no | P0 54 %, P5 42 % | 41 W | 17,0 ms (en P0) | 116 | ~1.850 de 3000 |
+| Prefer max. performance, Force P2 Off | sí (1 fps) | **P0 100 %** | 55 W | 17,9 ms | **0** | **3000 de 3000** |
+| **Prefer max. performance, Force P2 On** | **sí (1 fps)** | **P2 100 %** | **52,7 W** | 16,6 ms | **0** | **3000 de 3000** |
+| Optimal performance, Force P2 On | sí (1 fps) | P5 95 % | 24 W | 20,0 ms | 12 | 161 de 3000 |
+| (reposo total, sin nada) | — | P8 | 13 W | — | — | — |
+
+- **Da igual cuánto dibuje:** con 165 fps, 10 fps, 1 fps o un frame por minuto
+  sale igual. Lo que cuenta es que el contexto exista.
+- **No encarece la inferencia:** el nano tarda lo mismo con y sin ventana (en
+  P0, ~17 ms de GPU). Ir en el mismo proceso o en otro da igual.
+- **El gasto es el de tener la GPU en P0/P2:** la ventana sola ya consume
+  ~50 W, frente a 13 W en reposo. Por eso solo se abre con cámaras activas.
+- **Por qué un proceso hijo y no un hilo:** el driver deja en P0 el proceso que
+  ha tenido un contexto OpenGL hasta que termina, aunque se cierre la ventana
+  (medido: 90 s después seguía en P0). Terminando el hijo, la GPU vuelve a P8
+  en ~15 s.
+- **Al jugar:** el juego ya pone la GPU en P0 por su cuenta, así que la ventana
+  no añade nada. Lo que le quita GPU al juego son las cámaras infiriendo.
+
+**Comprobarlo:** con cámaras activas y el GL keeper encendido, `nvidia-smi`
+(§3) tiene que mostrar P0/P2 fijo y `gpu_idle` en Not Active. Si se ve P5, el
+perfil del driver se ha perdido (una actualización del driver puede borrarlo;
+conviene exportarlo desde el Profile Inspector). **Ojo: un cambio en el perfil
+puede no aplicarse del todo hasta reiniciar el PC.**
+
+**Quitarlo:** los pasos están al principio de `gl_keeper.py`.
 
 ### El keep-alive, quitado
 
@@ -135,19 +240,26 @@ La historia completa está al final, en el apartado histórico.
 
 ## 3. Diagnóstico
 
-En `/status` de cada cámara, `corrupt_detections` cuenta las
-confianzas fuera de `[0,1]`. Esas detecciones se descartan antes de propagarse,
-porque una caja con confianza 1,8 movería los servos hacia un fantasma y
-dispararía una grabación.
+En `/status` de cada cámara, `corrupt_frames` cuenta los frames con alguna
+confianza fuera de `[0,1]`. Cuenta frames y no cajas, porque un frame roto puede
+traer cientos de cajas basura. Un frame así se descarta **entero**, también sus
+cajas de aspecto normal, porque si la inferencia salió rota tampoco son de fiar.
+Se descarta antes de llegar a los servos y a la grabación: una caja fantasma
+movería la torreta hacia la nada y dispararía un clip. Para ellos, ese frame
+cuenta como "no se ha visto nada".
 
 El servicio ya no lee los relojes. Para verlos, desde consola, segundo a
 segundo:
 
 ```powershell
-nvidia-smi --query-gpu=pstate,clocks.gr,utilization.gpu,power.draw --format=csv -l 1
+nvidia-smi --query-gpu=pstate,clocks.gr,pcie.link.gen.current,clocks_event_reasons.gpu_idle,utilization.gpu --format=csv -l 1
 ```
 
-Si el reloj está bajo y `corrupt_detections` sube, la respuesta es usar un
+`gpu_idle = Active` quiere decir que el driver baja el reloj porque ve la GPU
+ociosa. La generación PCIe (3 en esta máquina) confirma que el bus no se ha
+dormido: si bajara a 1 en P5, habría que mirar el ASPM.
+
+Si el reloj está bajo y `corrupt_frames` sube, la respuesta es usar un
 modelo más pesado. Suena al revés y está medido.
 
 ## 4. ¿Solo pasa en esta tarjeta?
