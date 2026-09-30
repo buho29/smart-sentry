@@ -40,6 +40,17 @@ esphome:
   on_boot:
     priority: -100
     then:
+      # Velocidad y auto-detach restaurados de los number "Servo transition" y
+      # "Servo auto detach": restore_value recupera el valor pero no ejecuta su
+      # set_action al arrancar. Va antes de ir a reposo para que ese
+      # movimiento ya use la velocidad elegida.
+      - lambda: |-
+          uint32_t tl = (uint32_t) (id(servo_transition).state * 1000.0f);
+          uint32_t ad = (uint32_t) (id(servo_auto_detach).state * 1000.0f);
+          id(servo_pan).set_transition_length(tl);
+          id(servo_tilt).set_transition_length(tl);
+          id(servo_pan).set_auto_detach_time(ad);
+          id(servo_tilt).set_auto_detach_time(ad);
       # Servos a reposo antes que nada: al arrancar, un servo sin señal se queda
       # donde lo dejó el apagón, y conviene partir de una posición conocida.
       - servo.write:
@@ -116,19 +127,27 @@ logger:
 #
 # auto_detach_time corta el PWM cuando el servo lleva un rato quieto: menos
 # zumbido, menos consumo y menos calentamiento del servo manteniendo posición.
-# transition_length: 0s porque el suavizado del movimiento lo hace el control
-# proporcional del lado Python (detect/servo_tracker.py); interpolar también
-# aquí solo añadiría retraso al lazo de seguimiento.
+#
+# transition_length es el tiempo de recorrido COMPLETO (-1 -> +1): ESPHome
+# interpola hacia el objetivo a velocidad constante. Con 0s cada orden del
+# seguimiento (detect/servo_tracker.py manda una cada ~0.7s) era un salto seco
+# y la torreta iba a golpes. Con 1s un paso típico (0.05-0.2) dura 25-100 ms:
+# deja de ser un golpe y apenas añade retardo al lazo.
+#
+# Los valores de aquí son solo los de arranque: los pisan en on_boot los number
+# "Servo transition" y "Servo auto detach" (más abajo), que se cambian en
+# caliente desde HA o desde el servicio (POST /config/servo) sin compilar. El
+# servicio Python lee "Servo transition" para simular dónde está la cámara.
 # -----------------------------------------------------------------------------
 output:
   - platform: ledc
     id: pwm_pan
-    pin: GPIO21   # PENDIENTE: confirmar al montar el hardware
+    pin: GPIO21  
     frequency: 50Hz
     channel: 4
   - platform: ledc
     id: pwm_tilt
-    pin: GPIO47   # PENDIENTE: confirmar al montar el hardware
+    pin: GPIO47
     frequency: 50Hz
     channel: 6
 
@@ -136,11 +155,11 @@ servo:
   - id: servo_pan
     output: pwm_pan
     auto_detach_time: 2s
-    transition_length: 0s
+    transition_length: 1s
   - id: servo_tilt
     output: pwm_tilt
     auto_detach_time: 2s
-    transition_length: 0s
+    transition_length: 1s
 
 # -----------------------------------------------------------------------------
 # API de ESPHome.
@@ -353,11 +372,14 @@ number:
           );
           id(cam)->update_camera_parameters();
 
+  # ±0.9 y no ±1: el mismo límite que pan_limit/tilt_limit del lado Python
+  # (detect/servo_tracker.py). HA habla directo con la placa y no pasa por
+  # ellos, y los extremos del PWM suelen coincidir con el tope mecánico.
   - platform: template
     name: "Servo Pan"
     id: servo_pan_number
-    min_value: -1.0
-    max_value: 1.0
+    min_value: -0.9
+    max_value: 0.9
     step: 0.01
     optimistic: true
     restore_value: false
@@ -369,8 +391,8 @@ number:
   - platform: template
     name: "Servo Tilt"
     id: servo_tilt_number
-    min_value: -1.0
-    max_value: 1.0
+    min_value: -0.9
+    max_value: 0.9
     step: 0.01
     optimistic: true
     restore_value: false
@@ -379,6 +401,46 @@ number:
       - servo.write:
           id: servo_tilt
           level: !lambda "return x;"
+
+  # Tiempo de recorrido completo (-1 -> +1) de los dos servos, en caliente. Es
+  # el transition_length del bloque servo: sin compilar. 0 = salto directo.
+  # El servicio Python lo lee (object_id servo_transition) para simular dónde
+  # estaba la cámara en cada frame.
+  - platform: template
+    name: "Servo transition"
+    id: servo_transition
+    entity_category: config
+    mode: box
+    unit_of_measurement: s
+    min_value: 0
+    max_value: 5
+    step: 0.05
+    optimistic: true
+    restore_value: true
+    initial_value: 1.0
+    set_action:
+      - lambda: |-
+          id(servo_pan).set_transition_length((uint32_t) (x * 1000.0f));
+          id(servo_tilt).set_transition_length((uint32_t) (x * 1000.0f));
+
+  # Segundos quieto tras los que se corta el PWM del servo (menos zumbido y
+  # calor). Es el auto_detach_time del bloque servo, en caliente. 0 = nunca.
+  - platform: template
+    name: "Servo auto detach"
+    id: servo_auto_detach
+    entity_category: config
+    mode: box
+    unit_of_measurement: s
+    min_value: 0
+    max_value: 30
+    step: 0.5
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+    set_action:
+      - lambda: |-
+          id(servo_pan).set_auto_detach_time((uint32_t) (x * 1000.0f));
+          id(servo_tilt).set_auto_detach_time((uint32_t) (x * 1000.0f));
 
 select:
   - platform: template
@@ -439,19 +501,12 @@ button:
     name: "Servos home"
     entity_category: config
     on_press:
-      - servo.write:
-          id: servo_pan
-          level: 0%
-      - servo.write:
-          id: servo_tilt
-          level: 0%
-      # servo.write no actualiza los number template (son entidades aparte);
-      # sin esto el slider se queda mostrando el último valor movido a mano
-      # aunque el servo físico ya esté en 0.
-      - number.set_value:
+      # number.set pasa por el set_action del number, así que mueve el servo
+      # y actualiza el slider de HA a la vez.
+      - number.set:
           id: servo_pan_number
           value: 0
-      - number.set_value:
+      - number.set:
           id: servo_tilt_number
           value: 0
 

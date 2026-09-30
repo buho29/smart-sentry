@@ -15,7 +15,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
+from typing import Iterable, Iterator, Literal, Optional
 from urllib.parse import urlparse
 
 import cv2
@@ -355,6 +355,13 @@ DEFAULT_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Config de una cámara
 # ---------------------------------------------------------------------------
 
+# Grados en sentido horario -> constante de cv2.rotate (0 = no se toca).
+_ROTATIONS = {
+    90: cv2.ROTATE_90_CLOCKWISE,
+    180: cv2.ROTATE_180,
+    270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+}
+
 class CameraConfig(BaseModel):
     camera_id: str
     stream_url: str
@@ -364,6 +371,13 @@ class CameraConfig(BaseModel):
     imgsz: int = 640
     classes: Optional[list[int]] = None  # None = todas las clases
     default_infer: bool = True  # usado por /stream y /snapshot cuando no se pasa ?infer=
+
+    # Giro de la imagen en grados, en sentido horario, para cuando el módulo de
+    # cámara va montado de lado. El sensor solo sabe voltear (vflip/hmirror),
+    # no girar 90°, así que se gira aquí nada más decodificar: YOLO, el stream,
+    # los clips y los servos ven ya la imagen derecha. Los servos no necesitan
+    # nada más mientras pan siga siendo horizontal y tilt vertical en el mundo.
+    rotation: Literal[0, 90, 180, 270] = 0
 
     # Correr YOLO aunque no haya nadie mirando el stream ni ningún consumidor
     # pidiéndolo: la cámara sigue detectando con el navegador cerrado.
@@ -787,6 +801,9 @@ class CameraSession:
                     frame = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
                     if frame is None:
                         continue
+                    rotation = self.cfg.rotation
+                    if rotation:
+                        frame = cv2.rotate(frame, _ROTATIONS[rotation])
                     # Cola de 1: si el proceso va por detrás, se tira el frame
                     # viejo y se deja el nuevo. Más vale saltarse frames que
                     # inferir sobre imagen atrasada.

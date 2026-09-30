@@ -52,6 +52,16 @@ class FakeBoard:
         self.commands.append((args["pan"], args["tilt"]))
         return True
 
+    # Ajustes de la placa (number), por object_id. Vacío = firmware sin ellos.
+    states: dict = {}
+
+    def get_state(self, object_id):
+        return self.states.get(object_id)
+
+    def set_number(self, object_id, value):
+        self.states = {**self.states, object_id: value}
+        return True
+
 
 def det(cx, cy, track_id=1, label="person", width=40, height=80):
     """Una detección centrada en (cx, cy)."""
@@ -64,6 +74,9 @@ def det(cx, cy, track_id=1, label="person", width=40, height=80):
 def make_tracker(**kwargs):
     """Tracker con rate limit desactivado salvo que el test lo pida."""
     kwargs.setdefault("min_interval_sec", 0.0)
+    # Sin retardo: los tests simulan un lazo en el que cada orden se ve en el
+    # frame siguiente. La compensación del retardo tiene sus propios tests.
+    kwargs.setdefault("latency_sec", 0.0)
     board = FakeBoard()
     return ServoTracker(ServoConfig(**kwargs), board, camera_id="test"), board
 
@@ -84,6 +97,143 @@ t3, board3 = make_tracker(invert_pan=True)
 t3.on_detections([det(cx=W * 0.9, cy=H / 2)], W, H)
 check("invert_pan da la vuelta al sentido",
       board3.commands[-1][0] == -pan_right, f"({board3.commands[-1][0]:.3f})")
+
+# Cámara girada 90°: el frame llega en vertical (480x640). Un objetivo a la
+# derecha/abajo de la imagen derecha tiene que mover los servos igual que en
+# apaisado, porque la imagen ya está en los ejes de pan y tilt.
+tp, boardp = make_tracker()
+tp.on_detections([det(cx=H * 0.9, cy=W * 0.75)], H, W)
+tl, boardl = make_tracker()
+tl.on_detections([det(cx=W * 0.9, cy=H * 0.75)], W, H)
+check("en vertical, pan y tilt van en el mismo sentido que en apaisado",
+      boardp.commands[-1] == boardl.commands[-1],
+      f"({boardp.commands[-1]} vs {boardl.commands[-1]})")
+
+# Tilt con reducción 21:63: la cámara gira un tercio que el servo, así que el
+# paso de tilt tiene que triplicarse y el de pan quedarse como estaba.
+tg1, bg1 = make_tracker(gain=0.1)   # pasos por debajo del tope por orden
+tg1.on_detections([det(cx=W * 0.8, cy=H * 0.8)], W, H)
+tg3, bg3 = make_tracker(gain=0.1, tilt_gear_ratio=63 / 21)
+tg3.on_detections([det(cx=W * 0.8, cy=H * 0.8)], W, H)
+check("tilt_gear_ratio=3 triplica el paso de tilt",
+      abs(bg3.commands[-1][1] - 3 * bg1.commands[-1][1]) < 1e-9,
+      f"({bg3.commands[-1][1]:.3f} vs {bg1.commands[-1][1]:.3f})")
+check("y no toca el pan", bg3.commands[-1][0] == bg1.commands[-1][0])
+
+# Aire en los 4 lados, con prioridad arriba: de pie cerca de la cámara la
+# cabeza queda fuera y la caja llega hasta y1=0.
+def box(y1, y2, x1=W / 2 - 20, x2=W / 2 + 20):
+    return Detection(x1=x1, y1=y1, x2=x2, y2=y2, cls=0, label="person",
+                     conf=0.9, track_id=1)
+
+
+def last_cmd(**kwargs):
+    """Última orden que manda un tracker nuevo ante una sola detección."""
+    dets = kwargs.pop("dets")
+    t, b = make_tracker(**kwargs)
+    t.on_detections(dets, W, H)
+    return b.commands[-1] if b.commands else None
+
+
+up = last_cmd(dets=[det(cx=W / 2, cy=H * 0.2)])       # objetivo por encima del centro
+down = last_cmd(dets=[det(cx=W / 2, cy=H * 0.8)])     # por debajo
+left = last_cmd(dets=[det(cx=W * 0.2, cy=H / 2)])     # a la izquierda
+right = last_cmd(dets=[det(cx=W * 0.8, cy=H / 2)])    # a la derecha
+
+from servo_tracker import _CLIPPED_EDGE_ERROR  # noqa: E402
+FULL_STEP = ServoConfig().gain * _CLIPPED_EDGE_ERROR   # paso por borde cortado, con ratio 1
+c = last_cmd(dets=[box(0, H * 0.7)])
+check("cortada arriba: el tilt sube a paso máximo",
+      c and c[1] * up[1] > 0 and abs(c[1]) >= FULL_STEP - 1e-9 and c[0] == 0.0,
+      f"({c} vs {up})")
+c = last_cmd(dets=[box(0, H)])
+check("cortada arriba Y abajo: manda arriba, sube",
+      c and c[1] * up[1] > 0, f"({c})")
+c = last_cmd(dets=[box(H * 0.05, H * 0.95)])
+check("persona alta con la cabeza cerca de arriba: centrar no baja la cámara",
+      c is None or c[1] * down[1] <= 0, f"({c})")
+c = last_cmd(dets=[box(H * 0.2, H * 0.98)])
+check("persona a 1 m con la cabeza en el 20% superior: centrar no baja la cámara",
+      c is None or c[1] * down[1] <= 0, f"({c})")
+c = last_cmd(dets=[box(H * 0.45, H * 0.95)])
+check("con la cabeza lejos de arriba sí baja a centrar",
+      c and c[1] * down[1] > 0, f"({c})")
+c = last_cmd(dets=[box(H * 0.45, H)])
+c_uncut = last_cmd(dets=[Detection(x1=W / 2 - 20, y1=H * 0.45, x2=W / 2 + 20, y2=H - 10,
+                                   cls=0, label="person", conf=0.9, track_id=1)])
+check("cortada abajo: no se persigue, se trata como si no lo estuviera",
+      c is not None and c_uncut is not None and abs(c[1] - c_uncut[1]) < 1e-9,
+      f"({c} vs {c_uncut})")
+c = last_cmd(dets=[box(H * 0.3, H * 0.7, x1=0, x2=W * 0.4)])
+check("estrecha y cortada a la izquierda: el pan va a la izquierda a paso máximo",
+      c and c[0] * left[0] > 0 and abs(c[0]) >= FULL_STEP - 1e-9, f"({c} vs {left})")
+c = last_cmd(dets=[box(H * 0.3, H * 0.7, x1=W * 0.6, x2=W)])
+check("estrecha y cortada a la derecha: el pan va a la derecha a paso máximo",
+      c and c[0] * right[0] > 0 and abs(c[0]) >= FULL_STEP - 1e-9, f"({c} vs {right})")
+c = last_cmd(dets=[box(H * 0.3, H * 0.7, x1=0, x2=W * 0.9)])
+check("ancha (persona a 1 m) tocando la izquierda: solo centra, sin golpe",
+      c is None or abs(c[0]) < FULL_STEP, f"({c})")
+c = last_cmd(dets=[box(H * 0.3, H * 0.7, x1=0, x2=W)])
+check("más ancha que el frame y centrada: el pan no se mueve", c is None, f"({c})")
+
+# Anticipación: un objetivo que cruza hacia la derecha con la cámara quieta.
+def walk_right(**kwargs):
+    """Objetivo cerca del centro moviéndose a ~200 px/s a la derecha. Devuelve
+    el tracker y la placa; la cámara se da por quieta desde hace rato."""
+    kwargs.setdefault("min_interval_sec", 100.0)   # que no envíe mientras mide
+    kwargs.setdefault("lead_sec", 0.5)             # la anticipación va apagada por defecto
+    t, b = make_tracker(**kwargs)
+    t._last_send = time.monotonic() - 10
+    cx = W / 2 - 30
+    for _ in range(5):
+        t.on_detections([det(cx=cx, cy=H / 2)], W, H)
+        time.sleep(0.05)
+        cx += 10
+    return t, b
+
+t, _ = walk_right()
+check("con la cámara quieta mide la velocidad hacia la derecha",
+      t._vx > 50, f"({t._vx:.0f} px/s)")
+t._last_send = time.monotonic() - 10
+t.cfg = t.cfg.model_copy(update={"min_interval_sec": 0.0})
+t.on_detections([det(cx=W / 2 + 10, cy=H / 2)], W, H)   # casi centrado
+lead_cmd = t._esphome.commands[-1] if t._esphome.commands else None
+check("y apunta por delante: casi centrado ya gira hacia la derecha",
+      lead_cmd and lead_cmd[0] * right[0] > 0, f"({lead_cmd} vs {right})")
+
+t0, _ = walk_right(lead_sec=0.0)
+t0._last_send = time.monotonic() - 10
+t0.cfg = t0.cfg.model_copy(update={"min_interval_sec": 0.0})
+t0.on_detections([det(cx=W / 2 + 10, cy=H / 2)], W, H)
+check("lead_sec=0: casi centrado no se mueve", t0._esphome.commands == [],
+      f"({t0._esphome.commands})")
+
+# Estirar el brazo: solo se mueve el borde derecho, el cuerpo sigue quieto.
+t, _ = make_tracker(min_interval_sec=100.0)
+t._last_send = time.monotonic() - 10
+x2 = W / 2 + 60
+for _ in range(5):
+    t.on_detections([Detection(x1=W / 2 - 60, y1=100, x2=x2, y2=400, cls=0,
+                               label="person", conf=0.9, track_id=1)], W, H)
+    time.sleep(0.05)
+    x2 += 15
+check("una caja que solo se ensancha (brazo) no cuenta como movimiento",
+      t._vx == 0.0, f"({t._vx:.0f} px/s)")
+
+t, _ = walk_right()
+t._vx_at = time.monotonic() - 2.0          # la última medida es de hace 2 s
+t.cfg = t.cfg.model_copy(update={"min_interval_sec": 0.0})
+t._last_send = time.monotonic()            # cámara moviéndose: no se mide nada nuevo
+n_before = len(t._esphome.commands)
+t.on_detections([det(cx=W / 2 + 10, cy=H / 2)], W, H)
+check("una velocidad vieja caduca: casi centrado ya no se anticipa",
+      len(t._esphome.commands) == n_before and t._vx == 0.0,
+      f"({t._esphome.commands[n_before:]}, vx={t._vx})")
+
+t, _ = walk_right()
+t._release_target()
+t.on_detections([det(cx=W / 2, cy=H / 2, track_id=99)], W, H)
+check("y un objetivo nuevo empieza sin velocidad", t._vx == 0.0, f"({t._vx})")
 
 print("\n=== 2. Converge al centro y no se pasa ===")
 t, board = make_tracker(gain=0.3, deadzone=0.06)
@@ -109,8 +259,10 @@ print("\n=== 3. Zona muerta: centrado = no se mueve ===")
 t, board = make_tracker(deadzone=0.1)
 t.on_detections([det(cx=W / 2 + 2, cy=H / 2 - 2)], W, H)
 check("objetivo centrado no genera ninguna orden", board.commands == [], f"({board.commands})")
-t.on_detections([det(cx=W * 0.9, cy=H / 2)], W, H)
+t.on_detections([det(cx=W * 0.9, cy=H / 2 + 5)], W, H)  # tilt dentro de la zona muerta
 check("pero descentrado sí", len(board.commands) == 1)
+check("y el eje que ya estaba centrado (tilt) no se toca",
+      board.commands[-1][1] == 0.0, f"({board.commands[-1]})")
 
 print("\n=== 4. Rate limit: no una orden por frame ===")
 t, board = make_tracker(min_interval_sec=10.0)
@@ -120,6 +272,84 @@ check("5 frames seguidos -> 1 sola orden", len(board.commands) == 1, f"({len(boa
 t.move_to(0.5, 0.5)
 check("el control manual sí salta el rate limit", len(board.commands) == 2)
 check("y manda lo pedido", board.commands[-1] == (0.5, 0.5), f"({board.commands[-1]})")
+
+print("\n=== 4a. Compensación del retardo (latency_sec) ===")
+# La imagen tarda en reflejar una orden: varios frames seguidos traen el mismo
+# error. Sin compensar, cada uno sumaría otro paso sobre la posición actual.
+G = 0.2   # pasos por debajo del tope por orden, para comparar valores exactos
+t, board = make_tracker(latency_sec=0.2, gain=G)
+for _ in range(4):
+    t.on_detections([det(cx=W * 0.8, cy=H / 2)], W, H)
+pans = [p for p, _ in board.commands]
+check("frames con el mismo error antes de que se vea la orden no se acumulan",
+      len(set(round(p, 9) for p in pans)) == 1, f"({pans})")
+t_inc, board_inc = make_tracker(latency_sec=0.0, gain=G)
+for _ in range(4):
+    t_inc.on_detections([det(cx=W * 0.8, cy=H / 2)], W, H)
+check("(sin compensar sí se acumulaban)",
+      abs(board_inc.commands[-1][0]) > abs(pans[-1]) * 3,
+      f"({board_inc.commands[-1][0]:.3f} vs {pans[-1]:.3f})")
+
+time.sleep(0.25)   # ya pasó el retardo: la imagen refleja la primera orden
+t.on_detections([det(cx=W * 0.6, cy=H / 2)], W, H)
+first = pans[0]   # = -gain * 0.6 (ex del primer frame)
+expected = first - G * 0.2   # desde `first`, con el ex nuevo (0.2)
+check("pasado el retardo corrige desde la posición ordenada entonces",
+      abs(board.commands[-1][0] - expected) < 1e-9,
+      f"({board.commands[-1][0]:.3f}, esperado {expected:.3f})")
+
+t, board = make_tracker(latency_sec=0.2, gain=G)
+t.on_detections([det(cx=W / 2, cy=H * 0.8)], W, H)        # mueve solo el tilt
+tilt_moved = board.commands[-1][1]
+t.on_detections([det(cx=W * 0.8, cy=H / 2)], W, H)        # ahora solo el pan
+check("un eje sin error se queda donde está (no vuelve a la posición de entonces)",
+      board.commands[-1][1] == tilt_moved, f"({board.commands[-1]} vs tilt {tilt_moved})")
+
+print("\n=== 4a2. Posición simulada con la interpolación de la placa ===")
+# La velocidad solo vive en la placa (number servo_transition).
+t, b = make_tracker()
+b.set_number("servo_transition", 1.0)
+t._history.append((100.0, 0.5, 0.0))          # orden 0 -> 0.5 en t=100
+p01, _ = t._position_at(100.1)
+p03, _ = t._position_at(100.3)
+check("a los 0.1 s la placa va por 0.2 (2 unidades/s)", abs(p01 - 0.2) < 1e-9, f"({p01})")
+check("a los 0.3 s ya ha llegado a 0.5", abs(p03 - 0.5) < 1e-9, f"({p03})")
+check("y /status dice que el valor viene de la placa",
+      t.status()["transition_sec"] == 1.0 and t.status()["transition_source"] == "placa",
+      f"({t.status()['transition_sec']}, {t.status()['transition_source']})")
+t, _ = make_tracker()
+t._history.append((100.0, 0.5, 0.0))
+check("sin el number en la placa se supone salto directo",
+      t._position_at(100.01)[0] == 0.5 and t.status()["transition_sec"] == 0.0
+      and t.status()["transition_source"] == "sin dato")
+
+# Modo por pasos con la placa interpolando despacio: corrige desde la ORDEN,
+# no desde la posición simulada (que va a medio camino y desharía la orden).
+t, b = make_tracker(gain=0.1)
+b.set_number("servo_transition", 2.0)
+t.on_detections([det(cx=W * 0.8, cy=H / 2)], W, H)
+t.on_detections([det(cx=W * 0.8, cy=H / 2)], W, H)
+p1, p2 = b.commands[-2][0], b.commands[-1][0]
+check("latency_sec=0 con transición lenta: incremental sobre la orden anterior",
+      abs(p2 - 2 * p1) < 1e-9, f"({p1:.3f}, {p2:.3f})")
+
+# Tope por orden: un modelo que no cuadra no puede dar saltos de 0.5.
+t, board = make_tracker(latency_sec=0.2, gain=0.9)
+t.on_detections([det(cx=W * 0.95, cy=H / 2)], W, H)
+check("ninguna orden del seguimiento se aleja más de 0.15 de la anterior",
+      abs(board.commands[-1][0]) <= 0.15 + 1e-9, f"({board.commands[-1]})")
+
+print("\n=== 4b. Límites de recorrido ===")
+t, board = make_tracker()
+t.move_to(1.0, -1.0)
+check("el manual se recorta a ±0.9 por defecto", board.commands[-1] == (0.9, -0.9),
+      f"({board.commands[-1]})")
+t, board = make_tracker(pan_limit=0.5, gain=0.5)
+for _ in range(20):
+    t.on_detections([det(cx=W * 0.95, cy=H / 2)], W, H)
+check("el seguimiento no pasa de pan_limit aunque empuje",
+      all(abs(p) <= 0.5 + 1e-9 for p, _ in board.commands) and abs(t.pan) == 0.5,
+      f"({t.pan})")
 
 print("\n=== 5. Bloqueo de objetivo por track ID ===")
 t, board = make_tracker()
@@ -150,11 +380,30 @@ t.on_detections([det(cx=W * 0.9, cy=H / 2, track_id=7)], W, H)
 check("enganchado", t.target_id == 7)
 t.on_detections([], W, H)  # parpadeo del detector
 check("no lo suelta al primer frame vacío (puede ser una oclusión)", t.target_id == 7)
-t.on_detections([det(cx=W * 0.9, cy=H / 2, track_id=9)], W, H)
+t.on_detections([det(cx=W * 0.1, cy=H / 2, track_id=9)], W, H)   # otro, en otro sitio
 check("ni se engancha a otro dentro del margen", t.target_id == 7, f"(#{t.target_id})")
 time.sleep(0.35)
-t.on_detections([det(cx=W * 0.9, cy=H / 2, track_id=9)], W, H)
+t.on_detections([det(cx=W * 0.1, cy=H / 2, track_id=9)], W, H)
 check("pasado el plazo, engancha el nuevo", t.target_id == 9, f"(#{t.target_id})")
+
+print("\n=== 7b. Reenganche: ByteTrack cambia el ID de la misma persona ===")
+t, board = make_tracker()
+t.on_detections([det(cx=W * 0.7, cy=H / 2, track_id=1, width=200, height=300)], W, H)
+n = len(board.commands)
+# Mismo sitio, caja algo deformada (un brazo), ID nuevo.
+t.on_detections([det(cx=W * 0.72, cy=H / 2, track_id=3, width=240, height=300)], W, H)
+check("mismo sitio con otro ID: reengancha en el acto", t.target_id == 3, f"(#{t.target_id})")
+check("y sigue corrigiendo sin esperar", len(board.commands) > n, f"({board.commands})")
+
+t, board = make_tracker()
+t.on_detections([det(cx=W * 0.7, cy=H / 2, track_id=1)], W, H)
+t.on_detections([det(cx=W * 0.2, cy=H / 2, track_id=3)], W, H)
+check("un ID nuevo en otra zona no se reengancha", t.target_id == 1, f"(#{t.target_id})")
+
+t, board = make_tracker()
+t.on_detections([det(cx=W * 0.7, cy=H / 2, track_id=1)], W, H)
+t.on_detections([det(cx=W * 0.7, cy=H / 2, track_id=3, label="cat")], W, H)
+check("otra clase en el mismo sitio no se reengancha", t.target_id == 1, f"(#{t.target_id})")
 
 print("\n=== 8. on_idle (la cámara deja de dar imagen) ===")
 t, board = make_tracker(lost_target_sec=0.3)

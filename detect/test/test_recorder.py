@@ -199,6 +199,23 @@ check("y también por MEGABYTES, aunque quepan en segundos",
       rec.status()["preroll_mb"] <= 0.011, f"({rec.status()['preroll_mb']} MB)")
 rec.shutdown()
 
+# Girar la cámara 90° con el grabador esperando: el pre-roll trae frames
+# apaisados y el disparo llega ya en vertical.
+rec, enc, _ = make_recorder(min_hits=1, pre_roll_sec=5.0)
+VERTICAL = _make_jpeg(48, 64)
+for i in range(5):
+    rec.on_jpeg(None, JPG, 100.0 + i * 0.1)
+for i in range(3):
+    rec.on_jpeg(None, _make_jpeg(48, 64, fill=i + 1), 100.5 + i * 0.1)
+rec.on_detections([det()], 48, 64)
+rec.on_jpeg(None, VERTICAL, 101.0)
+drain(rec)
+check("tras un giro el clip abre con el tamaño nuevo",
+      enc.opened[-1][1:3] == (48, 64), f"({enc.opened[-1][1:3]})")
+check("y del pre-roll solo lleva los frames de ese tamaño",
+      len(enc.frames) >= 4 and JPG not in enc.frames, f"({len(enc.frames)} frames)")
+rec.shutdown()
+
 
 # ---------------------------------------------------------------------------
 print("\n-- el cierre --")

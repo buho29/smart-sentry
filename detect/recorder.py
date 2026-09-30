@@ -442,7 +442,12 @@ class ClipRecorder:
 
         # El pre-roll entero va primero, en orden, y se TRANSFIERE (no se copia:
         # son referencias a bytes inmutables).
-        pre, self._pre, self._pre_bytes = list(self._pre), deque(), 0
+        # Solo los del mismo tamaño que el clip: si la cámara cambió de
+        # resolución o de giro mientras esperaba, el pre-roll trae frames de
+        # otro tamaño y el encoder, abierto con uno fijo, los convertiría en
+        # basura.
+        pre = [(p, t) for p, t in self._pre if jpeg_size(p) == size]
+        self._pre, self._pre_bytes = deque(), 0
         for pre_jpg, pre_ts in pre:
             self._push(pre_jpg, pre_ts)
         self._push(jpg, ts)

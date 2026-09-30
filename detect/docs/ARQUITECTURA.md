@@ -149,6 +149,7 @@ classDiagram
         +int imgsz
         +list~int~ classes
         +bool default_infer
+        +int rotation
         +bool always_infer
         +str noise_psk
         +str esphome_state_object_id
@@ -355,13 +356,28 @@ Campos:
 `as_dict()` la serializa para el endpoint `GET /config`. La instancia única es
 `GLOBAL_CONFIG`.
 
-### `get_model(name, device)` — [`camera.py`](../camera.py)
+### `get_model(name, device, owner)` — [`camera.py`](../camera.py)
 
-Cache de modelos YOLO compartida entre cámaras. Clave `"{name}_{device}"`. La
-primera vez: `YOLO("{name}.pt")`, `.to(device)`, y una inferencia dummy sobre
+Caché de modelos YOLO con **una instancia por cámara**. Clave
+`"{name}_{device}_{owner}"` (`"shared"` si no hay `owner`). Si dos cámaras
+compartieran el objeto `YOLO`, compartirían también el predictor y el
+ByteTrack, y se mezclaría el seguimiento de ambas escenas. Quien no hace
+tracking (`/detect-file`, los scripts de `test/`) llama sin `owner` y comparte
+instancia. `release_model()` suelta el de una cámara al darla de baja, para
+que la VRAM no se vaya llenando.
+
+La primera vez: `YOLO("{name}.pt")`, `.to(device)`, y una inferencia dummy sobre
 un frame negro 640×640 para **precalentar** (la primera inferencia real de
 YOLO es lentísima). Protegido con `_models_lock` para que dos cámaras
 arrancando a la vez no carguen el mismo modelo dos veces.
+
+**El precalentamiento no depende del GL keeper, y no hay que quitarlo aunque
+el keeper esté encendido.** El dummy paga una sola vez lo que cuesta la primera
+inferencia: arrancar CUDA/cuBLAS en el proceso, cargar kernels, reservar
+memoria y preparar el predictor de ultralytics. El keeper solo impide que el
+driver baje el reloj mientras se infiere, y además se enciende cuando ya hay
+una cámara funcionando, es decir, después de `get_model()`. Sin el dummy, esos
+segundos caerían sobre el primer frame real, dentro del hilo `yolo-*`.
 
 `DEFAULT_DEVICE` (CUDA si hay, si no CPU) es dónde corre el endpoint de prueba
 puntual `/detect-file`; el modelo lo elige quien llama y se carga perezosamente
@@ -513,6 +529,7 @@ serializa a `cameras_config.json`.
 | `confidence` / `imgsz` | Umbral de confianza y resolución de inferencia. |
 | `classes` | Lista de IDs de clase COCO a detectar (`None` = todas; `[0]` = solo personas). |
 | `default_infer` | Qué devuelven `/stream` y `/snapshot` si no se pasa `?infer=` (anotado o crudo). |
+| `rotation` | Giro de la imagen en grados, sentido horario: 0, 90, 180 o 270. Para un módulo de cámara montado de lado: el sensor solo sabe voltear, no girar 90°. Se aplica nada más decodificar, así que YOLO, el stream, los clips y los servos ven ya la imagen derecha. |
 | `always_infer` | Si YOLO corre aunque no haya nadie mirando ni ningún consumidor. `True` por defecto: la cámara sigue detectando con el navegador cerrado. **No confundir con `default_infer`**: aquel decide *qué* se devuelve, este *si* la detección llega a correr. |
 | `noise_psk` | `api.encryption.key` del YAML de la placa. Si se rellena, la sesión abre además el `EsphomeController`. |
 | `esphome_state_object_id` | `object_id` del `binary_sensor` a vigilar (`"awake"` por defecto). |
@@ -644,7 +661,7 @@ Toma referencias **locales** de `_stop_event` y `_raw_queue` (clave: ver
    el JPEG). No busca los marcadores `\xff\xd8` / `\xff\xd9` a mano porque esos
    bytes aparecen dentro de JPEG comprimidos reales y desincronizaban el
    stream (cuelgues de minutos, confirmado moviendo la cámara físicamente).
-4. Cada JPEG: `cv2.imdecode` → si la cola está llena descarta el viejo
+4. Cada JPEG: `cv2.imdecode` → `cv2.rotate` si `cfg.rotation` no es 0 → si la cola está llena descarta el viejo
    (`get_nowait`) y mete el nuevo → **siempre el frame más reciente**.
 5. Salvaguarda: si `buffer` pasa de 2 MB, lo resetea.
 6. **En cualquier `Exception`** (amplio a propósito: cerrar la respuesta desde
@@ -777,18 +794,108 @@ Primer consumidor: mueve una torreta pan/tilt para centrar un objetivo.
   un margen de `lost_target_sec` antes de soltarlo, para que una oclusión de dos
   frames no cambie de objetivo.
 - **Control proporcional sobre el error normalizado.** `ex = (cx - w/2)/(w/2)`,
-  `ey` análogo, ambos en `[-1, 1]` (independientes de la resolución). Se corrige
-  `gain * error` en cada envío en vez de saltar a una posición absoluta: no
+  `ey` análogo, ambos en `[-1, 1]` (independientes de la resolución y de la
+  orientación: con `rotation` el frame ya llega girado, así que el ancho de la
+  imagen derecha es el eje de pan y el alto el de tilt). Se corrige
+  `gain * error` (0.15) en cada envío en vez de calcular el ángulo exacto
+  (medido en pan con la imagen girada: una unidad de servo desplaza la caja
+  ~900 px, así que corregir el error entero sería ~0.27; con 0.3 se pasaba
+  siempre y oscilaba). No
   conocemos ni la geometría del montaje ni el campo de visión de la lente, así
   que calcular ángulos sería inventarse una precisión que no existe. El lazo
   cerrado converge igual y no necesita calibración.
-- **Zona muerta** (`deadzone`): con el objetivo ya centrado no se envía nada. Sin
-  ella el servo tiembla sin parar persiguiendo el ruido de la caja, que baila
-  unos píxeles entre frames aunque el objeto esté quieto.
-- **Rate limit** (`min_interval_sec`): a 25 fps, un servicio por frame satura la
-  API nativa sin ganar nada, porque el servo tarda más en llegar a la posición
-  que en llegar el frame siguiente. El control manual (`move_to`) lo salta a
-  propósito.
+- **Relación de engranajes** (`pan_gear_ratio`, `tilt_gear_ratio`): el paso de
+  cada eje se multiplica por las vueltas de servo por vuelta de cámara (dientes
+  de la cámara / dientes del servo). En la torreta del servo el tilt va con
+  piñón de 21 y corona de 63, así que 3; el pan va directo, 1. Sin esto el eje
+  reducido centra el triple de lento. `move_to` y `home_*` siguen en unidades
+  de servo. Dos engranajes engranados giran en sentidos opuestos, así que al
+  añadir una reducción a un eje suele haber que dar la vuelta también a su
+  `invert_*`: con el sentido mal, ese eje huye del objetivo hasta el tope.
+- **Límites de recorrido** (`pan_limit`, `tilt_limit`, 0.9): `_send` recorta
+  toda orden a ±limit, venga del seguimiento, del control manual o del regreso
+  a home. Los extremos del PWM suelen coincidir con el tope mecánico, y un servo
+  pequeño forzado ahí consume mucha corriente y puede romper engranajes o
+  quemarse.
+- **Reenganche** (`_relock`): si el ID bloqueado desaparece, antes de esperar
+  `lost_target_sec` se busca un ID nuevo de la misma clase cuya caja solape con
+  la última vista (IoU ≥ 0.3). Si lo hay, se cambia de ID en el mismo frame
+  (`servo: reenganche #a -> #b`) conservando la velocidad medida. ByteTrack le
+  cambia el ID a alguien cercano con solo mover un brazo (la caja se deforma y
+  la asociación falla), y sin esto la torreta se quedaba 1.5 s sin corregir
+  con la persona delante.
+- **Bordes cortados** (`_axis_error`): se centra, pero si la caja toca un borde
+  que se persigue (a ≤ 2 px) el objeto se está saliendo por ahí y ese eje va
+  hacia él con un error fijo de ±0.4 (`_CLIPPED_EDGE_ERROR`), que el lazo
+  repite si hace falta. Con ±1 el tilt, multiplicado por la reducción, daba
+  saltos de 0.6 de servo, se pasaba al extremo contrario y ByteTrack perdía el
+  ID. Se persiguen:
+  - **arriba, siempre**: alguien de pie a 1 m conserva la cabeza;
+  - **los lados, solo si la caja ocupa menos de la mitad del ancho**. Una
+    persona a 1 m llena casi todo el cuadro y toca los lados casi siempre:
+    perseguirlos daba golpes de lado a lado y perdía el objetivo;
+  - **abajo, nunca**: el cuerpo de alguien cerca sale siempre por abajo, y
+    perseguirlo bajaba la cámara de golpe.
+
+  Además, el centrado no puede bajar la cámara si la cabeza ya está en el 25 %
+  superior de la imagen (`_TOP_GUARD_FRACTION`). Con alguien más alto que media
+  imagen, el centro de la caja queda abajo: centrar bajaba paso a paso hasta
+  cortar la cabeza, el borde de arriba subía de golpe, y vuelta a empezar. Con
+  una franja del 10 % el retardo del stream hacía que un paso se la saltara.
+- **Anticipación horizontal** (`lead_sec`, **0 = apagada por defecto**; p. ej.
+  0.5 s para objetivos que cruzan andando). Con una persona cerca y sentada,
+  su balanceo natural se colaba como velocidad y la anticipación lo
+  amplificaba en una oscilación. Cuando está activa, se apunta a
+  `cx + vx * lead_sec` en vez de a `cx`, así la torreta va por delante y queda
+  más aire en la dirección en la que se mueve el objetivo. `vx` se mide solo con
+  la cámara quieta (pasados `_SETTLE_SEC` = 0.6 s desde la última orden, y entre
+  muestras del mismo track sin ninguna orden en medio), porque mientras gira la
+  torreta lo que se mueve en la imagen es ella. Se mide por los **dos bordes**
+  de la caja, no por el centro: solo cuenta si `x1` y `x2` se mueven en el mismo
+  sentido, y entonces vale la del más lento. Estirar un brazo mueve un solo
+  borde y desplazaba el centro, y la anticipación lo amplificaba en un vaivén
+  con la persona quieta. Se suaviza con una media exponencial, por debajo de
+  40 px/s no se anticipa (temblor de la caja), se topa a un cuarto del ancho,
+  vuelve a 0 con cada objetivo nuevo y **caduca** al segundo sin medida nueva:
+  con órdenes continuas la cámara casi nunca está quieta para medir, y sin
+  caducidad la última velocidad quedaba congelada como un sesgo fijo. Solo en pan: en vertical manda la cabeza.
+  El motivo de las líneas `salto` lleva `lead=±Npx` cuando se anticipó.
+- **Diagnóstico**: cada enganche se registra con clase, confianza y posición
+  (`servo: objetivo #N (person 0.83) en (x, y) de WxH`), y cada envío que mueve
+  un eje ≥ 0.15 deja una línea `servo: salto ...` con el error y el motivo
+  (centro, borde, manual, apagado). `status()` expone `last_target`. Un giro
+  brusco sin línea `salto` no lo ha mandado el seguimiento (p. ej. un reinicio
+  de la placa).
+- **Zona muerta por eje** (`deadzone`, 0.08): un eje con el error dentro de la
+  zona no se mueve, aunque el otro tenga que corregir; con los dos dentro no se
+  envía nada. Sin ella el servo tiembla sin parar persiguiendo el ruido de la
+  caja, que en una persona quieta baila más de un 6% entre frames.
+- **Dos modos de control**, según `latency_sec`. Entre una orden y la imagen
+  que la refleja pasa el retardo del pipeline (MJPEG de la placa + cola + YOLO):
+  medido en la torreta del servo, el primer cambio llega a 0.2–0.42 s.
+  - **Por pasos** (`latency_sec=0`, el de por defecto, con
+    `min_interval_sec=0.6`): cada orden corrige `gain × error` desde la orden
+    actual, y se espera a que el servo llegue y la imagen lo refleje antes de
+    la siguiente. Si se manda antes, el mismo error se corrige varias veces y
+    la torreta se pasa (con `gain=0.25` y 0.08 s se desbocaba hasta el tope).
+    Con la placa interpolando ("Servo transition", p. ej. 2 s) cada paso es una
+    rampa suave; con `transition_length: 0s` se veía a tirones.
+  - **Continuo** (`latency_sec > 0`, avanzado): se corrige desde la **posición
+    simulada** de hace `latency_sec` (historial de órdenes, `_position_at`),
+    así que los frames que aún no reflejan la última orden no suman el mismo
+    error y se puede mandar a 10 Hz. Pero depende de acertar a la vez el
+    retardo y la velocidad de la placa: con un servo lento y el retardo a ojo,
+    la posición de entonces quedaba lejos de la actual y cada orden rebotaba.
+
+  La velocidad de interpolación **solo vive en la placa**: el number "Servo
+  transition" (`servo_transition`, leído con `EsphomeController.get_state`).
+  Si el firmware no lo publica se supone 0 (salto directo). `transition_sec`
+  en `POST /config/servo` solo lo manda a la placa, no se guarda en
+  `ServoConfig`; `/status` muestra el valor en uso y `transition_source`. Un
+  eje sin error se queda donde está. Como red de seguridad, ninguna orden del
+  seguimiento se aleja más de 0.15 de giro de cámara de la anterior
+  (`_MAX_STEP` × `gear_ratio`). El control manual (`move_to`) salta el
+  intervalo a propósito.
 
 **Contrato con el firmware:** servicio `set_servo_position` con variables
 `pan` y `tilt` en el rango **-1.0 a 1.0** (lo que espera `servo.write` de
@@ -856,8 +963,8 @@ Swagger enseñe cada campo en su casilla con su descripción y su valor por
 defecto.
 
 | `POST /cameras/{id}/config/inference` | `set_inference_config` | Body JSON (`InferenceConfig`), todos los campos opcionales: **lo que no se envía se conserva** (`model_dump(exclude_unset=True)`); `classes: null` = todas, `null`/vacío en el resto = no tocar. Va en JSON y no en formulario porque Swagger rellena los formularios con `"string"`/`0` y los envía tal cual; con JSON, `app.openapi` se sustituye por `_openapi_with_camera_examples`, que regenera el esquema en cada `/openapi.json` metiendo como `examples` del body los valores actuales de cada cámara, así que en Swagger se edita partiendo de lo real (recargar `/docs` tras cambiar algo). Se filtra lo que no cambia respecto a `session.cfg` (reenviar el ejemplo entero es un no-op) y se sustituye `session.cfg` por `cfg.model_copy(update=...)`: `confidence`/`imgsz`/`always_infer`/`classes` se releen por frame y cambian al instante; `model_name`/`device` los resuelve `_process_loop` una sola vez al arrancar, así que cambiarlos precarga el modelo (400 si no existe) y llama a `session.restart()`. Devuelve `relaunched`. |
-| `POST /cameras/{id}/config/stream` | `set_stream_default` | Cambia `default_infer`; los streams en modo "follow" cambian en caliente. |
-| `POST /cameras/{id}/config/servo` | `set_servo_config` | Toda la `ServoConfig`. **Es donde se le ponen servos a una cámara**: el alta no los pide, así que la primera llamada crea el `ServoTracker` y lo enchufa como consumidor. 400 sin `noise_psk`. |
+| `POST /cameras/{id}/config/stream` | `set_stream_default` | Cambia `default_infer` y/o `rotation` (lo que no se envía se conserva). `default_infer`: los streams en modo "follow" cambian en caliente. `rotation`: relanza la sesión para que ByteTrack empiece de cero. |
+| `POST /cameras/{id}/config/servo` | `set_servo_config` | Body JSON parcial (`ServoConfigUpdate`): lo que no se envía se conserva, y los ejemplos de Swagger traen la `ServoConfig` actual de cada cámara. **Es donde se le ponen servos a una cámara**: el alta no los pide, así que la primera llamada crea el `ServoTracker` y lo enchufa como consumidor. 400 sin `noise_psk`. `transition_sec` y `auto_detach_sec` se mandan además a la placa con `EsphomeController.set_number` (numbers `servo_transition`/`servo_auto_detach`); `board_sent` en la respuesta dice si llegaron. |
 
 ### Servos (variantes con torreta)
 

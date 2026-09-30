@@ -438,20 +438,28 @@ async def set_inference_config(camera_id: str, body: InferenceConfig):
 
 def _openapi_with_camera_examples():
     """Esquema OpenAPI regenerado en cada petición a /openapi.json, para que
-    el body de /config/inference lleve como ejemplos los valores actuales de
-    cada cámara registrada. Swagger los muestra en un desplegable, y así se
-    edita partiendo de lo real en vez de los "string"/0 que inventa por
-    defecto. Basta recargar /docs tras cambiar algo.
+    los bodies de /config/inference y /config/servo lleven como ejemplos los
+    valores actuales de cada cámara registrada. Swagger los muestra en un
+    desplegable, y así se edita partiendo de lo real en vez de los "string"/0
+    que inventa por defecto. Basta recargar /docs tras cambiar algo.
     """
     schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
-    fields = list(InferenceConfig.model_fields)
-    examples = {}
+    inference_fields = set(InferenceConfig.model_fields)
+    # Ruta -> cómo sacar de una sesión el valor actual de su body.
+    sources = {
+        "/cameras/{camera_id}/config/inference":
+            lambda s: s.cfg.model_dump(include=inference_fields),
+        "/cameras/{camera_id}/config/servo":
+            lambda s: (s.cfg.servo or ServoConfig()).model_dump(),
+    }
     with _cameras_lock:
-        for cid, s in CAMERAS.items():
-            examples[cid] = {"summary": cid, "value": s.cfg.model_dump(include=set(fields))}
-    if examples:
+        sessions = list(CAMERAS.items())
+    for path, current in sources.items():
+        examples = {cid: {"summary": cid, "value": current(s)} for cid, s in sessions}
+        if not examples:
+            continue
         try:
-            content = schema["paths"]["/cameras/{camera_id}/config/inference"]["post"]["requestBody"]["content"]
+            content = schema["paths"][path]["post"]["requestBody"]["content"]
             content["application/json"]["examples"] = examples
         except KeyError:
             pass
@@ -494,51 +502,80 @@ def get_servo_tracker(camera_id: str) -> ServoTracker:
 @app.post("/cameras/{camera_id}/servo")
 async def move_servo(camera_id: str, pos: ServoPosition):
     """Control manual directo, para verificar el hardware sin depender de que
-    haya detecciones. Salta el rate limit del seguimiento a propósito."""
+    haya detecciones. Salta el rate limit del seguimiento a propósito, pero
+    no los límites de recorrido: la orden se recorta a ±pan_limit/tilt_limit,
+    y la respuesta trae la posición realmente enviada."""
     tracker = get_servo_tracker(camera_id)
     tracker.move_to(pos.pan, pos.tilt)
     return tracker.status()
 
 
+class ServoConfigUpdate(BaseModel):
+    """Body de POST /cameras/{id}/config/servo. Todo opcional: lo que no venga
+    se conserva."""
+    enabled: Optional[bool] = Field(None, description="Seguimiento automático. A false la torreta se queda quieta pero sigue aceptando el control manual de POST /cameras/{camera_id}/servo.")
+    service: Optional[str] = Field(None, description="Cómo se llama en el YAML de la placa el servicio (api: services:) que mueve la torreta. Solo hay que tocarlo si tu firmware lo nombra distinto.")
+    gain: Optional[float] = Field(None, gt=0.0, le=1.0, description="Fracción del error que se corrige en cada envío. Más alto = más rápido, pero con riesgo de pasarse del objetivo y oscilar. Por defecto 0.15.")
+    deadzone: Optional[float] = Field(None, ge=0.0, le=1.0, description="Error por debajo del cual un eje se considera centrado y NO se mueve. Sin zona muerta el servo tiembla persiguiendo el ruido de la caja. Por defecto 0.08.")
+    min_interval_sec: Optional[float] = Field(None, gt=0.0, description="Tiempo mínimo entre órdenes. En el modo por pasos (latency_sec=0) tiene que dar tiempo a que el servo llegue y la imagen lo refleje, o la torreta se pasa. Si tarda en reaccionar, bájalo un poco. Por defecto 0.6 s.")
+    latency_sec: Optional[float] = Field(None, ge=0.0, le=2.0, description="Avanzado. 0 = modo por pasos, el estable: corrige desde la orden actual. Mayor que 0 = modo continuo: corrige desde donde estaba la torreta hace este tiempo y permite bajar mucho min_interval_sec, pero hay que acertar el retardo o oscila. Por defecto 0.")
+    transition_sec: Optional[float] = Field(None, ge=0.0, le=5.0, description="Ajuste de la PLACA, no se guarda aquí: lo que tardan los servos en recorrer todo el rango (-1 a +1), o sea su suavidad. Se manda al number 'Servo transition' (lo mismo que cambiarlo en HA). 0 = salto directo.")
+    auto_detach_sec: Optional[float] = Field(None, ge=0.0, le=30.0, description="Segundos quieto tras los que la placa corta el PWM del servo (menos zumbido y calor). Solo vive en la placa (number 'Servo auto detach'): no se guarda aquí. 0 = no soltar nunca.")
+    invert_pan: Optional[bool] = Field(None, description="Invertir el sentido horizontal, según cómo haya quedado montado el servo.")
+    invert_tilt: Optional[bool] = Field(None, description="Invertir el sentido vertical.")
+    pan_gear_ratio: Optional[float] = Field(None, gt=0.0, description="Relación de engranajes horizontal: dientes del engranaje de la cámara / dientes del del servo. 1 = servo directo. Por defecto 1.")
+    tilt_gear_ratio: Optional[float] = Field(None, gt=0.0, description="Relación de engranajes vertical: dientes del engranaje de la cámara / dientes del del servo. Con 21 en el servo y 63 en la cámara, 63/21 = 3. Dos engranajes engranados giran en sentidos opuestos, así que con reducción suele hacer falta cambiar también invert_tilt. Por defecto 1.")
+    pan_limit: Optional[float] = Field(None, gt=0.0, le=1.0, description="Recorrido máximo horizontal, simétrico, en unidades de servo: ninguna orden (ni del seguimiento ni manual) pasa de ±pan_limit. Evita forzar el servo contra el tope mecánico. Por defecto 0.9.")
+    tilt_limit: Optional[float] = Field(None, gt=0.0, le=1.0, description="Recorrido máximo vertical, simétrico, en unidades de servo. Por defecto 0.9.")
+    lost_target_sec: Optional[float] = Field(None, gt=0.0, description="Tiempo sin ver el objetivo antes de soltarlo y poder enganchar otro. Da margen para oclusiones de un par de frames. Por defecto 1.5 s.")
+    home_pan: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Posición de reposo horizontal: -1 y 1 son los extremos, 0 el centro.")
+    home_tilt: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Posición de reposo vertical.")
+    return_home_on_lost: Optional[bool] = Field(None, description="Al perder el objetivo, ¿volver a reposo? Por defecto no: suele interesar más quedarse mirando por donde se perdió, que es por donde reaparecerá.")
+    lead_sec: Optional[float] = Field(None, ge=0.0, le=3.0, description="Anticipación horizontal en segundos: se apunta a donde estará el objetivo según su velocidad, así la torreta va por delante y queda más aire en la dirección en la que se mueve. Solo para objetivos que cruzan andando: con alguien cerca y quieto, su balanceo se toma por velocidad y oscila. 0 = sin anticipar. Por defecto 0.")
+
+
 @app.post("/cameras/{camera_id}/config/servo")
-async def set_servo_config(
-    camera_id: str,
-    enabled: bool = Form(True, description="Seguimiento automático. A false la torreta se queda quieta pero sigue aceptando el control manual de POST /cameras/{camera_id}/servo."),
-    service: str = Form("set_servo_position", description="Cómo se llama en el YAML de la placa el servicio (api: services:) que mueve la torreta. Solo hay que tocarlo si tu firmware lo nombra distinto."),
-    gain: float = Form(0.25, gt=0.0, le=1.0, description="Fracción del error que se corrige en cada envío. Más alto = más rápido, pero con riesgo de pasarse del objetivo y oscilar. Por defecto 0.25."),
-    deadzone: float = Form(0.06, ge=0.0, le=1.0, description="Error por debajo del cual se considera centrado y NO se mueve. Sin zona muerta el servo tiembla persiguiendo el ruido de la caja. Por defecto 0.06."),
-    min_interval_sec: float = Form(0.08, gt=0.0, description="Tope de frecuencia de envío. Mandar una orden por frame satura la API de la placa sin ganar nada: el servo tarda más en llegar que el frame siguiente. Por defecto 0.08 s."),
-    invert_pan: bool = Form(False, description="Invertir el sentido horizontal, según cómo haya quedado montado el servo."),
-    invert_tilt: bool = Form(False, description="Invertir el sentido vertical."),
-    lost_target_sec: float = Form(1.5, gt=0.0, description="Tiempo sin ver el objetivo antes de soltarlo y poder enganchar otro. Da margen para oclusiones de un par de frames. Por defecto 1.5 s."),
-    home_pan: float = Form(0.0, ge=-1.0, le=1.0, description="Posición de reposo horizontal: -1 y 1 son los extremos, 0 el centro."),
-    home_tilt: float = Form(0.0, ge=-1.0, le=1.0, description="Posición de reposo vertical."),
-    return_home_on_lost: bool = Form(False, description="Al perder el objetivo, ¿volver a reposo? Por defecto no: suele interesar más quedarse mirando por donde se perdió, que es por donde reaparecerá."),
-):
+async def set_servo_config(camera_id: str, body: ServoConfigUpdate):
     """Configura la torreta pan/tilt de una cámara.
 
     Aquí es donde se le ponen servos a una cámara: al dar de alta no se
     piden, así que la primera llamada a este endpoint es la que monta el
     seguimiento. Necesita que la cámara tenga `noise_psk`, porque las órdenes
     van por la API nativa de la placa.
+
+    Lo que no se envía se conserva (la primera vez, se toma el valor por
+    defecto). En Swagger, el desplegable **Examples** del body trae cada cámara
+    con sus valores actuales: elige la tuya, toca lo que quieras y envía.
     """
     session = get_camera(camera_id)
     first_time = session.servo_tracker is None
-    if not session.configure_servo(ServoConfig(
-        enabled=enabled, service=service, gain=gain, deadzone=deadzone,
-        min_interval_sec=min_interval_sec,
-        invert_pan=invert_pan, invert_tilt=invert_tilt,
-        lost_target_sec=lost_target_sec,
-        home_pan=home_pan, home_tilt=home_tilt,
-        return_home_on_lost=return_home_on_lost,
-    )):
+    changes = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if isinstance(changes.get("service"), str):
+        changes["service"] = changes["service"].strip() or ServoConfig().service
+    # Ajustes que solo viven en la placa: no son parte de ServoConfig.
+    transition = changes.pop("transition_sec", None)
+    auto_detach = changes.pop("auto_detach_sec", None)
+    base = session.cfg.servo or ServoConfig()
+    cfg = base.model_copy(update=changes)
+    if not session.configure_servo(cfg):
         raise HTTPException(400, f"la cámara '{camera_id}' no tiene noise_psk, así que no "
                                  f"hay API de ESPHome por la que mover unos servos")
     if first_time:
         print(f"[{camera_id}] torreta configurada, seguimiento "
-              f"{'activado' if enabled else 'desactivado'}")
+              f"{'activado' if cfg.enabled else 'desactivado'}")
     save_cameras_to_disk()
-    return session.status()
+
+    # Velocidad y auto-detach van también a la placa, que es la que los
+    # aplica. `sent` dice si se pudieron mandar: False = placa desconectada o
+    # firmware sin esos number (entonces hay que flashear el YAML nuevo).
+    board = {}
+    if transition is not None:
+        board["servo_transition"] = session.esphome.set_number(
+            "servo_transition", transition)
+    if auto_detach is not None:
+        board["servo_auto_detach"] = session.esphome.set_number(
+            "servo_auto_detach", auto_detach)
+    return {**session.status(), **({"board_sent": board} if board else {})}
 
 
 # ---------------------------------------------------------------------------
@@ -678,14 +715,27 @@ async def record_status(camera_id: str):
 @app.post("/cameras/{camera_id}/config/stream")
 async def set_stream_default(
     camera_id: str,
-    default_infer: bool = Form(True, description="Qué devuelven /stream y /snapshot cuando no se pasa ?infer= explícito: true = con las cajas dibujadas, false = vídeo crudo. Por defecto true."),
+    default_infer: Optional[bool] = Form(None, description="Qué devuelven /stream y /snapshot cuando no se pasa ?infer= explícito: true = con las cajas dibujadas, false = vídeo crudo. Vacío = no tocar."),
+    rotation: Optional[int] = Form(None, description="Giro de la imagen en grados, en sentido horario: 0, 90, 180 o 270. Para un módulo de cámara montado de lado. Se aplica antes de YOLO, así que las cajas, los clips y los servos trabajan ya sobre la imagen derecha. Vacío = no tocar."),
 ):
-    """Los streams ya abiertos en modo "por defecto" cambian en caliente, sin
-    tener que reconectar."""
+    """Ajustes de la imagen de una cámara. Lo que no se envía se conserva.
+
+    `default_infer` cambia en caliente los streams ya abiertos en modo "por
+    defecto", sin tener que reconectar. Cambiar `rotation` relanza la sesión
+    para que el tracker empiece de cero: sus tracks estaban en las coordenadas
+    del giro anterior.
+    """
     session = get_camera(camera_id)
-    session.cfg.default_infer = default_infer
+    if rotation is not None and rotation not in (0, 90, 180, 270):
+        raise HTTPException(400, "rotation tiene que ser 0, 90, 180 o 270")
+    if default_infer is not None:
+        session.cfg.default_infer = default_infer
+    relaunched = False
+    if rotation is not None and rotation != session.cfg.rotation:
+        session.cfg.rotation = rotation
+        relaunched = await asyncio.to_thread(session.restart)
     save_cameras_to_disk()
-    return session.status()
+    return {"relaunched": relaunched, **session.status()}
 
 
 @app.get("/cameras/{camera_id}/stream")
@@ -789,7 +839,7 @@ async def detect_file(
     # imagen y no hay JSON donde mirarlo. El modelo va delante porque este
     # endpoint existe justo para comparar modelos.
     height, width = output.shape[:2]
-    # A diferencia del stream, que siempre es 640x480, aquí la imagen la sube
+    # A diferencia del stream, cuyo tamaño fija la placa, aquí la imagen la sube
     # quien llama: puede ser una miniatura o una foto de 4000 px. Se usa la
     # misma escala que ultralytics para sus etiquetas (Annotator saca un grosor
     # del tamaño de la imagen y usa fontScale = grosor/3), o el overlay sale

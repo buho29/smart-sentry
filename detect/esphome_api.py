@@ -1,8 +1,9 @@
 """Conexion con la API nativa de ESPHome (puerto 6053) de una placa.
 
 Autonomo: no sabe nada de camaras, ni de YOLO, ni del hardware concreto que
-lleve la placa. Solo hace tres cosas: vigilar una entidad, llamar a los
-servicios que el YAML publique, y cerrarse bien.
+lleve la placa. Solo hace cuatro cosas: vigilar una entidad, llamar a los
+servicios que el YAML publique, leer y escribir entidades por object_id
+(get_state/set_number, para ajustes de la placa), y cerrarse bien.
 
 Lo del hardware es a proposito. Aqui llego a haber un move_servo() cableado a
 `set_servo_position`, y con la siguiente variante (el rele de disparo de la
@@ -18,7 +19,7 @@ import threading
 import time
 from typing import Callable, Optional
 
-from aioesphomeapi import APIClient
+from aioesphomeapi import APIClient, NumberInfo
 
 from log import print
 
@@ -83,6 +84,13 @@ class EsphomeController:
         # nombre -> UserService, tal cual los publica el YAML de la placa.
         self._services: dict = {}
         self._watch_key: Optional[int] = None
+        # object_id -> key y key -> object_id de todas las entidades, y el
+        # último valor publicado de cada una (por object_id). Así se puede leer
+        # o escribir cualquier ajuste de la placa sin cablear nombres aquí.
+        self._keys: dict[str, int] = {}
+        self._object_ids: dict[int, str] = {}
+        self._number_keys: set[int] = set()
+        self._states: dict[str, object] = {}
         self._connected = threading.Event()
         self._stopping = False
         # Se marca cuando el hilo ya ha cerrado el socket y el event loop.
@@ -228,6 +236,10 @@ class EsphomeController:
 
         entities, services = await self._client.list_entities_services()
         self._services = {s.name: s for s in services}
+        self._keys = {e.object_id: e.key for e in entities if getattr(e, "object_id", None)}
+        self._object_ids = {k: oid for oid, k in self._keys.items()}
+        self._number_keys = {e.key for e in entities if isinstance(e, NumberInfo)}
+        self._states = {}
 
         self._watch_key = None
         if self.watch_entity_object_id:
@@ -271,6 +283,9 @@ class EsphomeController:
 
     def _on_state(self, state):
         # Llamado en el hilo/loop propio de este controller.
+        oid = self._object_ids.get(getattr(state, "key", None))
+        if oid is not None and not getattr(state, "missing_state", False):
+            self._states[oid] = getattr(state, "state", None)
         if self._watch_key is not None and getattr(state, "key", None) == self._watch_key:
             # 'awake' es un binary_sensor: state.state es un bool. Antes de la
             # primera publicación, aioesphomeapi marca missing_state=True y
@@ -326,10 +341,36 @@ class EsphomeController:
 
     async def _execute_service(self, name: str, service, args: dict):
         try:
-            self._client.execute_service(service, args)
+            # En aioesphomeapi 46 es async: sin el await la corrutina se tiraba
+            # sin ejecutarse y la orden nunca salía hacia la placa.
+            await self._client.execute_service(service, args)
         except Exception as e:
             print(f"EsphomeController[{self.address}]: error llamando a "
                   f"'{name}':", repr(e))
+
+    # -- estado y ajustes de la placa -------------------------------------
+
+    def get_state(self, object_id: str) -> Optional[object]:
+        """Último valor publicado por la entidad `object_id` (p. ej. un number
+        de ajuste), o None si la placa no la tiene o aún no ha publicado."""
+        return self._states.get(object_id)
+
+    def set_number(self, object_id: str, value: float) -> bool:
+        """Encola un cambio de valor de una entidad number. Devuelve si se
+        encoló: False sin conexión o si la placa no tiene ese number.
+
+        No bloquea, igual que call_service().
+        """
+        if not self._connected.is_set() or self._closed.is_set():
+            return False
+        key = self._keys.get(object_id)
+        if key is None or key not in self._number_keys:
+            return False
+        try:
+            self._loop.call_soon_threadsafe(self._client.number_command, key, float(value))
+        except RuntimeError:
+            return False  # el loop se cerró entre el check y esta llamada
+        return True
 
     # -- apagado ---------------------------------------------------------
 

@@ -275,6 +275,13 @@ mapeado por `servo.write`) — **cualquiera de las opciones de arriba sirve
 igual a nivel de firmware**, es una cuestión puramente mecánica (tamaño del
 soporte, tipo de conector) y de la fuente de alimentación (ver más abajo).
 
+La velocidad de los servos (`transition_length`) y el tiempo tras el que se
+corta el PWM estando quietos (`auto_detach_time`) se ajustan sin compilar con
+los number de configuración "Servo transition" y "Servo auto detach" (desde
+Home Assistant o desde `POST /cameras/{id}/config/servo` del servicio). Los
+valores del bloque `servo:` del YAML son solo los de arranque. El servicio
+Python lee "Servo transition" para saber a qué velocidad se mueve la cámara.
+
 ## Notas de integración
 
 - El YAML ya avisa (comentario "OJO CON EL TIMER LEDC") de que los servos van
