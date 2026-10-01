@@ -135,30 +135,9 @@ Documentación interactiva (Swagger): <http://localhost:8080/docs>
 
 ### Desde Home Assistant
 
-En `configuration.yaml`, contra el supervisor (`<host>` = la máquina del servicio):
-
-```yaml
-rest_command:
-  detect_start:
-    url: "http://<host>:8081/service/start"
-    method: post
-  detect_stop:
-    url: "http://<host>:8081/service/stop"
-    method: post
-  detect_restart:
-    url: "http://<host>:8081/service/restart"
-    method: post
-
-binary_sensor:
-  - platform: rest
-    name: detect_running
-    resource: "http://<host>:8081/service/status"
-    value_template: "{{ value_json.running }}"
-    scan_interval: 30
-```
-
-Luego `rest_command.detect_restart` sirve como acción en cualquier automatización
-o botón.
+Los packages y las tarjetas están en [`home-assistant/`](../home-assistant/):
+arrancar / parar / reiniciar el servicio contra el supervisor, el estado de cada
+cámara, grabar a mano, la confianza, el seguimiento y la torreta.
 
 ### Dos mensajes del log que son normales
 

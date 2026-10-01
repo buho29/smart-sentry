@@ -1,0 +1,90 @@
+# Sección "Detect · huerta" para una vista de tipo sections. Pegar en: editar
+# panel -> Añadir sección -> menú ⋮ de la sección -> Editar en YAML.
+# Necesita packages/detect_huerta.yaml y la cámara MJPEG camera.detect_huerta
+# (ver ../README.md).
+#
+# camera_view: auto (imagen fija que se refresca; al pulsar, vídeo en vivo). Con
+# live el stream queda abierto mientras el panel esté a la vista, y eso cuenta
+# como cliente: mantiene la inferencia encendida.
+type: grid
+cards:
+  - type: heading
+    heading: Detect · huerta
+    heading_style: title
+    icon: mdi:cctv
+  - type: picture-entity
+    entity: camera.detect_huerta
+    name: Huerta (YOLO)
+    camera_view: auto
+    show_state: false
+    # Recuadro 4:3, la proporción de esta cámara: la llena sin bandas. La
+    # torreta usa el mismo recuadro, así que las dos miden lo mismo a cualquier
+    # ancho de pantalla.
+    aspect_ratio: "4:3"
+    fit_mode: contain
+    grid_options: { columns: full }
+  - type: tile
+    entity: switch.detect_huerta_camera
+    name: Cámara
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: switch.detect_huerta_record
+    name: Grabar
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: switch.detect_huerta_boxes
+    name: Cajas en el stream
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: switch.detect_huerta_detect_always
+    name: Detectar sin mirar
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: input_number.detect_huerta_confidence
+    name: Confianza mínima
+    features:
+      - type: numeric-input
+        style: slider
+    grid_options: { columns: full }
+  # Este no es del package: es el number `awake_duration` del firmware
+  # (esphome/huerta.yaml), que llega por la integración ESPHome de la placa.
+  - type: tile
+    entity: number.huerta_awake_time_s
+    name: Tiempo despierto
+    features:
+      - type: numeric-input
+        style: buttons
+    grid_options: { columns: full }
+  - type: tile
+    entity: binary_sensor.detect_huerta_esphome
+    name: Placa
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: sensor.detect_huerta_fps
+    name: FPS
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: sensor.detect_huerta_inference
+    name: YOLO
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: sensor.detect_huerta_corrupt_frames
+    name: Frames corruptos
+    grid_options: { columns: 6 }
+
+  # Miniatura del último clip; al pulsarla se abre el MP4. Si HA va por https,
+  # el navegador bloquea estas URLs http (mixed content): ver ../README.md.
+  - type: markdown
+    title: Último clip
+    grid_options: { columns: full }
+    content: |-
+      {% set c = 'sensor.detect_huerta_last_clip' %}
+      {% set base = 'http://' ~ states('input_text.detect_host') ~ ':8080' %}
+      {% if states(c) in ['ninguno', 'unknown', 'unavailable'] %}
+      Sin clips todavía.
+      {% else %}
+      {% set labels = state_attr(c, 'labels') or {} %}
+      **{{ (state_attr(c, 'started_at') | float(0)) | timestamp_custom('%d/%m %H:%M') }}** · {{ state_attr(c, 'duration_sec') | round(0) }} s · {{ state_attr(c, 'trigger') }}{% if labels %} · {% for k, v in labels.items() %}{{ k }} ×{{ v }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}
+
+      <a href="{{ base }}{{ state_attr(c, 'url') }}" target="_blank"><img src="{{ base }}{{ state_attr(c, 'thumbnail_url') }}" width="100%"></a>
+      {% endif %}

@@ -20,6 +20,7 @@ El repositorio tiene **dos mitades independientes** que se comunican por red:
 | --- | --- | --- |
 | [`esphome/`](esphome/) | Firmware de las placas ESP32-S3-CAM: cámara exterior con PIR + deep sleep, cámara siempre encendida y torreta pan/tilt | YAML de ESPHome + componente C++ parcheado |
 | [`detect/`](detect/) | Servicio Python (FastAPI) que hace la inferencia YOLO sobre el vídeo de esas cámaras y lo multiplexa hacia N clientes. | Python |
+| [`home-assistant/`](home-assistant/) | Packages y tarjetas de Home Assistant para manejar el servicio de `detect/` (cámaras, grabación, torreta). | YAML de Home Assistant |
 
 ---
 
@@ -155,6 +156,7 @@ Cada mitad tiene su propio `venv` y sus instrucciones detalladas:
 | --- | --- |
 | [`esphome/README.md`](esphome/README.md) | Placas, configuraciones ESPHome, `huerta.yaml`, componente `esp32_camera` parcheado. |
 | [`detect/README.md`](detect/README.md) | Instalación del servicio, endpoints, arquitectura por cámara. |
+| [`home-assistant/README.md`](home-assistant/README.md) | Instalar los packages y las tarjetas de HA, y qué entidades crea cada uno. |
 | [`detect/docs/ARQUITECTURA.md`](detect/docs/ARQUITECTURA.md) | Qué hace cada clase, método y endpoint de `main.py`, con diagramas. |
 | [`detect/docs/CICLO-DE-VIDA.md`](detect/docs/CICLO-DE-VIDA.md) | Cuánto vive cada instancia y cómo se cierran los sockets cuando la placa se duerme. |
 | [`detect/docs/GRABACION.md`](detect/docs/GRABACION.md) | La grabación de clips: pre-roll, por qué hace falta H.264 para que se vean en Home Assistant, retención y cómo consumirlos desde HA. |

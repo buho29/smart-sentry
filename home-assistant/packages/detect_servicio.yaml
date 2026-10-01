@@ -1,0 +1,144 @@
+# Package de Home Assistant: el servicio detect en conjunto.
+#
+# Lo que no es de ninguna cámara: arrancar / parar / reiniciar el proceso (vía
+# el supervisor del :8081, que es el que sigue vivo con uvicorn parado), el
+# disco que ocupan los clips y el gl_keeper.
+#
+# Aquí también vive la IP del servicio (input_text.detect_host), que usan los
+# packages de cámara: sin este package no funcionan.
+
+input_text:
+  # El único sitio donde se pone la IP de la máquina del servicio. Con
+  # `initial` manda el YAML: un cambio desde la UI dura hasta reiniciar HA.
+  detect_host:
+    name: "Detect host"
+    icon: mdi:ip-network
+    initial: "192.168.1.10"
+
+rest_command:
+  # Supervisor (:8081). stop y restart bloquean hasta que el proceso muere o se
+  # relanza (unos segundos), de ahí el timeout largo.
+  detect_service_start:
+    url: "http://{{ states('input_text.detect_host') }}:8081/service/start"
+    method: post
+    timeout: 30
+  detect_service_stop:
+    url: "http://{{ states('input_text.detect_host') }}:8081/service/stop"
+    method: post
+    timeout: 60
+  detect_service_restart:
+    url: "http://{{ states('input_text.detect_host') }}:8081/service/restart"
+    method: post
+    timeout: 60
+
+  # Aplica la retención de clips ahora mismo (días + GB de /recordings/config).
+  detect_recordings_sweep:
+    url: "http://{{ states('input_text.detect_host') }}:8080/recordings/sweep"
+    method: post
+    content_type: "application/x-www-form-urlencoded"
+    payload: "dry_run={{ 'true' if dry_run | default(false) else 'false' }}"
+    timeout: 60
+
+rest:
+  # Estado del proceso según el supervisor. Responde aunque uvicorn esté parado.
+  - resource_template: "http://{{ states('input_text.detect_host') }}:8081/service/status"
+    scan_interval: 30
+    timeout: 10
+    binary_sensor:
+      - name: "Detect service running"
+        unique_id: detect_service_running
+        device_class: running
+        value_template: "{{ value_json.running }}"
+    sensor:
+      # Los binary_sensor de rest no admiten atributos: van aquí.
+      - name: "Detect service uptime"
+        unique_id: detect_service_uptime
+        device_class: duration
+        unit_of_measurement: "s"
+        value_template: "{{ value_json.uptime_sec | int(0) if value_json.running else 0 }}"
+        json_attributes:
+          - pid
+          - last_exit_code
+          - manual_stop
+
+  # Ocupación de los clips y disco libre. Cambia despacio: cada 5 min sobra.
+  - resource_template: "http://{{ states('input_text.detect_host') }}:8080/recordings/stats"
+    scan_interval: 300
+    timeout: 20
+    sensor:
+      - name: "Detect clips total"
+        unique_id: detect_clips_total_gb
+        unit_of_measurement: "GB"
+        device_class: data_size
+        state_class: measurement
+        value_template: "{{ value_json.total_gb }}"
+        json_attributes:
+          - root_dir
+          - oldest
+          - newest
+          - in_progress
+          - per_camera
+          - last_sweep
+      - name: "Detect disk free"
+        unique_id: detect_disk_free_gb
+        unit_of_measurement: "GB"
+        device_class: data_size
+        state_class: measurement
+        value_template: "{{ value_json.free_gb }}"
+      - name: "Detect clips count"
+        unique_id: detect_clips_count
+        unit_of_measurement: "clips"
+        state_class: measurement
+        value_template: "{{ value_json.clips }}"
+
+  # gl_keeper: la ventana OpenGL que evita que la GTX 1080 baje a P5.
+  - resource_template: "http://{{ states('input_text.detect_host') }}:8080/config"
+    scan_interval: 60
+    timeout: 10
+    binary_sensor:
+      - name: "Detect gl keeper active"
+        unique_id: detect_gl_keeper_active
+        device_class: running
+        value_template: "{{ value_json.gl_keeper.active }}"
+
+template:
+  - switch:
+      # Encendido = uvicorn corriendo. Apagarlo es una parada manual: el
+      # supervisor no lo relanza hasta volver a encenderlo.
+      - name: "Detect service"
+        unique_id: detect_service_switch
+        icon: mdi:eye-circle
+        state: "{{ is_state('binary_sensor.detect_service_running', 'on') }}"
+        turn_on:
+          - action: rest_command.detect_service_start
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_service_running
+        turn_off:
+          - action: rest_command.detect_service_stop
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_service_running
+
+script:
+  detect_service_restart:
+    alias: "Detect: reiniciar servicio"
+    icon: mdi:restart
+    mode: single
+    sequence:
+      - action: rest_command.detect_service_restart
+      - action: homeassistant.update_entity
+        target:
+          entity_id: binary_sensor.detect_service_running
+
+  detect_recordings_sweep:
+    alias: "Detect: aplicar retención de clips"
+    icon: mdi:broom
+    mode: single
+    sequence:
+      - action: rest_command.detect_recordings_sweep
+        data:
+          dry_run: false
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.detect_clips_total

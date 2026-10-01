@@ -1,0 +1,312 @@
+# Package de Home Assistant: cámara "huerta" del servicio detect.
+#
+# Variante cámara + PIR + grabación de clips (firmware esphome/huerta.yaml).
+# Para otra cámara de este tipo: copia el fichero y reemplaza "huerta" por su
+# camera_id (en ids, URLs y nombres). Ver ../README.md.
+#
+# La IP del servicio sale de input_text.detect_host (detect_servicio.yaml).
+#
+# El vídeo no está aquí: la cámara MJPEG se añade desde la UI de HA (la
+# integración ya no admite YAML) con el nombre "Detect huerta", para que quede
+# como camera.detect_huerta.
+
+rest_command:
+  detect_huerta_start:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/huerta/start"
+    method: post
+    timeout: 20
+  # Parada manual definitiva: ni el PIR ni un cliente nuevo la rearrancan
+  # hasta el siguiente start.
+  detect_huerta_stop:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/huerta/stop"
+    method: post
+    timeout: 20
+
+  # Graba a mano, con el pre-roll que hubiera. Necesita que la cámara tenga
+  # grabación configurada (POST /cameras/huerta/config/recording).
+  detect_huerta_record_start:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/huerta/record/start"
+    method: post
+    content_type: "application/x-www-form-urlencoded"
+    payload: "note={{ note | default('Home Assistant') | urlencode }}"
+    timeout: 10
+  detect_huerta_record_stop:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/huerta/record/stop"
+    method: post
+    timeout: 20
+
+  # Ajustes de detección. JSON: lo que no se manda se conserva, así que cada
+  # llamada lleva solo el campo que cambia.
+  detect_huerta_inference:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/huerta/config/inference"
+    method: post
+    content_type: "application/json"
+    payload: "{{ body | to_json }}"
+    timeout: 30
+
+  # Stream anotado o crudo por defecto (el ?infer= de /stream y /snapshot).
+  detect_huerta_stream:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/huerta/config/stream"
+    method: post
+    content_type: "application/x-www-form-urlencoded"
+    payload: "default_infer={{ 'true' if default_infer else 'false' }}"
+    timeout: 20
+
+rest:
+  # Todo el estado de la cámara sale de un solo GET.
+  - resource_template: "http://{{ states('input_text.detect_host') }}:8080/cameras/huerta/status"
+    scan_interval: 10
+    timeout: 10
+    binary_sensor:
+      - name: "Detect huerta running"
+        unique_id: detect_huerta_running
+        device_class: running
+        value_template: "{{ value_json.running }}"
+      - name: "Detect huerta esphome"
+        unique_id: detect_huerta_esphome
+        device_class: connectivity
+        value_template: "{{ value_json.esphome_connected | default(false, true) }}"
+      - name: "Detect huerta recording"
+        unique_id: detect_huerta_recording
+        icon: mdi:record-rec
+        value_template: >-
+          {{ value_json.consumers.get('ClipRecorder', {}).get('state') == 'recording' }}
+      - name: "Detect huerta annotated"
+        unique_id: detect_huerta_annotated
+        value_template: "{{ value_json.config.default_infer }}"
+      - name: "Detect huerta always infer"
+        unique_id: detect_huerta_always_infer
+        value_template: "{{ value_json.config.always_infer }}"
+    sensor:
+      - name: "Detect huerta fps"
+        unique_id: detect_huerta_fps
+        unit_of_measurement: "fps"
+        state_class: measurement
+        value_template: "{{ value_json.pipeline_fps }}"
+      - name: "Detect huerta inference"
+        unique_id: detect_huerta_inference_ms
+        unit_of_measurement: "ms"
+        state_class: measurement
+        value_template: "{{ value_json.last_inference_ms | round(1) if value_json.last_inference_ms is not none else 0 }}"
+      # Frames con alguna caja imposible. Tiene que estar a 0; si sube, ver
+      # detect/docs/GPU.md.
+      - name: "Detect huerta corrupt frames"
+        unique_id: detect_huerta_corrupt_frames
+        state_class: total_increasing
+        icon: mdi:image-broken-variant
+        value_template: "{{ value_json.corrupt_frames }}"
+      - name: "Detect huerta clients"
+        unique_id: detect_huerta_clients
+        icon: mdi:account-eye
+        value_template: "{{ value_json.clients }}"
+        # Los binary_sensor de rest no admiten atributos: los de la cámara van aquí.
+        json_attributes:
+          - explicit_start
+          - manual_stop
+          - last_frame_time
+      - name: "Detect huerta confidence"
+        unique_id: detect_huerta_confidence
+        icon: mdi:target
+        value_template: "{{ value_json.config.confidence }}"
+        json_attributes_path: "$.config"
+        json_attributes:
+          - model_name
+          - device
+          - imgsz
+          - classes
+          - rotation
+      # Si sube, el disco no da abasto y el clip tendrá saltos.
+      - name: "Detect huerta dropped frames"
+        unique_id: detect_huerta_dropped_frames
+        icon: mdi:filmstrip-off
+        value_template: "{{ value_json.consumers.get('ClipRecorder', {}).get('dropped_frames', 0) }}"
+        # Estado del grabador (sin grabación configurada, el sensor queda sin atributos).
+        json_attributes_path: "$.consumers.ClipRecorder"
+        json_attributes:
+          - state
+          - trigger
+          - current_clip
+          - elapsed_sec
+          - clips_written
+          - last_error
+
+  # El último clip terminado (los que se están grabando no salen hasta cerrarse).
+  - resource_template: "http://{{ states('input_text.detect_host') }}:8080/recordings?camera_id=huerta&limit=1"
+    scan_interval: 60
+    timeout: 20
+    sensor:
+      - name: "Detect huerta last clip"
+        unique_id: detect_huerta_last_clip
+        icon: mdi:filmstrip
+        value_template: "{{ value_json.clips[0].clip_id if value_json.clips else 'ninguno' }}"
+        json_attributes_path: "$.clips[0]"
+        json_attributes:
+          - clip_id
+          - url
+          - thumbnail_url
+          - trigger
+          - note
+          - started_at
+          - duration_sec
+          - labels
+          - max_conf
+
+template:
+  - switch:
+      # Encendido = la cámara está corriendo. Apagar es la parada manual de
+      # /stop; encender la levanta.
+      - name: "Detect huerta camera"
+        unique_id: detect_huerta_camera_switch
+        icon: mdi:cctv
+        state: "{{ is_state('binary_sensor.detect_huerta_running', 'on') }}"
+        turn_on:
+          - action: rest_command.detect_huerta_start
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_huerta_running
+        turn_off:
+          - action: rest_command.detect_huerta_stop
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_huerta_running
+
+      - name: "Detect huerta record"
+        unique_id: detect_huerta_record_switch
+        icon: mdi:record-rec
+        state: "{{ is_state('binary_sensor.detect_huerta_recording', 'on') }}"
+        turn_on:
+          - action: rest_command.detect_huerta_record_start
+            data:
+              note: "Home Assistant"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_huerta_running
+        turn_off:
+          - action: rest_command.detect_huerta_record_stop
+          - action: homeassistant.update_entity
+            target:
+              entity_id:
+                - binary_sensor.detect_huerta_running
+                - sensor.detect_huerta_last_clip
+
+      # Qué devuelven /stream y /snapshot sin ?infer=: con cajas o crudo.
+      - name: "Detect huerta boxes"
+        unique_id: detect_huerta_boxes_switch
+        icon: mdi:vector-rectangle
+        state: "{{ is_state('binary_sensor.detect_huerta_annotated', 'on') }}"
+        turn_on:
+          - action: rest_command.detect_huerta_stream
+            data:
+              default_infer: true
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_huerta_running
+        turn_off:
+          - action: rest_command.detect_huerta_stream
+            data:
+              default_infer: false
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_huerta_running
+
+      # YOLO aunque nadie mire el stream. Apagado ahorra GPU, pero entonces la
+      # cámara no detecta (ni graba por detección) con el navegador cerrado.
+      - name: "Detect huerta detect always"
+        unique_id: detect_huerta_detect_always_switch
+        icon: mdi:radar
+        state: "{{ is_state('binary_sensor.detect_huerta_always_infer', 'on') }}"
+        turn_on:
+          - action: rest_command.detect_huerta_inference
+            data:
+              body: { always_infer: true }
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_huerta_running
+        turn_off:
+          - action: rest_command.detect_huerta_inference
+            data:
+              body: { always_infer: false }
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_huerta_running
+
+input_number:
+  detect_huerta_confidence:
+    name: "Detect huerta confianza"
+    icon: mdi:target
+    min: 0.05
+    max: 0.95
+    step: 0.05
+    mode: slider
+
+automation:
+  # Slider -> servicio. Solo manda si difiere de lo que tiene el servicio, así
+  # que la sincronización de abajo no provoca un envío de rebote.
+  - id: detect_huerta_confidence_push
+    alias: "Detect huerta: enviar confianza"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_number.detect_huerta_confidence
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ (states('input_number.detect_huerta_confidence') | float(0)
+              - states('sensor.detect_huerta_confidence') | float(0)) | abs > 0.001 }}
+    actions:
+      - delay: "00:00:01"
+      - action: rest_command.detect_huerta_inference
+        data:
+          body:
+            confidence: "{{ states('input_number.detect_huerta_confidence') | float }}"
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.detect_huerta_confidence
+
+  # Servicio -> slider, para que el slider arranque con el valor real (y siga
+  # a cambios hechos desde Swagger) en vez de pisarlo.
+  - id: detect_huerta_confidence_sync
+    alias: "Detect huerta: sincronizar confianza"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: sensor.detect_huerta_confidence
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: template
+        value_template: "{{ states('sensor.detect_huerta_confidence') | is_number }}"
+    actions:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.detect_huerta_confidence
+        data:
+          value: "{{ states('sensor.detect_huerta_confidence') | float }}"
+
+  # Aviso al móvil con el vídeo y la miniatura de cada clip nuevo. Viene
+  # desactivada: cambia notify.mobile_app_tu_movil por tu servicio de notify y
+  # actívala desde Ajustes -> Automatizaciones.
+  - id: detect_huerta_new_clip_notify
+    alias: "Detect huerta: aviso de clip nuevo"
+    initial_state: false
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: sensor.detect_huerta_last_clip
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.from_state is not none
+             and trigger.from_state.state not in ['unknown', 'unavailable']
+             and trigger.to_state.state not in ['unknown', 'unavailable', 'ninguno'] }}
+    actions:
+      - action: notify.mobile_app_tu_movil
+        data:
+          title: "Huerta"
+          message: >-
+            {% set labels = state_attr('sensor.detect_huerta_last_clip', 'labels') or {} %}
+            {{ labels.keys() | join(', ') if labels else 'Clip nuevo' }}
+            ({{ state_attr('sensor.detect_huerta_last_clip', 'duration_sec') | round(0) }} s)
+          data:
+            video: "http://{{ states('input_text.detect_host') }}:8080{{ state_attr('sensor.detect_huerta_last_clip', 'url') }}"
+            image: "http://{{ states('input_text.detect_host') }}:8080{{ state_attr('sensor.detect_huerta_last_clip', 'thumbnail_url') }}"

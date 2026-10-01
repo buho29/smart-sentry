@@ -1,0 +1,42 @@
+# Sección "Detect · servicio" para una vista de tipo sections. Pegar en: editar
+# panel -> Añadir sección -> menú ⋮ de la sección -> Editar en YAML.
+# Necesita packages/detect_servicio.yaml.
+type: grid
+cards:
+  - type: heading
+    heading: Detect · servicio
+    heading_style: title
+    icon: mdi:eye-circle
+  - type: tile
+    entity: switch.detect_service
+    name: Servicio
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: sensor.detect_service_uptime
+    name: En marcha
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: sensor.detect_disk_free
+    name: Disco libre
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: sensor.detect_clips_total
+    name: Clips ocupan
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: sensor.detect_clips_count
+    name: Clips
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: binary_sensor.detect_gl_keeper_active
+    name: GL keeper
+    grid_options: { columns: 6 }
+  - type: button
+    name: Reiniciar servicio
+    icon: mdi:restart
+    tap_action:
+      action: perform-action
+      perform_action: script.detect_service_restart
+      confirmation:
+        text: "¿Reiniciar el servicio detect? Las cámaras se cortan unos segundos."
+    grid_options: { columns: full, rows: 1 }

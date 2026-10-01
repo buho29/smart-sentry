@@ -1,0 +1,100 @@
+# Sección "Detect · torreta" para una vista de tipo sections, con cruceta y
+# sliders de pan/tilt. Pegar en: editar panel -> Añadir sección -> menú ⋮ de la
+# sección -> Editar en YAML. Necesita packages/detect_torreta.yaml y la cámara
+# MJPEG camera.detect_torreta (ver ../README.md).
+type: grid
+cards:
+  - type: heading
+    heading: Detect · torreta
+    heading_style: title
+    icon: mdi:crosshairs-gps
+  - type: picture-entity
+    entity: camera.detect_torreta
+    name: Torreta (YOLO)
+    camera_view: auto
+    show_state: false
+    # El mismo recuadro 4:3 que la huerta, para que midan lo mismo. La imagen de
+    # la torreta es vertical: contain la muestra entera, con bandas a los lados,
+    # en vez de recortar justo lo que la torreta está siguiendo.
+    aspect_ratio: "4:3"
+    fit_mode: contain
+    grid_options: { columns: full }
+  - type: tile
+    entity: switch.detect_torreta_follow
+    name: Seguimiento
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: binary_sensor.detect_torreta_servo_service
+    name: Servos
+    grid_options: { columns: 6 }
+
+  # Cruceta: pasos de 0.1 en unidades de servo (-1..1), y centrar.
+  - type: button
+    icon: mdi:arrow-up-bold
+    show_name: false
+    tap_action:
+      action: perform-action
+      perform_action: script.detect_torreta_step
+      data: { d_pan: 0, d_tilt: 0.1 }
+    grid_options: { columns: 4, rows: 1 }
+  - type: button
+    icon: mdi:arrow-left-bold
+    show_name: false
+    tap_action:
+      action: perform-action
+      perform_action: script.detect_torreta_step
+      data: { d_pan: -0.1, d_tilt: 0 }
+    grid_options: { columns: 4, rows: 1 }
+  - type: button
+    icon: mdi:image-filter-center-focus
+    show_name: false
+    tap_action:
+      action: perform-action
+      perform_action: script.detect_torreta_center
+    grid_options: { columns: 4, rows: 1 }
+  - type: button
+    icon: mdi:arrow-right-bold
+    show_name: false
+    tap_action:
+      action: perform-action
+      perform_action: script.detect_torreta_step
+      data: { d_pan: 0.1, d_tilt: 0 }
+    grid_options: { columns: 4, rows: 1 }
+  - type: button
+    icon: mdi:arrow-down-bold
+    show_name: false
+    tap_action:
+      action: perform-action
+      perform_action: script.detect_torreta_step
+      data: { d_pan: 0, d_tilt: -0.1 }
+    grid_options: { columns: 4, rows: 1 }
+
+  - type: tile
+    entity: input_number.detect_torreta_pan
+    name: Pan
+    features:
+      - type: numeric-input
+        style: slider
+    grid_options: { columns: full }
+  - type: tile
+    entity: input_number.detect_torreta_tilt
+    name: Tilt
+    features:
+      - type: numeric-input
+        style: slider
+    grid_options: { columns: full }
+  - type: tile
+    entity: switch.detect_torreta_camera
+    name: Cámara
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: switch.detect_torreta_boxes
+    name: Cajas en el stream
+    grid_options: { columns: 6 }
+  - type: tile
+    entity: input_number.detect_torreta_confidence
+    name: Confianza mínima
+    features:
+      - type: numeric-input
+        style: slider
+    grid_options: { columns: full }

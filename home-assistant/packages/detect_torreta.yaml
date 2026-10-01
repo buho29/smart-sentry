@@ -1,0 +1,382 @@
+# Package de Home Assistant: cámara "torreta" del servicio detect.
+#
+# Variante cámara + servos pan/tilt (firmware esphome/esp32-s3-cam-servo.yaml).
+# Para otra torreta: copia el fichero y reemplaza "torreta" por su camera_id
+# (en ids, URLs y nombres). Ver ../README.md.
+#
+# La IP del servicio sale de input_text.detect_host (detect_servicio.yaml).
+#
+# El vídeo no está aquí: la cámara MJPEG se añade desde la UI de HA con el
+# nombre "Detect torreta", para que quede como camera.detect_torreta.
+#
+# Posiciones de servo en las mismas unidades que la API: -1 = un extremo,
+# 0 = reposo, 1 = el otro. El servicio recorta cada orden a ±pan_limit /
+# ±tilt_limit, así que el slider puede pedir más de lo que luego se envía.
+
+rest_command:
+  detect_torreta_start:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/torreta/start"
+    method: post
+    timeout: 20
+  detect_torreta_stop:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/torreta/stop"
+    method: post
+    timeout: 20
+
+  detect_torreta_inference:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/torreta/config/inference"
+    method: post
+    content_type: "application/json"
+    payload: "{{ body | to_json }}"
+    timeout: 30
+
+  detect_torreta_stream:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/torreta/config/stream"
+    method: post
+    content_type: "application/x-www-form-urlencoded"
+    payload: "default_infer={{ 'true' if default_infer else 'false' }}"
+    timeout: 20
+
+  # Control manual directo. Funciona con el seguimiento encendido, pero el
+  # seguimiento la volverá a mover en cuanto vea algo.
+  detect_torreta_servo_move:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/torreta/servo"
+    method: post
+    content_type: "application/json"
+    payload: '{"pan": {{ pan | float(0) }}, "tilt": {{ tilt | float(0) }}}'
+    timeout: 10
+
+  # Config de la torreta (JSON, lo que no se manda se conserva).
+  detect_torreta_servo_config:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/torreta/config/servo"
+    method: post
+    content_type: "application/json"
+    payload: "{{ body | to_json }}"
+    timeout: 20
+
+rest:
+  - resource_template: "http://{{ states('input_text.detect_host') }}:8080/cameras/torreta/status"
+    scan_interval: 10
+    timeout: 10
+    binary_sensor:
+      - name: "Detect torreta running"
+        unique_id: detect_torreta_running
+        device_class: running
+        value_template: "{{ value_json.running }}"
+      - name: "Detect torreta esphome"
+        unique_id: detect_torreta_esphome
+        device_class: connectivity
+        value_template: "{{ value_json.esphome_connected | default(false, true) }}"
+      - name: "Detect torreta annotated"
+        unique_id: detect_torreta_annotated
+        value_template: "{{ value_json.config.default_infer }}"
+      - name: "Detect torreta always infer"
+        unique_id: detect_torreta_always_infer
+        value_template: "{{ value_json.config.always_infer }}"
+      # Seguimiento automático encendido.
+      - name: "Detect torreta tracking"
+        unique_id: detect_torreta_tracking
+        value_template: "{{ value_json.consumers.get('ServoTracker', {}).get('enabled', false) }}"
+      # Si la placa publica el servicio de servos. Apagado con la placa
+      # conectada = firmware sin servos: la torreta no se moverá.
+      - name: "Detect torreta servo service"
+        unique_id: detect_torreta_servo_service
+        device_class: connectivity
+        value_template: "{{ value_json.consumers.get('ServoTracker', {}).get('servo_service', false) }}"
+    sensor:
+      - name: "Detect torreta fps"
+        unique_id: detect_torreta_fps
+        unit_of_measurement: "fps"
+        state_class: measurement
+        value_template: "{{ value_json.pipeline_fps }}"
+      - name: "Detect torreta inference"
+        unique_id: detect_torreta_inference_ms
+        unit_of_measurement: "ms"
+        state_class: measurement
+        value_template: "{{ value_json.last_inference_ms | round(1) if value_json.last_inference_ms is not none else 0 }}"
+      - name: "Detect torreta corrupt frames"
+        unique_id: detect_torreta_corrupt_frames
+        state_class: total_increasing
+        icon: mdi:image-broken-variant
+        value_template: "{{ value_json.corrupt_frames }}"
+      - name: "Detect torreta clients"
+        unique_id: detect_torreta_clients
+        icon: mdi:account-eye
+        value_template: "{{ value_json.clients }}"
+        # Los binary_sensor de rest no admiten atributos: los de la cámara van aquí.
+        json_attributes:
+          - explicit_start
+          - manual_stop
+          - last_frame_time
+      - name: "Detect torreta confidence"
+        unique_id: detect_torreta_confidence
+        icon: mdi:target
+        value_template: "{{ value_json.config.confidence }}"
+        json_attributes_path: "$.config"
+        json_attributes:
+          - model_name
+          - device
+          - imgsz
+          - classes
+          - rotation
+      # Última posición enviada (la real, ya recortada a los límites).
+      - name: "Detect torreta pan"
+        unique_id: detect_torreta_pan
+        icon: mdi:pan-horizontal
+        value_template: "{{ value_json.consumers.get('ServoTracker', {}).get('pan', 0) }}"
+        # Estado del seguimiento (los binary_sensor de rest no admiten atributos).
+        json_attributes_path: "$.consumers.ServoTracker"
+        json_attributes:
+          - service
+          - target_id
+          - last_target
+          - sends
+          - transition_sec
+          - auto_detach_sec
+      - name: "Detect torreta tilt"
+        unique_id: detect_torreta_tilt
+        icon: mdi:pan-vertical
+        value_template: "{{ value_json.consumers.get('ServoTracker', {}).get('tilt', 0) }}"
+
+template:
+  - switch:
+      - name: "Detect torreta camera"
+        unique_id: detect_torreta_camera_switch
+        icon: mdi:cctv
+        state: "{{ is_state('binary_sensor.detect_torreta_running', 'on') }}"
+        turn_on:
+          - action: rest_command.detect_torreta_start
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_torreta_running
+        turn_off:
+          - action: rest_command.detect_torreta_stop
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_torreta_running
+
+      # Seguimiento automático. Apagado, la torreta se queda quieta pero sigue
+      # obedeciendo al control manual.
+      - name: "Detect torreta follow"
+        unique_id: detect_torreta_follow_switch
+        icon: mdi:crosshairs-gps
+        state: "{{ is_state('binary_sensor.detect_torreta_tracking', 'on') }}"
+        turn_on:
+          - action: rest_command.detect_torreta_servo_config
+            data:
+              body: { enabled: true }
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_torreta_running
+        turn_off:
+          - action: rest_command.detect_torreta_servo_config
+            data:
+              body: { enabled: false }
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_torreta_running
+
+      - name: "Detect torreta boxes"
+        unique_id: detect_torreta_boxes_switch
+        icon: mdi:vector-rectangle
+        state: "{{ is_state('binary_sensor.detect_torreta_annotated', 'on') }}"
+        turn_on:
+          - action: rest_command.detect_torreta_stream
+            data:
+              default_infer: true
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_torreta_running
+        turn_off:
+          - action: rest_command.detect_torreta_stream
+            data:
+              default_infer: false
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_torreta_running
+
+      - name: "Detect torreta detect always"
+        unique_id: detect_torreta_detect_always_switch
+        icon: mdi:radar
+        state: "{{ is_state('binary_sensor.detect_torreta_always_infer', 'on') }}"
+        turn_on:
+          - action: rest_command.detect_torreta_inference
+            data:
+              body: { always_infer: true }
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_torreta_running
+        turn_off:
+          - action: rest_command.detect_torreta_inference
+            data:
+              body: { always_infer: false }
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_torreta_running
+
+input_number:
+  detect_torreta_confidence:
+    name: "Detect torreta confianza"
+    icon: mdi:target
+    min: 0.05
+    max: 0.95
+    step: 0.05
+    mode: slider
+  detect_torreta_pan:
+    name: "Detect torreta pan"
+    icon: mdi:pan-horizontal
+    min: -1
+    max: 1
+    step: 0.05
+    mode: slider
+  detect_torreta_tilt:
+    name: "Detect torreta tilt"
+    icon: mdi:pan-vertical
+    min: -1
+    max: 1
+    step: 0.05
+    mode: slider
+
+script:
+  # Mueve la torreta a una posición absoluta y refresca los sensores.
+  detect_torreta_move:
+    alias: "Detect torreta: mover"
+    icon: mdi:arrow-all
+    mode: restart
+    fields:
+      pan:
+        description: "-1 a 1"
+        example: 0
+      tilt:
+        description: "-1 a 1"
+        example: 0
+    sequence:
+      - action: rest_command.detect_torreta_servo_move
+        data:
+          pan: "{{ [[pan | float(0), -1] | max, 1] | min }}"
+          tilt: "{{ [[tilt | float(0), -1] | max, 1] | min }}"
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.detect_torreta_pan
+
+  # Un paso relativo desde la posición actual, para los botones de flecha.
+  detect_torreta_step:
+    alias: "Detect torreta: paso"
+    icon: mdi:arrow-decision
+    mode: queued
+    fields:
+      d_pan:
+        description: "Incremento horizontal"
+        example: 0.1
+      d_tilt:
+        description: "Incremento vertical"
+        example: 0
+    sequence:
+      - action: script.detect_torreta_move
+        data:
+          pan: "{{ states('sensor.detect_torreta_pan') | float(0) + d_pan | default(0) | float }}"
+          tilt: "{{ states('sensor.detect_torreta_tilt') | float(0) + d_tilt | default(0) | float }}"
+
+  detect_torreta_center:
+    alias: "Detect torreta: centrar"
+    icon: mdi:image-filter-center-focus
+    mode: restart
+    sequence:
+      - action: script.detect_torreta_move
+        data:
+          pan: 0
+          tilt: 0
+
+automation:
+  # Sliders -> torreta. Solo manda si el slider difiere de la posición que
+  # reporta el servicio: así la sincronización de abajo (y el propio
+  # seguimiento moviendo la torreta) no provoca órdenes de rebote.
+  - id: detect_torreta_slider_move
+    alias: "Detect torreta: mover con los sliders"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id:
+          - input_number.detect_torreta_pan
+          - input_number.detect_torreta_tilt
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ (states('input_number.detect_torreta_pan') | float(0)
+              - states('sensor.detect_torreta_pan') | float(0)) | abs > 0.02
+             or (states('input_number.detect_torreta_tilt') | float(0)
+              - states('sensor.detect_torreta_tilt') | float(0)) | abs > 0.02 }}
+    actions:
+      # Espera a que se suelte el slider antes de mandar.
+      - delay: "00:00:00.5"
+      - action: script.detect_torreta_move
+        data:
+          pan: "{{ states('input_number.detect_torreta_pan') | float(0) }}"
+          tilt: "{{ states('input_number.detect_torreta_tilt') | float(0) }}"
+
+  # Torreta -> sliders.
+  - id: detect_torreta_slider_sync
+    alias: "Detect torreta: sincronizar sliders"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id:
+          - sensor.detect_torreta_pan
+          - sensor.detect_torreta_tilt
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ states('sensor.detect_torreta_pan') | is_number
+             and states('sensor.detect_torreta_tilt') | is_number }}
+    actions:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.detect_torreta_pan
+        data:
+          value: "{{ states('sensor.detect_torreta_pan') | float }}"
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.detect_torreta_tilt
+        data:
+          value: "{{ states('sensor.detect_torreta_tilt') | float }}"
+
+  - id: detect_torreta_confidence_push
+    alias: "Detect torreta: enviar confianza"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_number.detect_torreta_confidence
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ (states('input_number.detect_torreta_confidence') | float(0)
+              - states('sensor.detect_torreta_confidence') | float(0)) | abs > 0.001 }}
+    actions:
+      - delay: "00:00:01"
+      - action: rest_command.detect_torreta_inference
+        data:
+          body:
+            confidence: "{{ states('input_number.detect_torreta_confidence') | float }}"
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.detect_torreta_confidence
+
+  - id: detect_torreta_confidence_sync
+    alias: "Detect torreta: sincronizar confianza"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: sensor.detect_torreta_confidence
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: template
+        value_template: "{{ states('sensor.detect_torreta_confidence') | is_number }}"
+    actions:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.detect_torreta_confidence
+        data:
+          value: "{{ states('sensor.detect_torreta_confidence') | float }}"

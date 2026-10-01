@@ -290,6 +290,10 @@ delante con `POST /recordings/sweep` y `dry_run=true`.
 
 ## Desde Home Assistant
 
+Lo de esta sección, ya montado como package (sensor del último clip, interruptor
+de grabar, aviso al móvil) y con su tarjeta, está en
+[`home-assistant/`](../../home-assistant/). Abajo, el mecanismo suelto.
+
 HA corre en otra máquina, así que consume los clips por HTTP. El último clip de
 una cámara:
 
