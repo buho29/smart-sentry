@@ -15,7 +15,7 @@ fijado a 5V → servos MG90S, con `GND` común (combinación 3 más abajo).
 
 | Módulo / chip | Tipo | Corriente real utilizable | Consumo con el regulador habilitado, sin carga | Consumo si se corta con su propio pin | ¿El breakout expone ese pin? | Rol recomendado |
 | --- | --- | --- | --- | --- | --- | --- |
-| **[MT3608](mt3608-boost-converter.md)** | Boost puro | ~0.8-1A sostenidos (el "2A" del rótulo es optimista) | 100-200µA en PFM (carga ligera) a 1.6-2.2mA en PWM | No aplica — el chip no tiene pin EN | No | Riel de servos **pico/MG90S** si no se necesita cortar la alimentación por software |
+| **[MT3608](mt3608-boost-converter.md)** | Boost puro | ~0.8-1A sostenidos (el "2A" del rótulo es optimista) | 100-200µA en PFM (carga ligera) a 1.6-2.2mA en PWM | No aplica — el chip no tiene pin EN | No | Riel de servos **MF90/MG90S** si no se necesita cortar la alimentación por software |
 | **[XL6009](xl6009-boost-converter.md)** | Boost/buck-boost/inversor | ~1-1.5A con módulo genérico (aunque el rótulo diga 4A) | **2.5-5mA** — el peor de los tres módulos "de trimpot" | 70-100µA con EN=0V, pero el breakout típico no saca ese pin a ningún pad | No (chip sí tiene EN, el módulo no lo expone) | Riel de servos **detrás de un MOSFET externo** ([IRLZ44N](irlz44n-mosfet.md)) que corte el consumo en deep sleep, ver la ficha del XL6009 |
 | **[TPS63020](tps63020-buck-boost.md)** | Buck-boost | ~1.5A real (el "2A" del datasheet es optimista con 1S descargada) | **~25µA** en modo Power Save | **<1µA** con EN a nivel bajo | Sí, normalmente como pad `EN` | Riel de **lógica/cámara** a **3.3V**, directo al pin `3V3` de la ESP32-S3-CAM (saltando el AMS1117) — carga constante y predecible, y buck-boost en su rango ideal alrededor de 3.3V |
 | **[TPS61088](tps61088-boost-converter.md)** | Boost síncrono | **10A de switch** (mucho margen sobre los picos de servos, ~4.2A con dos DS3218MG) | **~100-250µA** (1-3µA por VIN + 110-250µA por el divisor de feedback en VOUT) | **1-3µA** con EN a nivel bajo | Sí — el chip tiene pull-down interno en EN (por defecto apagado si flota), así que el módulo *tiene* que exponerlo para poder funcionar; hay módulos reales en venta (p. ej. [este de AliExpress](https://es.aliexpress.com/item/1005009535413093.html)) | Mejor candidato para el riel de **servos** sin necesitar el MOSFET externo — sustituye a la combinación XL6009+IRLZ44N con un único componente |
@@ -37,7 +37,7 @@ fijado a 5V → servos MG90S, con `GND` común (combinación 3 más abajo).
 
 ## Combinaciones consideradas para este proyecto
 
-1. **TPS63020 (lógica) + MT3608 (servos pico/MG90S), ambos siempre
+1. **TPS63020 (lógica) + MT3608 (servos MF90/MG90S), ambos siempre
    encendidos.** Sencillo, pero el MT3608 deja un consumo residual de
    0.1-2.2mA continuo en el riel de servos durante todo el sueño.
 2. **TPS63020 (lógica) + XL6009 (servos) detrás de un IRLZ44N.** Es la
