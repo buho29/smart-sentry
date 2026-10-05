@@ -76,12 +76,18 @@ presupuestar, no la corriente en movimiento libre:
 | Servo | Corriente de stall (aprox.) | 2 servos a la vez |
 | --- | --- | --- |
 | **SG90** | ~650-800mA; en movimiento normal ~100-250mA | ~1.3-1.6 A |
-| **Miuzei MF90 / MG90S** | **~700-900mA medidos**, según reportes de usuarios en foros de Arduino/RC ([fuente 1](https://www.kpower.com/insight_bldc/7870.html/), [fuente 2](https://forum.arduino.cc/t/how-to-power-mg90s-motors-and-arduino-nano/1001853)); en movimiento normal (no forzado) ronda 120-250mA | **~1.4-1.8 A** |
+| **Miuzei MF90** (montado) | **~0.55A medidos** frenándolo a mano a 5.2V (medición propia; la tensión cae ≤0.01V, así que la fuente no la limita) | **~1.1 A** |
+| MG90S genérico | ~700-900mA, según reportes de usuarios en foros de Arduino/RC ([fuente 1](https://www.kpower.com/insight_bldc/7870.html/), [fuente 2](https://forum.arduino.cc/t/how-to-power-mg90s-motors-and-arduino-nano/1001853)); en movimiento normal (no forzado) ronda 120-250mA | ~1.4-1.8 A |
 | **DS3218MG** | **~2.1A a 5V** (hasta 2.9A a 6.8V, según datasheet DSSERVO) | **~4.2 A** |
 
 A eso hay que sumarle el consumo de la propia placa: la ESP32-S3 puede dar
 picos de varios cientos de mA en la entrada de 5V durante una transmisión
 Wi-Fi o una captura de cámara.
+
+Medida de conjunto con el MF90, todo alimentado por USB con un cargador de
+5.19V: **placa + un servo bloqueado = 0.7A**. Con los dos bloqueados a la vez
+serían ~0.15 + 2 × 0.55 ≈ **1.25A**: no cabe en un USB de PC (0.5-0.9A), sí
+en un cargador de 2A.
 
 **Conclusión práctica:**
 
@@ -103,6 +109,49 @@ Wi-Fi o una captura de cámara.
   amortiguar picos cortos, pero no sustituye a dimensionar la fuente para la
   corriente de stall real.
 
+## Ruido en la imagen y condensador de los servos
+
+**Síntoma:** bandas horizontales en el vídeo mientras el PWM de los servos
+está activo, que desaparecen en cuanto actúa el auto-detach. Mientras
+sujeta la posición, el servo da un tirón de corriente en cada pulso (50 veces
+por segundo); los 5V bajan, el bajón pasa por el AMS1117 y los XC6206 hasta
+el sensor, y el rolling shutter (la cámara lee fila a fila) lo convierte en
+bandas.
+
+**Arreglo probado:** dos condensadores en paralelo entre V+ y GND de los
+servos, lo más cerca posible del punto donde se separan los cables del pan y
+del tilt:
+
+- **Electrolítico de 470-1000µF**, 10V o más. Tiene polaridad: la pata larga
+  (+) a V+ y la de la franja (−) a GND.
+- **Cerámico de 100nF**, marcado "104", sin polaridad. Los 104 baratos pueden
+  medir 40-70nF con el polímetro y valen igual.
+
+Resultado: vídeo sin bandas.
+
+Los saltos de dirección de ±30° en movimiento, que no registraban ni Python
+ni ESPHome, tenían probablemente el mismo origen (bajones de tensión o GND
+compartida que deforman el pulso que lee el servo). **Los condensadores no
+bastan contra ellos:** con los MF90, servos y placa en el mismo 5V/USB y los
+dos condensadores puestos, siguen saliendo tirones, sobre todo en el pan.
+Solo aparecen con el PWM activo; con los servos en auto-detach, no.
+
+Descartado: GPIO47 a 1.8V (eso solo pasa en las S3 de la serie "V", como
+N8R8V; esta placa es N16R8 y el pin va a 3.3V) y un choque de timers LEDC con
+el XCLK de la cámara (ver el comentario de `output:` en
+`esp32-s3-cam-servo.yaml`).
+
+Pendiente, por este orden:
+
+1. Con "Servo auto detach" a 0, comparar los tirones con el stream abierto y
+   con el stream cerrado. Si salen solo con el stream, la causa son los picos
+   de consumo.
+2. Alimentar los servos con un 5V propio, uniendo la GND con la de la placa
+   en un único punto.
+3. Si aún quedan tirones: cable de señal corto y trenzado con su GND, una
+   resistencia de 220-470Ω en serie y, en último caso, un buffer a 5V
+   (74AHCT125).
+
 ## Consumo si no se corta la alimentación durante el deep sleep
 
 Las cifras de arriba son el pico de stall — lo que hay que presupuestar para
@@ -113,7 +162,7 @@ moverse**.
 
 | Servo | Idle/reposo según fabricante (banco, sin carga) |
 | --- | --- |
-| **Miuzei MF90 / MG90S** | ~5-6mA con la electrónica en reposo sin corregir posición; sube a ~70-90mA en cuanto corrige activamente sin carga externa ([fuente](https://www.kpower.com/insight_bldc/7870.html/)) |
+| **Miuzei MF90 / MG90S** | ~5-6mA con la electrónica en reposo sin corregir posición; sube a ~70-90mA en cuanto corrige activamente sin carga externa ([fuente](https://www.kpower.com/insight_bldc/7870.html/)). Medida propia del conjunto con dos MF90 parados: **0.165A** por USB, casi todo de la placa con la cámara transmitiendo |
 | **DS3218MG / DS3225MG** | ~4-5mA "detenido" (idle), según datasheet DSSERVO, medido en banco sin carga externa |
 
 **El matiz importante:** esa cifra de datasheet es de banco, sin carga
