@@ -8,7 +8,9 @@ registry.py.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import re
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -52,6 +54,35 @@ from registry import (
     save_cameras_to_disk,
 )
 from servo_tracker import ServoConfig, ServoTracker
+
+
+# ---------------------------------------------------------------------------
+# Log de accesos sin el sondeo de Home Assistant
+# ---------------------------------------------------------------------------
+# HA pide /status de cada cámara cada 10 s, la imagen fija (/snapshot, o
+# /stream si la cámara MJPEG no tiene URL de imagen fija) cada ~10 s con un
+# dashboard abierto, y /config y /recordings cada minuto. Eso son 6-8 líneas
+# cada 10 s que tapan lo que importa. Se descartan solo los GET de esas rutas
+# que han ido bien; los POST/DELETE, los errores y el resto de GET se siguen
+# registrando. Va aquí y no como --no-access-log en la línea de comandos
+# porque eso se llevaría también los POST.
+_POLLING_PATH = re.compile(
+    r"^/(cameras/[^/]+/(status|snapshot|stream)|config|recordings(/stats)?)$")
+
+
+class _SkipPollingAccessLog(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        # uvicorn pasa (cliente, método, ruta con query, versión http, código)
+        try:
+            _, method, path, _, status = record.args
+            if method == "GET" and int(status) < 400:
+                return not _POLLING_PATH.match(path.split("?", 1)[0])
+        except (TypeError, ValueError):
+            pass
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_SkipPollingAccessLog())
 
 
 # ---------------------------------------------------------------------------

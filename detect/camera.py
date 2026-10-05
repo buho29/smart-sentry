@@ -1163,6 +1163,18 @@ class CameraSession:
                     use_infer = self.cfg.default_infer if mode == "follow" else (mode == "true")
                     jpg = self._latest_annotated_jpeg if use_infer else self._latest_raw_jpeg
                 if jpg is None:
+                    # yield vacío y no `continue`: este generador es síncrono y
+                    # Starlette corre cada next() en el threadpool de AnyIO (40
+                    # hilos). Con `continue`, una cámara sin frames (dormida,
+                    # caída) dejaba el next() girando aquí para siempre: el hilo
+                    # no vuelve nunca, Starlette no puede cancelarlo aunque el
+                    # cliente se vaya, y el finally no corre. HA abre el stream
+                    # cada pocos segundos para sacar la imagen fija, así que en
+                    # un rato se agotaban los 40 hilos y NINGÚN stream de
+                    # ninguna cámara arrancaba. Un trozo vacío no escribe nada
+                    # en el socket pero devuelve el hilo en ~1s (el timeout de
+                    # arriba) y deja a Starlette cerrar si el cliente se fue.
+                    yield b""
                     continue
                 yield (
                     b"--frame\r\n"
