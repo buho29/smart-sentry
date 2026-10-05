@@ -20,7 +20,6 @@ ganancia baja y no necesita calibración.
 from __future__ import annotations
 
 import time
-from collections import deque
 from typing import Optional
 
 from pydantic import BaseModel
@@ -51,20 +50,12 @@ class ServoConfig(BaseModel):
     # ruido de la caja, que en una persona quieta baila más de un 6% entre
     # frames.
     deadzone: float = 0.08
-    # Tiempo mínimo entre envíos. En el modo por pasos (latency_sec=0) tiene
-    # que dar tiempo a que el servo llegue y a que la imagen lo refleje (0.2-
-    # 0.42 s medidos hasta el primer cambio): si no, se corrige otra vez el
-    # mismo error y la torreta se pasa. Con la placa interpolando (number
-    # "Servo transition") cada paso es una rampa suave, no un golpe.
+    # Tiempo mínimo entre envíos. Tiene que dar tiempo a que el servo llegue y
+    # a que la imagen lo refleje (0.2-0.42 s medidos hasta el primer cambio):
+    # si no, se corrige otra vez el mismo error y la torreta se pasa. Con la
+    # placa interpolando (number "Servo transition") cada paso es una rampa
+    # suave, no un golpe.
     min_interval_sec: float = 0.6
-    # Modo continuo (avanzado): retardo de la IMAGEN, desde que la cámara está
-    # en una posición hasta que el frame sale de YOLO. Si es > 0, el error de
-    # un frame se corrige desde la posición simulada de hace este tiempo, y se
-    # puede bajar min_interval_sec mucho. Pero depende de acertar el retardo y
-    # la velocidad de la placa a la vez: con un servo lento y el valor a ojo
-    # oscilaba. 0 = modo por pasos, corrigiendo desde la orden actual (el
-    # estable).
-    latency_sec: float = 0.0
     # Según cómo quede montado cada servo, corregir "a la derecha" puede ser
     # sumar o restar. Se ajusta aquí en vez de recompilando el firmware.
     invert_pan: bool = False
@@ -102,7 +93,9 @@ class ServoConfig(BaseModel):
     # dirección en la que se mueve. 0 = sin anticipar, el de por defecto: con
     # una persona cerca y sentada, su balanceo natural se colaba como
     # velocidad (decenas de px/s) y la anticipación lo amplificaba en una
-    # oscilación. Útil solo para objetivos que cruzan la imagen andando.
+    # oscilación. Útil solo para objetivos que cruzan la imagen andando. Solo
+    # actúa si el objetivo ya está fuera de la zona muerta: uno centrado no
+    # mueve la torreta aunque ande.
     lead_sec: float = 0.0
 
 
@@ -123,15 +116,10 @@ _CLIPPED_EDGE_ERROR = 0.4
 _BOARD_TRANSITION = "servo_transition"
 _BOARD_AUTO_DETACH = "servo_auto_detach"
 
-# Cuánto historial de órdenes se guarda: de sobra para cualquier latency_sec
-# razonable.
-_HISTORY_SEC = 3.0
-
 # Máximo que se aleja una orden del seguimiento de la anterior, por eje y en
-# giro de cámara (se multiplica por el gear_ratio del eje). Red
-# de seguridad por si el modelo de retardo no cuadra con la placa: sin ella,
-# un latency_sec o una velocidad de placa equivocados daban saltos de 0.5 que
-# deshacían medio movimiento. A 10 órdenes/s no frena el seguimiento.
+# giro de cámara (se multiplica por el gear_ratio del eje). Red de seguridad
+# contra una ganancia alta o un error grande: ningún frame puede mandar un
+# salto que deje al objetivo fuera de la imagen.
 _MAX_STEP = 0.15
 
 # Saltos a partir de los cuales se deja constancia en el log, para poder
@@ -254,14 +242,6 @@ class ServoTracker:
         self._last_seen: float = 0.0
         self._last_send: float = 0.0
         self._sends = 0
-        # Órdenes enviadas (instante, pan, tilt) de los últimos segundos, para
-        # saber dónde estaba la torreta cuando se tomó cada frame.
-        self._history: deque[tuple[float, float, float]] = deque()
-        # Estado simulado antes de lo que queda en _history: (instante,
-        # posición pan, posición tilt, orden pan, orden tilt). Se avanza al
-        # podar para que la simulación no dependa de lo ya descartado.
-        self._history_base: tuple[float, float, float, float, float] = (
-            0.0, self.pan, self.tilt, self.pan, self.tilt)
         # Último objetivo sobre el que se calculó una corrección, para /status.
         self.last_target: Optional[dict] = None
         # Velocidad horizontal del objetivo en px/s, medida solo con la cámara
@@ -360,12 +340,6 @@ class ServoTracker:
         self.pan = pan
         self.tilt = tilt
         self._last_send = now
-        self._history.append((now, pan, tilt))
-        while self._history and now - self._history[0][0] > _HISTORY_SEC:
-            ts, p, ti = self._history.popleft()
-            t0, pp, pt, cp, ct = self._history_base
-            pp, pt = self._advance(pp, pt, cp, ct, ts - t0)
-            self._history_base = (ts, pp, pt, p, ti)
         # La cámara se va a mover: las posiciones de antes y de después no son
         # comparables para medir velocidad.
         self._still_sample = None
@@ -389,41 +363,14 @@ class ServoTracker:
         return float(value) if isinstance(value, (int, float)) else None
 
     def _transition_sec(self) -> tuple[float, str]:
-        """Tiempo de recorrido completo de la placa y de dónde sale. Solo vive
-        en la placa (number "Servo transition"); si no lo publica se supone 0,
-        que es lo que hace un servo sin ese ajuste: saltar a cada orden."""
+        """Tiempo de recorrido completo de la placa y de dónde sale, para
+        /status. Solo vive en la placa (number "Servo transition"); si no lo
+        publica se supone 0, que es lo que hace un servo sin ese ajuste:
+        saltar a cada orden."""
         board = self._board_setting(_BOARD_TRANSITION)
         if board is not None:
             return board, "placa"
         return 0.0, "sin dato"
-
-    def _advance(self, pp: float, pt: float, cp: float, ct: float,
-                 dt: float) -> tuple[float, float]:
-        """Posición tras `dt` segundos yendo de (pp, pt) hacia la orden
-        (cp, ct) a la velocidad de interpolación de la placa."""
-        transition, _ = self._transition_sec()
-        if transition <= 0:
-            return cp, ct
-        d = max(0.0, dt) * 2.0 / transition
-        return (pp + max(-d, min(d, cp - pp)),
-                pt + max(-d, min(d, ct - pt)))
-
-    def _position_at(self, t: float) -> tuple[float, float]:
-        """Posición real simulada de la torreta en el instante `t`.
-
-        Recorre el historial de órdenes: entre una y la siguiente, la placa
-        avanza hacia la vigente a velocidad constante ("Servo transition"), así
-        que la posición real va por detrás de la ordenada. Suponer que la
-        cámara ya estaba en la última orden hacía corregir desde un punto
-        equivocado y deshacer medio movimiento.
-        """
-        t0, pp, pt, cp, ct = self._history_base
-        for ts, p, ti in self._history:
-            if ts > t:
-                break
-            pp, pt = self._advance(pp, pt, cp, ct, ts - t0)
-            t0, cp, ct = ts, p, ti
-        return self._advance(pp, pt, cp, ct, t - t0)
 
     def _measure_velocity(self, target: Detection) -> None:
         """Actualiza la velocidad horizontal del objetivo con este frame.
@@ -470,8 +417,9 @@ class ServoTracker:
 
         # Error normalizado a [-1, 1]: independiente de la resolución, así que
         # cambiar imgsz o la resolución de la cámara no descalibra la ganancia.
-        ex = (target.cx + lead_px - width / 2) / (width / 2)
-        ey = (target.cy - height / 2) / (height / 2)
+        ex_now = (target.cx - width / 2) / (width / 2)
+        ex = ex_now + lead_px / (width / 2)
+        ey =(target.cy - height / 2) / (height / 2)
 
         # Centrar, pero ir a por el borde por el que se sale el objetivo: el de
         # arriba siempre (la cabeza); los laterales solo si la caja es
@@ -495,8 +443,12 @@ class ServoTracker:
         }
 
         # Zona muerta por eje: un eje ya centrado no se mueve aunque el otro
-        # tenga que corregir, o perseguiría el ruido de la caja.
-        if abs(ex) < self.cfg.deadzone:
+        # tenga que corregir, o perseguiría el ruido de la caja. En el pan se
+        # mira la posición de AHORA, sin anticipación: con alguien cerca el
+        # balanceo pasa de _MIN_LEAD_SPEED y la anticipación sacaba de la zona
+        # muerta a una persona centrada. Fuera de ella sí se anticipa.
+        if abs(ex) < self.cfg.deadzone or \
+                (cut_x is None and abs(ex_now) < self.cfg.deadzone):
             ex = 0.0
         if abs(ey) < self.cfg.deadzone:
             ey = 0.0
@@ -510,23 +462,15 @@ class ServoTracker:
         if self.cfg.invert_tilt:
             step_tilt = -step_tilt
 
-        # Modo por pasos (latency_sec=0): se corrige desde la orden actual.
-        # Modo continuo (> 0): el error es de un frame tomado hace latency_sec
-        # y se corrige desde la posición simulada de entonces, para que los
-        # frames que aún no reflejan la última orden no sumen el mismo error
-        # una y otra vez. En los dos, un eje sin error se queda donde está.
-        if self.cfg.latency_sec > 0:
-            pan_then, tilt_then = self._position_at(time.monotonic() - self.cfg.latency_sec)
-        else:
-            # La orden, no la simulación: con la placa interpolando, la
-            # posición simulada de "ahora" va a medio camino, y partir de ahí
-            # desharía parte de la última orden.
-            pan_then, tilt_then = self.pan, self.tilt
+        # Se corrige desde la orden actual, no desde donde va la torreta: con
+        # la placa interpolando, la posición real va a medio camino, y partir
+        # de ahí desharía parte de la última orden. Un eje sin error se queda
+        # donde está.
         # El signo por defecto asume una torreta que mira hacia delante: si el
         # objetivo aparece a la derecha de la imagen, la cámara tiene que girar
         # hacia ese lado, lo que en el montaje de referencia es restar pan.
-        new_pan = pan_then - step_pan if ex else self.pan
-        new_tilt = tilt_then + step_tilt if ey else self.tilt
+        new_pan = self.pan - step_pan if ex else self.pan
+        new_tilt = self.tilt + step_tilt if ey else self.tilt
         # El tope va en giro de CÁMARA: con reducción, el servo tiene que girar
         # más para lo mismo.
         max_pan = _MAX_STEP * self.cfg.pan_gear_ratio

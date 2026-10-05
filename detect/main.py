@@ -548,8 +548,7 @@ class ServoConfigUpdate(BaseModel):
     service: Optional[str] = Field(None, description="Cómo se llama en el YAML de la placa el servicio (api: services:) que mueve la torreta. Solo hay que tocarlo si tu firmware lo nombra distinto.")
     gain: Optional[float] = Field(None, gt=0.0, le=1.0, description="Fracción del error que se corrige en cada envío. Más alto = más rápido, pero con riesgo de pasarse del objetivo y oscilar. Por defecto 0.15.")
     deadzone: Optional[float] = Field(None, ge=0.0, le=1.0, description="Error por debajo del cual un eje se considera centrado y NO se mueve. Sin zona muerta el servo tiembla persiguiendo el ruido de la caja. Por defecto 0.08.")
-    min_interval_sec: Optional[float] = Field(None, gt=0.0, description="Tiempo mínimo entre órdenes. En el modo por pasos (latency_sec=0) tiene que dar tiempo a que el servo llegue y la imagen lo refleje, o la torreta se pasa. Si tarda en reaccionar, bájalo un poco. Por defecto 0.6 s.")
-    latency_sec: Optional[float] = Field(None, ge=0.0, le=2.0, description="Avanzado. 0 = modo por pasos, el estable: corrige desde la orden actual. Mayor que 0 = modo continuo: corrige desde donde estaba la torreta hace este tiempo y permite bajar mucho min_interval_sec, pero hay que acertar el retardo o oscila. Por defecto 0.")
+    min_interval_sec: Optional[float] = Field(None, gt=0.0, description="Tiempo mínimo entre órdenes. Tiene que dar tiempo a que el servo llegue y la imagen lo refleje, o la torreta se pasa. Si tarda en reaccionar, bájalo un poco. Por defecto 0.6 s.")
     transition_sec: Optional[float] = Field(None, ge=0.0, le=5.0, description="Ajuste de la PLACA, no se guarda aquí: lo que tardan los servos en recorrer todo el rango (-1 a +1), o sea su suavidad. Se manda al number 'Servo transition' (lo mismo que cambiarlo en HA). 0 = salto directo.")
     auto_detach_sec: Optional[float] = Field(None, ge=0.0, le=30.0, description="Segundos quieto tras los que la placa corta el PWM del servo (menos zumbido y calor). Solo vive en la placa (number 'Servo auto detach'): no se guarda aquí. 0 = no soltar nunca.")
     invert_pan: Optional[bool] = Field(None, description="Invertir el sentido horizontal, según cómo haya quedado montado el servo.")
@@ -562,7 +561,7 @@ class ServoConfigUpdate(BaseModel):
     home_pan: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Posición de reposo horizontal: -1 y 1 son los extremos, 0 el centro.")
     home_tilt: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Posición de reposo vertical.")
     return_home_on_lost: Optional[bool] = Field(None, description="Al perder el objetivo, ¿volver a reposo? Por defecto no: suele interesar más quedarse mirando por donde se perdió, que es por donde reaparecerá.")
-    lead_sec: Optional[float] = Field(None, ge=0.0, le=3.0, description="Anticipación horizontal en segundos: se apunta a donde estará el objetivo según su velocidad, así la torreta va por delante y queda más aire en la dirección en la que se mueve. Solo para objetivos que cruzan andando: con alguien cerca y quieto, su balanceo se toma por velocidad y oscila. 0 = sin anticipar. Por defecto 0.")
+    lead_sec: Optional[float] = Field(None, ge=0.0, le=3.0, description="Anticipación horizontal en segundos: se apunta a donde estará el objetivo según su velocidad, así la torreta va por delante y queda más aire en la dirección en la que se mueve. Solo para objetivos que cruzan andando: con alguien cerca y quieto, su balanceo se toma por velocidad y oscila. Solo actúa si el objetivo ya está fuera de la zona muerta. 0 = sin anticipar. Por defecto 0.")
 
 
 @app.post("/cameras/{camera_id}/config/servo")

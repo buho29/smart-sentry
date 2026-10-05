@@ -74,9 +74,6 @@ def det(cx, cy, track_id=1, label="person", width=40, height=80):
 def make_tracker(**kwargs):
     """Tracker con rate limit desactivado salvo que el test lo pida."""
     kwargs.setdefault("min_interval_sec", 0.0)
-    # Sin retardo: los tests simulan un lazo en el que cada orden se ve en el
-    # frame siguiente. La compensación del retardo tiene sus propios tests.
-    kwargs.setdefault("latency_sec", 0.0)
     board = FakeBoard()
     return ServoTracker(ServoConfig(**kwargs), board, camera_id="test"), board
 
@@ -197,16 +194,22 @@ check("con la cámara quieta mide la velocidad hacia la derecha",
 t._last_send = time.monotonic() - 10
 t.cfg = t.cfg.model_copy(update={"min_interval_sec": 0.0})
 t.on_detections([det(cx=W / 2 + 10, cy=H / 2)], W, H)   # casi centrado
-lead_cmd = t._esphome.commands[-1] if t._esphome.commands else None
-check("y apunta por delante: casi centrado ya gira hacia la derecha",
-      lead_cmd and lead_cmd[0] * right[0] > 0, f"({lead_cmd} vs {right})")
+check("casi centrado no se mueve aunque ande: la zona muerta va sin anticipar",
+      t._esphome.commands == [], f"({t._esphome.commands})")
 
+# Fuera de la zona muerta (ex 0.125 > 0.08) sí se anticipa.
+OFF = 40
+t.on_detections([det(cx=W / 2 + OFF, cy=H / 2)], W, H)
+lead_cmd = t._esphome.commands[-1] if t._esphome.commands else None
 t0, _ = walk_right(lead_sec=0.0)
 t0._last_send = time.monotonic() - 10
 t0.cfg = t0.cfg.model_copy(update={"min_interval_sec": 0.0})
-t0.on_detections([det(cx=W / 2 + 10, cy=H / 2)], W, H)
-check("lead_sec=0: casi centrado no se mueve", t0._esphome.commands == [],
-      f"({t0._esphome.commands})")
+t0.on_detections([det(cx=W / 2 + OFF, cy=H / 2)], W, H)
+plain_cmd = t0._esphome.commands[-1] if t0._esphome.commands else None
+check("descentrado y andando: gira hacia la derecha más que sin anticipar",
+      lead_cmd and plain_cmd and lead_cmd[0] * right[0] > 0
+      and abs(lead_cmd[0]) > abs(plain_cmd[0]),
+      f"({lead_cmd} vs sin anticipar {plain_cmd})")
 
 # Estirar el brazo: solo se mueve el borde derecho, el cuerpo sigue quieto.
 t, _ = make_tracker(min_interval_sec=100.0)
@@ -224,11 +227,12 @@ t, _ = walk_right()
 t._vx_at = time.monotonic() - 2.0          # la última medida es de hace 2 s
 t.cfg = t.cfg.model_copy(update={"min_interval_sec": 0.0})
 t._last_send = time.monotonic()            # cámara moviéndose: no se mide nada nuevo
-n_before = len(t._esphome.commands)
-t.on_detections([det(cx=W / 2 + 10, cy=H / 2)], W, H)
-check("una velocidad vieja caduca: casi centrado ya no se anticipa",
-      len(t._esphome.commands) == n_before and t._vx == 0.0,
-      f"({t._esphome.commands[n_before:]}, vx={t._vx})")
+t.on_detections([det(cx=W / 2 + OFF, cy=H / 2)], W, H)
+expected = -t.cfg.gain * OFF / (W / 2)     # el paso de sin anticipar
+check("una velocidad vieja caduca: el paso es el de sin anticipar",
+      t._esphome.commands and abs(t._esphome.commands[-1][0] - expected) < 1e-9
+      and t._vx == 0.0,
+      f"({t._esphome.commands[-1:]}, esperado {expected:.4f}, vx={t._vx})")
 
 t, _ = walk_right()
 t._release_target()
@@ -273,68 +277,37 @@ t.move_to(0.5, 0.5)
 check("el control manual sí salta el rate limit", len(board.commands) == 2)
 check("y manda lo pedido", board.commands[-1] == (0.5, 0.5), f"({board.commands[-1]})")
 
-print("\n=== 4a. Compensación del retardo (latency_sec) ===")
-# La imagen tarda en reflejar una orden: varios frames seguidos traen el mismo
-# error. Sin compensar, cada uno sumaría otro paso sobre la posición actual.
-G = 0.2   # pasos por debajo del tope por orden, para comparar valores exactos
-t, board = make_tracker(latency_sec=0.2, gain=G)
-for _ in range(4):
-    t.on_detections([det(cx=W * 0.8, cy=H / 2)], W, H)
-pans = [p for p, _ in board.commands]
-check("frames con el mismo error antes de que se vea la orden no se acumulan",
-      len(set(round(p, 9) for p in pans)) == 1, f"({pans})")
-t_inc, board_inc = make_tracker(latency_sec=0.0, gain=G)
-for _ in range(4):
-    t_inc.on_detections([det(cx=W * 0.8, cy=H / 2)], W, H)
-check("(sin compensar sí se acumulaban)",
-      abs(board_inc.commands[-1][0]) > abs(pans[-1]) * 3,
-      f"({board_inc.commands[-1][0]:.3f} vs {pans[-1]:.3f})")
-
-time.sleep(0.25)   # ya pasó el retardo: la imagen refleja la primera orden
-t.on_detections([det(cx=W * 0.6, cy=H / 2)], W, H)
-first = pans[0]   # = -gain * 0.6 (ex del primer frame)
-expected = first - G * 0.2   # desde `first`, con el ex nuevo (0.2)
-check("pasado el retardo corrige desde la posición ordenada entonces",
-      abs(board.commands[-1][0] - expected) < 1e-9,
-      f"({board.commands[-1][0]:.3f}, esperado {expected:.3f})")
-
-t, board = make_tracker(latency_sec=0.2, gain=G)
-t.on_detections([det(cx=W / 2, cy=H * 0.8)], W, H)        # mueve solo el tilt
-tilt_moved = board.commands[-1][1]
-t.on_detections([det(cx=W * 0.8, cy=H / 2)], W, H)        # ahora solo el pan
-check("un eje sin error se queda donde está (no vuelve a la posición de entonces)",
-      board.commands[-1][1] == tilt_moved, f"({board.commands[-1]} vs tilt {tilt_moved})")
-
-print("\n=== 4a2. Posición simulada con la interpolación de la placa ===")
-# La velocidad solo vive en la placa (number servo_transition).
+print("\n=== 4a. Velocidad de la placa y corrección desde la orden ===")
+# La velocidad solo vive en la placa (number servo_transition); aquí solo se
+# muestra en /status.
 t, b = make_tracker()
 b.set_number("servo_transition", 1.0)
-t._history.append((100.0, 0.5, 0.0))          # orden 0 -> 0.5 en t=100
-p01, _ = t._position_at(100.1)
-p03, _ = t._position_at(100.3)
-check("a los 0.1 s la placa va por 0.2 (2 unidades/s)", abs(p01 - 0.2) < 1e-9, f"({p01})")
-check("a los 0.3 s ya ha llegado a 0.5", abs(p03 - 0.5) < 1e-9, f"({p03})")
-check("y /status dice que el valor viene de la placa",
+check("/status dice que el valor viene de la placa",
       t.status()["transition_sec"] == 1.0 and t.status()["transition_source"] == "placa",
       f"({t.status()['transition_sec']}, {t.status()['transition_source']})")
 t, _ = make_tracker()
-t._history.append((100.0, 0.5, 0.0))
 check("sin el number en la placa se supone salto directo",
-      t._position_at(100.01)[0] == 0.5 and t.status()["transition_sec"] == 0.0
-      and t.status()["transition_source"] == "sin dato")
+      t.status()["transition_sec"] == 0.0 and t.status()["transition_source"] == "sin dato")
 
-# Modo por pasos con la placa interpolando despacio: corrige desde la ORDEN,
-# no desde la posición simulada (que va a medio camino y desharía la orden).
+# Con la placa interpolando despacio: corrige desde la ORDEN, no desde la
+# posición real (que va a medio camino y desharía la orden).
 t, b = make_tracker(gain=0.1)
 b.set_number("servo_transition", 2.0)
 t.on_detections([det(cx=W * 0.8, cy=H / 2)], W, H)
 t.on_detections([det(cx=W * 0.8, cy=H / 2)], W, H)
 p1, p2 = b.commands[-2][0], b.commands[-1][0]
-check("latency_sec=0 con transición lenta: incremental sobre la orden anterior",
+check("con transición lenta: incremental sobre la orden anterior",
       abs(p2 - 2 * p1) < 1e-9, f"({p1:.3f}, {p2:.3f})")
 
-# Tope por orden: un modelo que no cuadra no puede dar saltos de 0.5.
-t, board = make_tracker(latency_sec=0.2, gain=0.9)
+t, board = make_tracker(gain=0.2)
+t.on_detections([det(cx=W / 2, cy=H * 0.8)], W, H)        # mueve solo el tilt
+tilt_moved = board.commands[-1][1]
+t.on_detections([det(cx=W * 0.8, cy=H / 2)], W, H)        # ahora solo el pan
+check("un eje sin error se queda donde está",
+      board.commands[-1][1] == tilt_moved, f"({board.commands[-1]} vs tilt {tilt_moved})")
+
+# Tope por orden: ni con ganancia alta se dan saltos de 0.5.
+t, board = make_tracker(gain=0.9)
 t.on_detections([det(cx=W * 0.95, cy=H / 2)], W, H)
 check("ninguna orden del seguimiento se aleja más de 0.15 de la anterior",
       abs(board.commands[-1][0]) <= 0.15 + 1e-9, f"({board.commands[-1]})")

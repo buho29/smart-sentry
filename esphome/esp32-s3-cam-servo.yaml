@@ -137,7 +137,7 @@ logger:
 # Los valores de aquí son solo los de arranque: los pisan en on_boot los number
 # "Servo transition" y "Servo auto detach" (más abajo), que se cambian en
 # caliente desde HA o desde el servicio (POST /config/servo) sin compilar. El
-# servicio Python lee "Servo transition" para simular dónde está la cámara.
+# servicio Python lee "Servo transition" para mostrarlo en /status.
 # -----------------------------------------------------------------------------
 output:
   - platform: ledc
@@ -404,8 +404,8 @@ number:
 
   # Tiempo de recorrido completo (-1 -> +1) de los dos servos, en caliente. Es
   # el transition_length del bloque servo: sin compilar. 0 = salto directo.
-  # El servicio Python lo lee (object_id servo_transition) para simular dónde
-  # estaba la cámara en cada frame.
+  # El servicio Python lo lee (object_id servo_transition) para mostrarlo en
+  # /status.
   - platform: template
     name: "Servo transition"
     id: servo_transition

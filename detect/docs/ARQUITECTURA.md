@@ -859,6 +859,9 @@ Primer consumidor: mueve una torreta pan/tilt para centrar un objetivo.
   vuelve a 0 con cada objetivo nuevo y **caduca** al segundo sin medida nueva:
   con órdenes continuas la cámara casi nunca está quieta para medir, y sin
   caducidad la última velocidad quedaba congelada como un sesgo fijo. Solo en pan: en vertical manda la cabeza.
+  La zona muerta se evalúa sobre la posición actual, sin anticipación: un
+  objetivo centrado no mueve la torreta aunque ande, y la anticipación solo se
+  suma cuando ya hay que corregir.
   El motivo de las líneas `salto` lleva `lead=±Npx` cuando se anticipó.
 - **Diagnóstico**: cada enganche se registra con clase, confianza y posición
   (`servo: objetivo #N (person 0.83) en (x, y) de WxH`), y cada envío que mueve
@@ -870,29 +873,27 @@ Primer consumidor: mueve una torreta pan/tilt para centrar un objetivo.
   zona no se mueve, aunque el otro tenga que corregir; con los dos dentro no se
   envía nada. Sin ella el servo tiembla sin parar persiguiendo el ruido de la
   caja, que en una persona quieta baila más de un 6% entre frames.
-- **Dos modos de control**, según `latency_sec`. Entre una orden y la imagen
-  que la refleja pasa el retardo del pipeline (MJPEG de la placa + cola + YOLO):
-  medido en la torreta del servo, el primer cambio llega a 0.2–0.42 s.
-  - **Por pasos** (`latency_sec=0`, el de por defecto, con
-    `min_interval_sec=0.6`): cada orden corrige `gain × error` desde la orden
-    actual, y se espera a que el servo llegue y la imagen lo refleje antes de
-    la siguiente. Si se manda antes, el mismo error se corrige varias veces y
-    la torreta se pasa (con `gain=0.25` y 0.08 s se desbocaba hasta el tope).
-    Con la placa interpolando ("Servo transition", p. ej. 2 s) cada paso es una
-    rampa suave; con `transition_length: 0s` se veía a tirones.
-  - **Continuo** (`latency_sec > 0`, avanzado): se corrige desde la **posición
-    simulada** de hace `latency_sec` (historial de órdenes, `_position_at`),
-    así que los frames que aún no reflejan la última orden no suman el mismo
-    error y se puede mandar a 10 Hz. Pero depende de acertar a la vez el
-    retardo y la velocidad de la placa: con un servo lento y el retardo a ojo,
-    la posición de entonces quedaba lejos de la actual y cada orden rebotaba.
+- **Control por pasos.** Entre una orden y la imagen que la refleja pasa el
+  retardo del pipeline (MJPEG de la placa + cola + YOLO): medido en la torreta
+  del servo, el primer cambio llega a 0.2–0.42 s. Cada orden corrige
+  `gain × error` desde la orden actual, y se espera `min_interval_sec` (0.6 s)
+  a que el servo llegue y la imagen lo refleje antes de la siguiente. Si se
+  manda antes, el mismo error se corrige varias veces y la torreta se pasa
+  (con `gain=0.25` y 0.08 s se desbocaba hasta el tope). Con la placa
+  interpolando ("Servo transition", p. ej. 2 s) cada paso es una rampa suave;
+  con `transition_length: 0s` se veía a tirones.
+
+  Hubo un modo continuo (`latency_sec`) que corregía desde la posición
+  simulada de la torreta para poder mandar a 10 Hz. Se quitó: dependía de
+  acertar a la vez el retardo y la velocidad de la placa, y con valores a ojo
+  oscilaba.
 
   La velocidad de interpolación **solo vive en la placa**: el number "Servo
-  transition" (`servo_transition`, leído con `EsphomeController.get_state`).
-  Si el firmware no lo publica se supone 0 (salto directo). `transition_sec`
-  en `POST /config/servo` solo lo manda a la placa, no se guarda en
-  `ServoConfig`; `/status` muestra el valor en uso y `transition_source`. Un
-  eje sin error se queda donde está. Como red de seguridad, ninguna orden del
+  transition" (`servo_transition`, leído con `EsphomeController.get_state`)
+  y se lee solo para mostrarlo. `transition_sec` en `POST /config/servo` solo
+  lo manda a la placa, no se guarda en `ServoConfig`; `/status` muestra el
+  valor en uso y `transition_source` (0 y "sin dato" si el firmware no lo
+  publica). Un eje sin error se queda donde está. Como red de seguridad, ninguna orden del
   seguimiento se aleja más de 0.15 de giro de cámara de la anterior
   (`_MAX_STEP` × `gear_ratio`). El control manual (`move_to`) salta el
   intervalo a propósito.

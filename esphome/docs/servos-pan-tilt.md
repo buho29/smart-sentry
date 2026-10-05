@@ -235,7 +235,7 @@ corta el PWM estando quietos (`auto_detach_time`) se ajustan sin compilar con
 los number de configuración "Servo transition" y "Servo auto detach" (desde
 Home Assistant o desde `POST /cameras/{id}/config/servo` del servicio). Los
 valores del bloque `servo:` del YAML son solo los de arranque. El servicio
-Python lee "Servo transition" para saber a qué velocidad se mueve la cámara.
+Python lee "Servo transition" para mostrarlo en `/status`.
 
 ## Notas de integración
 
