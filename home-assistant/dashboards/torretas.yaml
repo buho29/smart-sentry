@@ -1,0 +1,146 @@
+# Vista "Torretas": la torreta de detect y la placa ESP32-S3-cam-servo en una
+# sola pantalla compacta, con el estilo de la vista esp32-cam (mod-card,
+# slider-entity-row, mushroom). Pegar en: editar panel -> Añadir vista ->
+# menú ⋮ -> Editar en YAML.
+#
+# Necesita packages/detect_torreta.yaml, la cámara MJPEG camera.detect_torreta
+# (ver ../README.md) y las tarjetas de HACS card-mod, slider-entity-row y
+# mushroom. Las entidades number./select./button.dormitorio_* son las que
+# publica esphome/esp32-s3-cam-servo.yaml con el nombre de dispositivo de este HA.
+type: sections
+max_columns: 2
+title: Torretas
+path: torretas
+icon: mdi:crosshairs-gps
+sections:
+  # Izquierda: imagen y mando.
+  - type: grid
+    cards:
+      - type: picture-entity
+        entity: camera.detect_torreta
+        show_name: false
+        show_state: false
+        camera_view: auto
+        # La imagen de la torreta es vertical: contain la muestra entera.
+        aspect_ratio: "4:3"
+        fit_mode: contain
+        grid_options: { columns: full }
+
+      - type: grid
+        columns: 5
+        square: false
+        grid_options: { columns: full }
+        cards:
+          - { type: button, entity: switch.detect_torreta_record, name: Grabar, show_state: false, icon_height: 28px, tap_action: { action: toggle } }
+          - { type: button, entity: switch.detect_torreta_auto_record, name: Auto-grabar, show_state: false, icon_height: 28px, tap_action: { action: toggle } }
+          - { type: button, entity: switch.detect_torreta_follow, name: Seguir, show_state: false, icon_height: 28px, tap_action: { action: toggle } }
+          - { type: button, entity: switch.detect_torreta_boxes, name: Cajas, show_state: false, icon_height: 28px, tap_action: { action: toggle } }
+          - { type: button, entity: switch.detect_torreta_camera, name: Cámara, show_state: false, icon_height: 28px, tap_action: { action: toggle } }
+
+      # Cruceta en una fila (pasos de 0.1) y sliders de posición.
+      - type: custom:mod-card
+        grid_options: { columns: full }
+        card_mod:
+          style: |
+            ha-card{
+              padding:16px;
+              background: var(--mod-card-background);
+              border: var(--mod-card-border);
+              box-shadow: var(--mod-card-shadow);
+            }
+        card:
+          type: vertical-stack
+          cards:
+            - type: grid
+              columns: 5
+              square: false
+              cards:
+                - { type: button, icon: mdi:arrow-left-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: -0.1, d_tilt: 0 } } }
+                - { type: button, icon: mdi:arrow-up-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0, d_tilt: 0.1 } } }
+                - { type: button, icon: mdi:image-filter-center-focus, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_center } }
+                - { type: button, icon: mdi:arrow-down-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0, d_tilt: -0.1 } } }
+                - { type: button, icon: mdi:arrow-right-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0.1, d_tilt: 0 } } }
+            - { type: custom:slider-entity-row, entity: input_number.detect_torreta_pan, name: Pan, icon: mdi:pan-horizontal }
+            - { type: custom:slider-entity-row, entity: input_number.detect_torreta_tilt, name: Tilt, icon: mdi:pan-vertical }
+
+      # Miniatura del último clip; al pulsarla se abre el MP4. Si HA va por
+      # https, el navegador bloquea estas URLs http (mixed content).
+      - type: markdown
+        grid_options: { columns: full }
+        content: >-
+          {% set c = 'sensor.detect_torreta_last_clip' %}{% set base = 'http://' ~ states('input_text.detect_host') ~ ':8080' %}{% if states(c) in ['ninguno', 'unknown', 'unavailable'] %}Sin clips todavía.{% else %}{% set labels = state_attr(c, 'labels') or {} %}<table><tr><td><a href="{{ base }}{{ state_attr(c, 'url') }}" target="_blank"><img src="{{ base }}{{ state_attr(c, 'thumbnail_url') }}" width="120"></a></td><td><b>Último clip</b><br>{{ (state_attr(c, 'started_at') | float(0)) | timestamp_custom('%d/%m %H:%M') }} · {{ state_attr(c, 'duration_sec') | round(0) | int }} s · {{ state_attr(c, 'trigger') }}<br>{% if labels %}{% for k, v in labels.items() %}{{ k }} ×{{ v }}{{ ', ' if not loop.last }}{% endfor %}{% else %}sin etiquetas{% endif %}</td></tr></table>{% endif %}
+
+  # Derecha: ajustes de detección, servos y cámara.
+  - type: grid
+    cards:
+      - type: custom:mod-card
+        grid_options: { columns: full }
+        card_mod:
+          style: |
+            ha-card{
+              padding:16px;
+              background: var(--mod-card-background);
+              border: var(--mod-card-border);
+              box-shadow: var(--mod-card-shadow);
+            }
+        card:
+          type: vertical-stack
+          cards:
+            - { type: heading, heading: Detección, heading_style: title, icon: mdi:brain }
+            - type: entities
+              show_header_toggle: false
+              card_mod: &flat
+                style: |
+                  ha-card {
+                    background: none;
+                    box-shadow: none;
+                    border: none;
+                    padding: 0;
+                  }
+                  .card-content {
+                    padding: 0 !important;
+                  }
+              entities:
+                - { entity: input_select.detect_torreta_model, name: Modelo }
+                - { entity: input_select.detect_torreta_imgsz, name: imgsz }
+            # Clases marcables; el último chip enseña el array que tiene el servicio.
+            - type: custom:mushroom-chips-card
+              chips:
+                - { type: template, entity: input_boolean.detect_torreta_class_person, icon: mdi:human, content: Personas, icon_color: "{{ 'blue' if is_state(entity, 'on') else 'disabled' }}", tap_action: { action: toggle } }
+                - { type: template, entity: input_boolean.detect_torreta_class_bird, icon: mdi:bird, content: Pájaros, icon_color: "{{ 'blue' if is_state(entity, 'on') else 'disabled' }}", tap_action: { action: toggle } }
+                - { type: template, entity: input_boolean.detect_torreta_class_cat, icon: mdi:cat, content: Gatos, icon_color: "{{ 'blue' if is_state(entity, 'on') else 'disabled' }}", tap_action: { action: toggle } }
+                - { type: template, entity: input_boolean.detect_torreta_class_dog, icon: mdi:dog, content: Perros, icon_color: "{{ 'blue' if is_state(entity, 'on') else 'disabled' }}", tap_action: { action: toggle } }
+                - { type: template, entity: input_boolean.detect_torreta_class_car, icon: mdi:car, content: Coches, icon_color: "{{ 'blue' if is_state(entity, 'on') else 'disabled' }}", tap_action: { action: toggle } }
+                - type: template
+                  icon: mdi:code-brackets
+                  content: "{% set c = state_attr('sensor.detect_torreta_confidence', 'classes') %}{{ c if c is not none else 'todas' }}"
+            - { type: custom:slider-entity-row, entity: input_number.detect_torreta_confidence, name: Confianza, icon: mdi:target }
+
+            - { type: heading, heading: Servos, heading_style: title, icon: mdi:axis-arrow }
+            - { type: custom:slider-entity-row, entity: number.dormitorio_esp32_s3_cam_servo_servo_transition, name: Transición, icon: mdi:timer-outline }
+            - { type: custom:slider-entity-row, entity: number.dormitorio_esp32_s3_cam_servo_servo_smoothing, name: Suavizado, icon: mdi:sine-wave }
+            - { type: custom:slider-entity-row, entity: number.dormitorio_esp32_s3_cam_servo_servo_auto_detach, name: Auto detach, icon: mdi:power-plug-off-outline }
+
+            - { type: heading, heading: Cámara, heading_style: title, icon: mdi:camera }
+            - { type: custom:slider-entity-row, entity: number.dormitorio_esp32_s3_cam_cam_jpeg_quality, name: Calidad, icon: mdi:image-filter-hdr }
+            - { type: custom:slider-entity-row, entity: number.dormitorio_esp32_s3_cam_cam_max_framerate, name: Max FPS, icon: mdi:speedometer }
+            - { type: custom:slider-entity-row, entity: number.dormitorio_esp32_s3_cam_cam_xclk_mhz, name: XCLK, icon: mdi:sine-wave }
+            - { type: custom:slider-entity-row, entity: number.dormitorio_esp32_s3_cam_cam_ae_level, name: AE Level, icon: mdi:brightness-6 }
+            - { type: custom:slider-entity-row, entity: number.dormitorio_esp32_s3_cam_cam_agc_gain_ceiling, name: Gain Ceiling, icon: mdi:chart-line }
+            - type: entities
+              show_header_toggle: false
+              card_mod: *flat
+              entities:
+                - { entity: select.dormitorio_esp32_s3_cam_cam_resolution, name: Resolución }
+                - { entity: switch.dormitorio_esp32_s3_cam_cam_aec2, name: AEC2 }
+
+            # Diagnóstico en una fila: WiFi, temperatura, servicio de servos,
+            # servos a casa, reiniciar y Safe Mode (estos dos piden confirmación).
+            - type: custom:mushroom-chips-card
+              chips:
+                - { type: entity, entity: sensor.dormitorio_s3proxy2_wifi_signal_db, icon: mdi:wifi }
+                - { type: entity, entity: sensor.dormitorio_esp32_s3_cam_temperature }
+                - { type: entity, entity: binary_sensor.detect_torreta_servo_service, icon: mdi:axis-arrow, content_info: name, name: Servos }
+                - { type: action, icon: mdi:home-import-outline, tap_action: { action: perform-action, perform_action: button.press, target: { entity_id: button.dormitorio_esp32_s3_cam_servo_servos_home } } }
+                - { type: action, icon: mdi:restart, icon_color: red, tap_action: { action: perform-action, perform_action: button.press, target: { entity_id: button.dormitorio_s3proxy2_restart }, confirmation: { text: "¿Seguro que quieres reiniciar?" } } }
+                - { type: action, icon: mdi:power-cycle, icon_color: red, tap_action: { action: perform-action, perform_action: button.press, target: { entity_id: button.dormitorio_s3proxy2_safe_mode }, confirmation: { text: "¿Seguro que quieres entrar en Safe Mode?" } } }

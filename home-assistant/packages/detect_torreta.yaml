@@ -28,7 +28,20 @@ rest_command:
     method: post
     content_type: "application/json"
     payload: "{{ body | to_json }}"
-    timeout: 30
+    # Cambiar de modelo relanza la sesión y carga los pesos: tarda.
+    timeout: 60
+
+  # POST /config/recording es un form que sustituye la config de grabación
+  # entera (lo que no se manda vuelve al valor por defecto, y el de source es
+  # "annotated"). Por eso se reenvía todo lo que ya tiene, en `rec`, cambiando
+  # solo trigger_on_detection.
+  detect_torreta_recording_config:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/torreta/config/recording"
+    method: post
+    content_type: "application/x-www-form-urlencoded"
+    payload: >-
+      enabled={{ 'true' if rec.enabled else 'false' }}&source={{ rec.source }}&trigger_on_detection={{ 'true' if trigger else 'false' }}&min_hits={{ rec.min_hits }}&pre_roll_sec={{ rec.pre_roll_sec }}&post_roll_sec={{ rec.post_roll_sec }}&max_clip_sec={{ rec.max_clip_sec }}&min_clip_sec={{ rec.min_clip_sec }}&cooldown_sec={{ rec.cooldown_sec }}{% if rec.fps is not none %}&fps={{ rec.fps }}{% endif %}
+    timeout: 20
 
   detect_torreta_stream:
     url: "http://{{ states('input_text.detect_host') }}:8080/cameras/torreta/config/stream"
@@ -45,6 +58,19 @@ rest_command:
     content_type: "application/json"
     payload: '{"pan": {{ pan | float(0) }}, "tilt": {{ tilt | float(0) }}}'
     timeout: 10
+
+  # Graba a mano, con el pre-roll que hubiera. Necesita que la cámara tenga
+  # grabación configurada (POST /cameras/torreta/config/recording).
+  detect_torreta_record_start:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/torreta/record/start"
+    method: post
+    content_type: "application/x-www-form-urlencoded"
+    payload: "note={{ note | default('Home Assistant') | urlencode }}"
+    timeout: 10
+  detect_torreta_record_stop:
+    url: "http://{{ states('input_text.detect_host') }}:8080/cameras/torreta/record/stop"
+    method: post
+    timeout: 20
 
   # Config de la torreta (JSON, lo que no se manda se conserva).
   detect_torreta_servo_config:
@@ -83,6 +109,11 @@ rest:
         unique_id: detect_torreta_servo_service
         device_class: connectivity
         value_template: "{{ value_json.consumers.get('ServoTracker', {}).get('servo_service', false) }}"
+      - name: "Detect torreta recording"
+        unique_id: detect_torreta_recording
+        icon: mdi:record-rec
+        value_template: >-
+          {{ value_json.consumers.get('ClipRecorder', {}).get('state') == 'recording' }}
     sensor:
       - name: "Detect torreta fps"
         unique_id: detect_torreta_fps
@@ -119,6 +150,8 @@ rest:
           - imgsz
           - classes
           - rotation
+          # Config de grabación entera (null sin grabación configurada).
+          - recording
       # Última posición enviada (la real, ya recortada a los límites).
       - name: "Detect torreta pan"
         unique_id: detect_torreta_pan
@@ -137,6 +170,41 @@ rest:
         unique_id: detect_torreta_tilt
         icon: mdi:pan-vertical
         value_template: "{{ value_json.consumers.get('ServoTracker', {}).get('tilt', 0) }}"
+      # Si sube, el disco no da abasto y el clip tendrá saltos.
+      - name: "Detect torreta dropped frames"
+        unique_id: detect_torreta_dropped_frames
+        icon: mdi:filmstrip-off
+        value_template: "{{ value_json.consumers.get('ClipRecorder', {}).get('dropped_frames', 0) }}"
+        # Estado del grabador (sin grabación configurada, el sensor queda sin atributos).
+        json_attributes_path: "$.consumers.ClipRecorder"
+        json_attributes:
+          - state
+          - trigger
+          - current_clip
+          - elapsed_sec
+          - clips_written
+          - last_error
+
+  # El último clip terminado (los que se están grabando no salen hasta cerrarse).
+  - resource_template: "http://{{ states('input_text.detect_host') }}:8080/recordings?camera_id=torreta&limit=1"
+    scan_interval: 60
+    timeout: 20
+    sensor:
+      - name: "Detect torreta last clip"
+        unique_id: detect_torreta_last_clip
+        icon: mdi:filmstrip
+        value_template: "{{ value_json.clips[0].clip_id if value_json.clips else 'ninguno' }}"
+        json_attributes_path: "$.clips[0]"
+        json_attributes:
+          - clip_id
+          - url
+          - thumbnail_url
+          - trigger
+          - note
+          - started_at
+          - duration_sec
+          - labels
+          - max_conf
 
 template:
   - switch:
@@ -172,6 +240,49 @@ template:
           - action: rest_command.detect_torreta_servo_config
             data:
               body: { enabled: false }
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_torreta_running
+
+      - name: "Detect torreta record"
+        unique_id: detect_torreta_record_switch
+        icon: mdi:record-rec
+        state: "{{ is_state('binary_sensor.detect_torreta_recording', 'on') }}"
+        turn_on:
+          - action: rest_command.detect_torreta_record_start
+            data:
+              note: "Home Assistant"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_torreta_running
+        turn_off:
+          - action: rest_command.detect_torreta_record_stop
+          - action: homeassistant.update_entity
+            target:
+              entity_id:
+                - binary_sensor.detect_torreta_running
+                - sensor.detect_torreta_last_clip
+
+      # Grabar solo al detectar (trigger_on_detection). Apagado, la torreta
+      # solo graba a mano. Sin grabación configurada no está disponible.
+      - name: "Detect torreta auto record"
+        unique_id: detect_torreta_auto_record_switch
+        icon: mdi:record-circle-outline
+        availability: "{{ state_attr('sensor.detect_torreta_confidence', 'recording') is mapping }}"
+        state: "{{ (state_attr('sensor.detect_torreta_confidence', 'recording') or {}).get('trigger_on_detection', false) }}"
+        turn_on:
+          - action: rest_command.detect_torreta_recording_config
+            data:
+              rec: "{{ state_attr('sensor.detect_torreta_confidence', 'recording') }}"
+              trigger: true
+          - action: homeassistant.update_entity
+            target:
+              entity_id: binary_sensor.detect_torreta_running
+        turn_off:
+          - action: rest_command.detect_torreta_recording_config
+            data:
+              rec: "{{ state_attr('sensor.detect_torreta_confidence', 'recording') }}"
+              trigger: false
           - action: homeassistant.update_entity
             target:
               entity_id: binary_sensor.detect_torreta_running
@@ -236,6 +347,38 @@ input_number:
     max: 1
     step: 0.05
     mode: slider
+
+# Ajustes de detección. Cada uno se envía al cambiarlo y se resincroniza con
+# lo que reporta el servicio (automatizaciones de abajo).
+input_select:
+  detect_torreta_model:
+    name: "Detect torreta modelo"
+    icon: mdi:brain
+    options: [yolo26n, yolo26s, yolo26m, yolo11n, yolo11m]
+  detect_torreta_imgsz:
+    name: "Detect torreta imgsz"
+    icon: mdi:image-size-select-large
+    options: ["320", "480", "640", "960"]
+
+# Clases COCO que detecta: el array se monta con las casillas marcadas, y
+# ninguna marcada = todas las clases (classes: null). Una clase puesta desde
+# Swagger que no tenga casilla no se ve, y se pierde al tocar una casilla.
+input_boolean:
+  detect_torreta_class_person:
+    name: "Detect torreta personas"
+    icon: mdi:human
+  detect_torreta_class_car:
+    name: "Detect torreta coches"
+    icon: mdi:car
+  detect_torreta_class_bird:
+    name: "Detect torreta pájaros"
+    icon: mdi:bird
+  detect_torreta_class_cat:
+    name: "Detect torreta gatos"
+    icon: mdi:cat
+  detect_torreta_class_dog:
+    name: "Detect torreta perros"
+    icon: mdi:dog
 
 script:
   # Mueve la torreta a una posición absoluta y refresca los sensores.
@@ -380,3 +523,142 @@ automation:
           entity_id: input_number.detect_torreta_confidence
         data:
           value: "{{ states('sensor.detect_torreta_confidence') | float }}"
+
+  # Modelo e imgsz -> servicio. Solo manda lo que difiere de lo que reporta,
+  # para que la sincronización de abajo no provoque rebotes.
+  - id: detect_torreta_inference_push
+    alias: "Detect torreta: enviar modelo e imgsz"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: input_select.detect_torreta_model
+        id: model
+      - trigger: state
+        entity_id: input_select.detect_torreta_imgsz
+        id: imgsz
+    variables:
+      body: >-
+        {%- set s = 'sensor.detect_torreta_confidence' -%}
+        {%- set model = states('input_select.detect_torreta_model') -%}
+        {%- set imgsz = states('input_select.detect_torreta_imgsz') | int -%}
+        {%- if trigger.id == 'model' and model != state_attr(s, 'model_name') -%}
+        {{ {'model_name': model} }}
+        {%- elif trigger.id == 'imgsz' and imgsz != state_attr(s, 'imgsz') -%}
+        {{ {'imgsz': imgsz} }}
+        {%- else -%}
+        {{ {} }}
+        {%- endif -%}
+    conditions:
+      - condition: template
+        value_template: "{{ body | count > 0 }}"
+    actions:
+      - action: rest_command.detect_torreta_inference
+        data:
+          body: "{{ body }}"
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.detect_torreta_confidence
+
+  # Servicio -> desplegables. Un valor que no esté entre las opciones (un
+  # modelo puesto desde Swagger) deja el desplegable como está.
+  - id: detect_torreta_inference_sync
+    alias: "Detect torreta: sincronizar modelo e imgsz"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: sensor.detect_torreta_confidence
+        attribute: model_name
+      - trigger: state
+        entity_id: sensor.detect_torreta_confidence
+        attribute: imgsz
+      - trigger: homeassistant
+        event: start
+    variables:
+      model: "{{ state_attr('sensor.detect_torreta_confidence', 'model_name') }}"
+      # Las variables vuelven a número al renderizar: se pasa a texto al usarla.
+      imgsz: "{{ state_attr('sensor.detect_torreta_confidence', 'imgsz') }}"
+    actions:
+      - if: "{{ model in state_attr('input_select.detect_torreta_model', 'options') }}"
+        then:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.detect_torreta_model
+            data:
+              option: "{{ model }}"
+      - if: "{{ imgsz | string in state_attr('input_select.detect_torreta_imgsz', 'options') }}"
+        then:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.detect_torreta_imgsz
+            data:
+              option: "{{ imgsz | string }}"
+
+  # Casillas de clases -> servicio. Solo los cambios hechos a mano: los que hace
+  # la sincronización de abajo vienen de una automatización (parent_id) y no
+  # deben reenviarse, o se perderían las clases que no tienen casilla.
+  # El from/to deja fuera la creación de las casillas al recargar: nacen
+  # apagadas y, sin él, eso se mandaba como "todas las clases".
+  - id: detect_torreta_classes_push
+    alias: "Detect torreta: enviar clases"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id:
+          - input_boolean.detect_torreta_class_person
+          - input_boolean.detect_torreta_class_car
+          - input_boolean.detect_torreta_class_bird
+          - input_boolean.detect_torreta_class_cat
+          - input_boolean.detect_torreta_class_dog
+        from: ["on", "off"]
+        to: ["on", "off"]
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.to_state.context.parent_id is none }}"
+    actions:
+      # Agrupa varios clics seguidos en un solo envío.
+      - delay: "00:00:01"
+      - variables:
+          classes: >-
+            {%- set ids = {'person': 0, 'car': 2, 'bird': 14, 'cat': 15, 'dog': 16} -%}
+            {%- set ns = namespace(l=[]) -%}
+            {%- for k, v in ids.items() if is_state('input_boolean.detect_torreta_class_' ~ k, 'on') -%}
+            {%- set ns.l = ns.l + [v] -%}
+            {%- endfor -%}
+            {{ ns.l | sort if ns.l else none }}
+      - condition: template
+        value_template: "{{ classes != state_attr('sensor.detect_torreta_confidence', 'classes') }}"
+      - action: rest_command.detect_torreta_inference
+        data:
+          body:
+            classes: "{{ classes }}"
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.detect_torreta_confidence
+
+  # Servicio -> casillas. classes null (todas) = ninguna marcada.
+  - id: detect_torreta_classes_sync
+    alias: "Detect torreta: sincronizar clases"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: sensor.detect_torreta_confidence
+        attribute: classes
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: template
+        value_template: "{{ states('sensor.detect_torreta_confidence') | is_number }}"
+    variables:
+      classes: "{{ state_attr('sensor.detect_torreta_confidence', 'classes') or [] }}"
+    actions:
+      - repeat:
+          for_each:
+            - { key: person, id: 0 }
+            - { key: car, id: 2 }
+            - { key: bird, id: 14 }
+            - { key: cat, id: 15 }
+            - { key: dog, id: 16 }
+          sequence:
+            - action: "input_boolean.turn_{{ 'on' if repeat.item.id in classes else 'off' }}"
+              target:
+                entity_id: "input_boolean.detect_torreta_class_{{ repeat.item.key }}"

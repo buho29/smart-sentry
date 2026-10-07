@@ -230,12 +230,40 @@ mapeado por `servo.write`) — **cualquiera de los servos de arriba sirve
 igual a nivel de firmware**, es una cuestión puramente mecánica (tamaño del
 soporte) y de la fuente de alimentación.
 
-La velocidad de los servos (`transition_length`) y el tiempo tras el que se
-corta el PWM estando quietos (`auto_detach_time`) se ajustan sin compilar con
-los number de configuración "Servo transition" y "Servo auto detach" (desde
-Home Assistant o desde `POST /cameras/{id}/config/servo` del servicio). Los
-valores del bloque `servo:` del YAML son solo los de arranque. El servicio
-Python lee "Servo transition" para mostrarlo en `/status`.
+El movimiento no lo hace el `transition_length` de ESPHome (va a 0), que
+arranca y para a velocidad constante, de golpe. Lo hace un `interval` de
+20 ms que, por eje, lleva el servo hacia el objetivo en dos etapas:
+
+```
+mid += clamp(target - mid, ±vmax·dt)    vmax = 2 / "Servo transition"
+pos += (mid - pos) · k                  k = 1 - exp(-dt / "Servo smoothing")
+```
+
+La primera es un limitador de velocidad (lo que hacía la transición de
+antes); la segunda es la fórmula clásica de animación `x += (xfinal - x) / vel`,
+que frena suave. Juntas, la velocidad del servo nunca salta: ni al arrancar,
+ni al frenar, ni cuando llega una orden nueva a mitad de camino. Python sigue
+mandando solo el objetivo.
+
+Ajustes, sin compilar, con los number de configuración (desde Home Assistant o
+desde `POST /cameras/{id}/config/servo` del servicio):
+
+- **"Servo transition"**: velocidad máxima, como tiempo de recorrido completo
+  (-1 a +1). 0 = sin límite.
+- **"Servo smoothing"**: suavizado del arranque y la frenada (`tau`, hace ~95%
+  del camino en 3 `tau`). 0 = movimiento lineal, el de antes. Tiene que quedar
+  bastante por debajo del `min_interval_sec` del seguimiento (0.2 s): el
+  suavizado retrasa la torreta y, si se acerca al intervalo entre órdenes, el
+  lazo oscila. Por defecto 0.03 s.
+- **"Servo auto detach"**: segundos quieto tras los que se corta el PWM. El
+  interval deja de escribir al llegar, así que el auto-detach sigue
+  funcionando. Mientras el seguimiento tiene un objetivo no se aplica: el
+  servicio Python llama a la acción `set_servo_hold` (`hold: true`), que pone
+  el auto-detach a 0 sin tocar el number, y la repite cada 3 s. Con
+  `hold: false`, o a los 10 s sin refresco, vuelve el valor del number.
+
+Los valores del bloque `servo:` del YAML son solo los de arranque. El servicio
+Python lee los tres number para mostrarlos en `/status`.
 
 ## Notas de integración
 

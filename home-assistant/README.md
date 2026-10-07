@@ -18,6 +18,7 @@ home-assistant/
     detect_servicio.yaml    sección del servicio
     detect_huerta.yaml      sección de la huerta (vídeo, estado, último clip)
     detect_torreta.yaml     sección de la torreta (vídeo, cruceta, sliders)
+    torretas.yaml           vista compacta: torreta + ajustes de la ESP32-S3-cam-servo
 ```
 
 Hay un package por **variante de cámara**, igual que en el firmware hay un YAML
@@ -154,7 +155,11 @@ automation:
 
 ### `detect_torreta.yaml`
 
-Lo mismo que la huerta salvo la grabación, más la torreta:
+Lo mismo que la huerta, incluida la grabación a mano
+(`switch.detect_torreta_record`, `binary_sensor.detect_torreta_recording`,
+`sensor.detect_torreta_last_clip`), más la torreta. Igual que en la huerta, grabar
+necesita la grabación configurada en el servicio con
+`POST /cameras/{camera_id}/config/recording`:
 
 | Entidad | Qué es |
 | --- | --- |
@@ -166,6 +171,15 @@ Lo mismo que la huerta salvo la grabación, más la torreta:
 | `sensor.detect_torreta_pan` / `_tilt` | Última posición enviada, ya recortada a `pan_limit` / `tilt_limit` |
 | `binary_sensor.detect_torreta_servo_service` | Si la placa publica el servicio de servos. Apagado con la placa conectada = firmware sin servos |
 | `rest_command.detect_torreta_servo_move` / `_servo_config` | Para automatizaciones; `servo_config` admite cualquier campo de `/config/servo` en `body` |
+| `switch.detect_torreta_auto_record` | Grabar al detectar (`trigger_on_detection`). Apagado, solo graba a mano. Reenvía el resto de la config de grabación tal cual; sin grabación configurada no está disponible |
+| `input_select.detect_torreta_model` | Modelo YOLO (yolo26n/s/m, yolo11n/m). Cambiarlo relanza la sesión |
+| `input_select.detect_torreta_imgsz` | Lado de inferencia: 320, 480, 640 o 960 |
+| `input_boolean.detect_torreta_class_person` / `_car` / `_bird` / `_cat` / `_dog` | Clases COCO a detectar (0, 2, 14, 15, 16). `classes` se monta con las marcadas; ninguna marcada = todas las clases (`null`) |
+
+Los desplegables y las casillas se mandan al cambiarlos y se resincronizan con
+lo que reporta el servicio. Si desde Swagger se pone un modelo que no está
+entre las opciones, el desplegable se queda como estaba. Una clase sin casilla
+puesta desde Swagger no se ve, y se pierde en cuanto se toca una casilla.
 
 Por ejemplo, cambiar la ganancia del seguimiento desde una automatización:
 

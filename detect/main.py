@@ -467,6 +467,25 @@ async def set_inference_config(camera_id: str, body: InferenceConfig):
     return {"relaunched": relaunched, **session.status()}
 
 
+# Ajustes de /config/servo que viven en la placa: campo del body -> object_id
+# del number. No están en ServoConfig, así que el ejemplo los lee de la placa.
+_BOARD_SERVO_FIELDS = {
+    "transition_sec": "servo_transition",
+    "smoothing_sec": "servo_smoothing",
+    "auto_detach_sec": "servo_auto_detach",
+}
+
+
+def _board_servo_settings(session) -> dict:
+    """Valor actual de los ajustes de servo de la placa, para el ejemplo de
+    Swagger. Omite los que no publica (desconectada o firmware viejo)."""
+    esphome = getattr(session, "esphome", None)
+    if esphome is None:
+        return {}
+    values = {field: esphome.get_state(oid) for field, oid in _BOARD_SERVO_FIELDS.items()}
+    return {k: v for k, v in values.items() if isinstance(v, (int, float))}
+
+
 def _openapi_with_camera_examples():
     """Esquema OpenAPI regenerado en cada petición a /openapi.json, para que
     los bodies de /config/inference y /config/servo lleven como ejemplos los
@@ -481,7 +500,8 @@ def _openapi_with_camera_examples():
         "/cameras/{camera_id}/config/inference":
             lambda s: s.cfg.model_dump(include=inference_fields),
         "/cameras/{camera_id}/config/servo":
-            lambda s: (s.cfg.servo or ServoConfig()).model_dump(),
+            lambda s: {**(s.cfg.servo or ServoConfig()).model_dump(),
+                       **_board_servo_settings(s)},
     }
     with _cameras_lock:
         sessions = list(CAMERAS.items())
@@ -549,8 +569,9 @@ class ServoConfigUpdate(BaseModel):
     gain: Optional[float] = Field(None, gt=0.0, le=1.0, description="Fracción del error que se corrige en cada envío. Más alto = más rápido, pero con riesgo de pasarse del objetivo y oscilar. Por defecto 0.15.")
     deadzone: Optional[float] = Field(None, ge=0.0, le=1.0, description="Error por debajo del cual un eje se considera centrado y NO se mueve. Sin zona muerta el servo tiembla persiguiendo el ruido de la caja. Por defecto 0.08.")
     min_interval_sec: Optional[float] = Field(None, gt=0.0, description="Tiempo mínimo entre órdenes. Tiene que dar tiempo a que el servo llegue y la imagen lo refleje, o la torreta se pasa. Si tarda en reaccionar, bájalo un poco. Por defecto 0.6 s.")
-    transition_sec: Optional[float] = Field(None, ge=0.0, le=5.0, description="Ajuste de la PLACA, no se guarda aquí: lo que tardan los servos en recorrer todo el rango (-1 a +1), o sea su suavidad. Se manda al number 'Servo transition' (lo mismo que cambiarlo en HA). 0 = salto directo.")
-    auto_detach_sec: Optional[float] = Field(None, ge=0.0, le=30.0, description="Segundos quieto tras los que la placa corta el PWM del servo (menos zumbido y calor). Solo vive en la placa (number 'Servo auto detach'): no se guarda aquí. 0 = no soltar nunca.")
+    transition_sec: Optional[float] = Field(None, ge=0.0, le=5.0, description="Ajuste de la PLACA, no se guarda aquí: velocidad máxima de los servos, como tiempo de recorrido de todo el rango (-1 a +1). Se manda al number 'Servo transition' (lo mismo que cambiarlo en HA). 0 = sin límite.")
+    smoothing_sec: Optional[float] = Field(None, ge=0.0, le=0.5, description="Ajuste de la PLACA, no se guarda aquí: suavizado del arranque y la frenada (hace ~95% del camino en 3 veces este tiempo). Se manda al number 'Servo smoothing'. 0 = movimiento lineal, a golpes. Mantenerlo bastante por debajo de min_interval_sec o el seguimiento oscila. Por defecto 0.03.")
+    auto_detach_sec: Optional[float] = Field(None, ge=0.0, le=30.0, description="Segundos quieto tras los que la placa corta el PWM del servo (menos zumbido y calor). Solo vive en la placa (number 'Servo auto detach'): no se guarda aquí. 0 = no soltar nunca. Mientras el seguimiento tiene objetivo no se aplica: los servos sujetan siempre.")
     invert_pan: Optional[bool] = Field(None, description="Invertir el sentido horizontal, según cómo haya quedado montado el servo.")
     invert_tilt: Optional[bool] = Field(None, description="Invertir el sentido vertical.")
     pan_gear_ratio: Optional[float] = Field(None, gt=0.0, description="Relación de engranajes horizontal: dientes del engranaje de la cámara / dientes del del servo. 1 = servo directo. Por defecto 1.")
@@ -584,6 +605,7 @@ async def set_servo_config(camera_id: str, body: ServoConfigUpdate):
         changes["service"] = changes["service"].strip() or ServoConfig().service
     # Ajustes que solo viven en la placa: no son parte de ServoConfig.
     transition = changes.pop("transition_sec", None)
+    smoothing = changes.pop("smoothing_sec", None)
     auto_detach = changes.pop("auto_detach_sec", None)
     base = session.cfg.servo or ServoConfig()
     cfg = base.model_copy(update=changes)
@@ -595,13 +617,16 @@ async def set_servo_config(camera_id: str, body: ServoConfigUpdate):
               f"{'activado' if cfg.enabled else 'desactivado'}")
     save_cameras_to_disk()
 
-    # Velocidad y auto-detach van también a la placa, que es la que los
-    # aplica. `sent` dice si se pudieron mandar: False = placa desconectada o
+    # Velocidad, suavizado y auto-detach van también a la placa, que es la que
+    # los aplica. `sent` dice si se pudieron mandar: False = placa desconectada o
     # firmware sin esos number (entonces hay que flashear el YAML nuevo).
     board = {}
     if transition is not None:
         board["servo_transition"] = session.esphome.set_number(
             "servo_transition", transition)
+    if smoothing is not None:
+        board["servo_smoothing"] = session.esphome.set_number(
+            "servo_smoothing", smoothing)
     if auto_detach is not None:
         board["servo_auto_detach"] = session.esphome.set_number(
             "servo_auto_detach", auto_detach)

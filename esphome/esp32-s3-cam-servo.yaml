@@ -40,19 +40,18 @@ esphome:
   on_boot:
     priority: -100
     then:
-      # Velocidad y auto-detach restaurados de los number "Servo transition" y
-      # "Servo auto detach": restore_value recupera el valor pero no ejecuta su
-      # set_action al arrancar. Va antes de ir a reposo para que ese
-      # movimiento ya use la velocidad elegida.
+      # Auto-detach restaurado del number "Servo auto detach": restore_value
+      # recupera el valor pero no ejecuta su set_action al arrancar. La
+      # velocidad y el suavizado no hace falta: el interval de los servos lee
+      # sus number en cada pasada.
       - lambda: |-
-          uint32_t tl = (uint32_t) (id(servo_transition).state * 1000.0f);
           uint32_t ad = (uint32_t) (id(servo_auto_detach).state * 1000.0f);
-          id(servo_pan).set_transition_length(tl);
-          id(servo_tilt).set_transition_length(tl);
           id(servo_pan).set_auto_detach_time(ad);
           id(servo_tilt).set_auto_detach_time(ad);
       # Servos a reposo antes que nada: al arrancar, un servo sin señal se queda
       # donde lo dejó el apagón, y conviene partir de una posición conocida.
+      # Va directo y no por el interval: no se sabe dónde está, así que no hay
+      # desde dónde suavizar. Las globals ya arrancan a 0.
       - servo.write:
           id: servo_pan
           level: 0%
@@ -127,17 +126,31 @@ logger:
 #
 # auto_detach_time corta el PWM cuando el servo lleva un rato quieto: menos
 # zumbido, menos consumo y menos calentamiento del servo manteniendo posición.
+# Mientras el seguimiento tiene objetivo lo anula con `set_servo_hold` (ver
+# api), para no soltar la cámara con alguien centrado y quieto.
 #
-# transition_length es el tiempo de recorrido COMPLETO (-1 -> +1): ESPHome
-# interpola hacia el objetivo a velocidad constante. Con 0s cada orden del
-# seguimiento (detect/servo_tracker.py manda una cada ~0.7s) era un salto seco
-# y la torreta iba a golpes. Con 1s un paso típico (0.05-0.2) dura 25-100 ms:
-# deja de ser un golpe y apenas añade retardo al lazo.
+# MOVIMIENTO: transition_length va a 0 y la animación la hace el interval de
+# más abajo. La transición de ESPHome va a velocidad constante: arranca y para
+# de golpe, y cada orden del seguimiento se notaba como un paso seco. Ahora,
+# por eje, cada ~20 ms:
 #
-# Los valores de aquí son solo los de arranque: los pisan en on_boot los number
-# "Servo transition" y "Servo auto detach" (más abajo), que se cambian en
-# caliente desde HA o desde el servicio (POST /config/servo) sin compilar. El
-# servicio Python lee "Servo transition" para mostrarlo en /status.
+#   mid += clamp(target - mid, ±vmax*dt)   limitador, vmax = 2 / "Servo transition"
+#   pos += (mid - pos) * k                 x += (xfinal - x) / vel, la de Flash
+#   k = 1 - exp(-dt / "Servo smoothing")   no depende del ritmo del interval
+#
+# `target` es lo que se pide (API, number, HA). `mid` va hacia él a velocidad
+# máxima constante, como la transición de antes, y `pos` lo sigue frenando
+# suave: la velocidad del servo nunca salta, ni al arrancar ni al frenar, y si
+# llega una orden a mitad de camino sigue desde donde va. Con "Servo
+# smoothing" a 0 queda exactamente la transición lineal de antes.
+#
+# Ojo: el suavizado retrasa la torreta unos `tau` segundos. Si se acerca al
+# min_interval_sec del seguimiento (0.2 s), el lazo oscila: mantenerlo bajo.
+#
+# Los valores de aquí son solo los de arranque: los pisa en on_boot el number
+# "Servo auto detach" (más abajo). Velocidad, suavizado y auto-detach se
+# cambian en caliente desde HA o desde el servicio (POST /config/servo) sin
+# compilar.
 # -----------------------------------------------------------------------------
 output:
   - platform: ledc
@@ -155,11 +168,90 @@ servo:
   - id: servo_pan
     output: pwm_pan
     auto_detach_time: 2s
-    transition_length: 1s
+    transition_length: 0s
   - id: servo_tilt
     output: pwm_tilt
     auto_detach_time: 2s
-    transition_length: 1s
+    transition_length: 0s
+
+# Estado de la animación por eje (ver MOVIMIENTO arriba). `*_moving` dice si
+# queda camino: con false el interval no escribe, y así el auto-detach puede
+# cortar el PWM.
+globals:
+  - id: pan_target
+    type: float
+    initial_value: "0"
+  - id: pan_mid
+    type: float
+    initial_value: "0"
+  - id: pan_pos
+    type: float
+    initial_value: "0"
+  - id: pan_moving
+    type: bool
+    initial_value: "false"
+  - id: tilt_target
+    type: float
+    initial_value: "0"
+  - id: tilt_mid
+    type: float
+    initial_value: "0"
+  - id: tilt_pos
+    type: float
+    initial_value: "0"
+  - id: tilt_moving
+    type: bool
+    initial_value: "false"
+  - id: servo_last_ms
+    type: uint32_t
+    initial_value: "0"
+  # Hold del seguimiento (ver acción `set_servo_hold`): mientras está activo el
+  # auto-detach queda a 0. Caduca solo en `servo_hold_until` si nadie lo
+  # refresca, para que una caída del servicio Python no deje los servos
+  # sujetando para siempre.
+  - id: servo_hold
+    type: bool
+    initial_value: "false"
+  - id: servo_hold_until
+    type: uint32_t
+    initial_value: "0"
+
+interval:
+  - interval: 20ms
+    then:
+      - lambda: |-
+          uint32_t now = millis();
+          // dt real: con la cámara cargada el interval no es exacto. Tope de
+          // 0.1 s para que un parón largo no dé un salto.
+          float dt = std::min((now - id(servo_last_ms)) / 1000.0f, 0.1f);
+          id(servo_last_ms) = now;
+          // Hold caducado: vuelve el auto-detach del number.
+          if (id(servo_hold) && (int32_t) (now - id(servo_hold_until)) > 0) {
+            id(servo_hold) = false;
+            uint32_t ad = (uint32_t) (id(servo_auto_detach).state * 1000.0f);
+            id(servo_pan).set_auto_detach_time(ad);
+            id(servo_tilt).set_auto_detach_time(ad);
+          }
+          if (!id(pan_moving) && !id(tilt_moving)) return;
+
+          float transition = id(servo_transition).state;
+          float tau = id(servo_smoothing).state;
+          float max_step = (transition > 0) ? 2.0f / transition * dt : 2.0f;
+          float k = (tau > 0) ? 1.0f - expf(-dt / tau) : 1.0f;
+
+          auto step = [&](servo::Servo *s, float target, float &mid, float &pos, bool &moving) {
+            if (!moving) return;
+            mid += std::max(-max_step, std::min(max_step, target - mid));
+            pos += (mid - pos) * k;
+            if (fabsf(target - pos) < 0.002f) {
+              // Llegó: el valor exacto una vez y se deja de escribir.
+              mid = pos = target;
+              moving = false;
+            }
+            s->write(pos);
+          };
+          step(id(servo_pan), id(pan_target), id(pan_mid), id(pan_pos), id(pan_moving));
+          step(id(servo_tilt), id(tilt_target), id(tilt_mid), id(tilt_pos), id(tilt_moving));
 
 # -----------------------------------------------------------------------------
 # API de ESPHome.
@@ -192,12 +284,27 @@ api:
         pan: float
         tilt: float
       then:
-        - servo.write:
-            id: servo_pan
-            level: !lambda "return pan;"
-        - servo.write:
-            id: servo_tilt
-            level: !lambda "return tilt;"
+        # Solo fija el objetivo: el interval de los servos lleva hasta él.
+        - lambda: |-
+            id(pan_target) = std::max(-1.0f, std::min(1.0f, pan));
+            id(pan_moving) = true;
+            id(tilt_target) = std::max(-1.0f, std::min(1.0f, tilt));
+            id(tilt_moving) = true;
+    # Con objetivo enganchado el seguimiento manda hold=true (y lo repite cada
+    # pocos segundos): auto-detach a 0, los servos sujetan aunque el objetivo
+    # esté centrado y no lleguen órdenes. Con hold=false, o si pasan 10 s sin
+    # refresco, vuelve el valor del number "Servo auto detach". El number no
+    # se toca: es el ajuste del usuario y se restaura al arrancar.
+    - action: set_servo_hold
+      variables:
+        hold: bool
+      then:
+        - lambda: |-
+            id(servo_hold) = hold;
+            id(servo_hold_until) = millis() + 10000;
+            uint32_t ad = hold ? 0 : (uint32_t) (id(servo_auto_detach).state * 1000.0f);
+            id(servo_pan).set_auto_detach_time(ad);
+            id(servo_tilt).set_auto_detach_time(ad);
 
 ota:
   - platform: esphome
@@ -385,9 +492,9 @@ number:
     restore_value: false
     initial_value: 0
     set_action:
-      - servo.write:
-          id: servo_pan
-          level: !lambda "return x;"
+      - lambda: |-
+          id(pan_target) = x;
+          id(pan_moving) = true;
   - platform: template
     name: "Servo Tilt"
     id: servo_tilt_number
@@ -398,14 +505,14 @@ number:
     restore_value: false
     initial_value: 0
     set_action:
-      - servo.write:
-          id: servo_tilt
-          level: !lambda "return x;"
+      - lambda: |-
+          id(tilt_target) = x;
+          id(tilt_moving) = true;
 
-  # Tiempo de recorrido completo (-1 -> +1) de los dos servos, en caliente. Es
-  # el transition_length del bloque servo: sin compilar. 0 = salto directo.
-  # El servicio Python lo lee (object_id servo_transition) para mostrarlo en
-  # /status.
+  # Velocidad máxima de los servos, como tiempo de recorrido completo
+  # (-1 -> +1) en caliente. 0 = sin límite. Lo lee el interval de los servos
+  # en cada pasada, así que no necesita set_action. El servicio Python lo lee
+  # (object_id servo_transition) para mostrarlo en /status.
   - platform: template
     name: "Servo transition"
     id: servo_transition
@@ -418,13 +525,27 @@ number:
     optimistic: true
     restore_value: true
     initial_value: 1.0
-    set_action:
-      - lambda: |-
-          id(servo_pan).set_transition_length((uint32_t) (x * 1000.0f));
-          id(servo_tilt).set_transition_length((uint32_t) (x * 1000.0f));
+
+  # Suavizado del arranque y la frenada: la `tau` de la fórmula de Flash
+  # (ver MOVIMIENTO arriba). Hace ~95% del camino en 3 tau. 0 = sin suavizar,
+  # la transición lineal de antes. Bajo: con el seguimiento mandando cada
+  # 0.2 s, un tau grande retrasa la torreta y el lazo oscila.
+  - platform: template
+    name: "Servo smoothing"
+    id: servo_smoothing
+    entity_category: config
+    mode: box
+    unit_of_measurement: s
+    min_value: 0
+    max_value: 0.5
+    step: 0.01
+    optimistic: true
+    restore_value: true
+    initial_value: 0.03
 
   # Segundos quieto tras los que se corta el PWM del servo (menos zumbido y
   # calor). Es el auto_detach_time del bloque servo, en caliente. 0 = nunca.
+  # Con el hold del seguimiento activo no se aplica: se aplicará al soltarlo.
   - platform: template
     name: "Servo auto detach"
     id: servo_auto_detach
@@ -439,6 +560,7 @@ number:
     initial_value: 2
     set_action:
       - lambda: |-
+          if (id(servo_hold)) return;
           id(servo_pan).set_auto_detach_time((uint32_t) (x * 1000.0f));
           id(servo_tilt).set_auto_detach_time((uint32_t) (x * 1000.0f));
 

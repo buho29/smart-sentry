@@ -159,6 +159,7 @@ classDiagram
     class ServoConfig {
         +bool enabled
         +str service
+        +str hold_service
         +float gain
         +float deadzone
         +float min_interval_sec
@@ -880,23 +881,37 @@ Primer consumidor: mueve una torreta pan/tilt para centrar un objetivo.
   a que el servo llegue y la imagen lo refleje antes de la siguiente. Si se
   manda antes, el mismo error se corrige varias veces y la torreta se pasa
   (con `gain=0.25` y 0.08 s se desbocaba hasta el tope). Con la placa
-  interpolando ("Servo transition", p. ej. 2 s) cada paso es una rampa suave;
-  con `transition_length: 0s` se veía a tirones.
+  interpolando cada paso es una rampa suave; sin interpolar se veía a tirones.
+  La placa limita la velocidad ("Servo transition") y suaviza arranque y
+  frenada con `x += (objetivo - x) · k` ("Servo smoothing"); ver
+  `esphome/docs/servos-pan-tilt.md`. El suavizado retrasa la torreta: tiene
+  que quedar muy por debajo de `min_interval_sec`.
 
   Hubo un modo continuo (`latency_sec`) que corregía desde la posición
   simulada de la torreta para poder mandar a 10 Hz. Se quitó: dependía de
   acertar a la vez el retardo y la velocidad de la placa, y con valores a ojo
   oscilaba.
 
-  La velocidad de interpolación **solo vive en la placa**: el number "Servo
-  transition" (`servo_transition`, leído con `EsphomeController.get_state`)
-  y se lee solo para mostrarlo. `transition_sec` en `POST /config/servo` solo
-  lo manda a la placa, no se guarda en `ServoConfig`; `/status` muestra el
-  valor en uso y `transition_source` (0 y "sin dato" si el firmware no lo
-  publica). Un eje sin error se queda donde está. Como red de seguridad, ninguna orden del
+  Velocidad y suavizado **solo viven en la placa**: los number "Servo
+  transition" (`servo_transition`) y "Servo smoothing" (`servo_smoothing`),
+  leídos con `EsphomeController.get_state` solo para mostrarlos.
+  `transition_sec` y `smoothing_sec` en `POST /config/servo` solo los mandan a
+  la placa, no se guardan en `ServoConfig`; `/status` muestra los valores en
+  uso, `transition_source` (0 y "sin dato" si el firmware no lo publica) y
+  `smoothing_sec` (None si no lo publica). Un eje sin error se queda donde está. Como red de seguridad, ninguna orden del
   seguimiento se aleja más de 0.15 de giro de cámara de la anterior
   (`_MAX_STEP` × `gear_ratio`). El control manual (`move_to`) salta el
   intervalo a propósito.
+- **Hold: con objetivo no se suelta** (`_set_hold`). Al enganchar un objetivo
+  se llama a `set_servo_hold(hold=true)` (`ServoConfig.hold_service`) y la
+  placa pone el auto-detach a 0: los servos sujetan aunque el objetivo esté
+  centrado y no lleguen órdenes. Al soltarlo (`_release_target`) y en
+  `shutdown` va `hold=false` y vuelve el valor del number "Servo auto detach",
+  que no se toca. Mientras hay objetivo se repite cada `_HOLD_REFRESH_SEC`
+  (3 s) desde `on_detections`/`on_idle`; el firmware lo caduca a los 10 s sin
+  refresco, para que una caída del servicio no deje los servos sujetando para
+  siempre. `/status` lo muestra en `hold`. Un firmware sin el servicio suelta
+  como antes.
 
 **Contrato con el firmware:** servicio `set_servo_position` con variables
 `pan` y `tilt` en el rango **-1.0 a 1.0** (lo que espera `servo.write` de

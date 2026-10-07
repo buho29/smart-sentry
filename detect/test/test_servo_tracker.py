@@ -39,6 +39,8 @@ class FakeBoard:
         # Nombre del servicio de cada llamada, para poder comprobar que se
         # llama al que dice la config y no a uno cableado en el código.
         self.calls: list[str] = []
+        # Llamadas a set_servo_hold, aparte: no son órdenes de posición.
+        self.holds: list[bool] = []
 
     def has_service(self, name):
         return name in self._services
@@ -48,6 +50,9 @@ class FakeBoard:
         return tuple(self._services)
 
     def call_service(self, name, /, **args):
+        if "hold" in args:
+            self.holds.append(args["hold"])
+            return True
         self.calls.append(name)
         self.commands.append((args["pan"], args["tilt"]))
         return True
@@ -288,6 +293,12 @@ check("/status dice que el valor viene de la placa",
 t, _ = make_tracker()
 check("sin el number en la placa se supone salto directo",
       t.status()["transition_sec"] == 0.0 and t.status()["transition_source"] == "sin dato")
+check("y sin suavizado publicado, smoothing_sec es None",
+      t.status()["smoothing_sec"] is None, f"({t.status()['smoothing_sec']})")
+t, b = make_tracker()
+b.set_number("servo_smoothing", 0.03)
+check("/status muestra el suavizado de la placa",
+      t.status()["smoothing_sec"] == 0.03, f"({t.status()['smoothing_sec']})")
 
 # Con la placa interpolando despacio: corrige desde la ORDEN, no desde la
 # posición real (que va a medio camino y desharía la orden).
@@ -432,6 +443,34 @@ t.on_detections([det(cx=W * 0.9, cy=H / 2)], W, H)
 t.shutdown()
 check("última orden = posición de reposo", board.commands[-1] == (0.1, -0.1),
       f"({board.commands[-1]})")
+check("y suelta el hold: vuelve el auto-detach", board.holds[-1] is False, f"({board.holds})")
+
+print("\n=== 12b. Hold: con objetivo la placa no suelta los servos ===")
+t, board = make_tracker(lost_target_sec=0.2)
+t.on_detections([], W, H)
+check("sin objetivo no se pide hold", board.holds == [], f"({board.holds})")
+t.on_detections([det(cx=W / 2, cy=H / 2, track_id=5)], W, H)
+check("al enganchar se pide hold", board.holds == [True], f"({board.holds})")
+check("y status lo dice", t.status()["hold"] is True)
+t.on_detections([det(cx=W / 2, cy=H / 2, track_id=5)], W, H)
+check("no se repite en cada frame", board.holds == [True], f"({board.holds})")
+t._hold_sent_at = time.monotonic() - 10  # como si llevara rato sin refrescar
+t.on_detections([det(cx=W / 2, cy=H / 2, track_id=5)], W, H)
+check("se refresca con el objetivo centrado (sin órdenes)",
+      board.holds == [True, True], f"({board.holds})")
+time.sleep(0.25)
+t.on_idle()
+check("al perder el objetivo se suelta", board.holds[-1] is False and t.status()["hold"] is False,
+      f"({board.holds})")
+n = len(board.holds)
+t._hold_sent_at = time.monotonic() - 10
+t.on_idle()
+check("sin objetivo no se refresca nada", len(board.holds) == n, f"({board.holds})")
+
+t, board = make_tracker()
+t.on_detections([det(cx=W * 0.7, cy=H / 2, track_id=1, width=200, height=300)], W, H)
+t.on_detections([det(cx=W * 0.72, cy=H / 2, track_id=3, width=240, height=300)], W, H)
+check("un reenganche por IoU no pide hold de nuevo", board.holds == [True], f"({board.holds})")
 
 print("\n=== 13. Frames degenerados no revientan ===")
 t, board = make_tracker()
@@ -592,6 +631,8 @@ class FakeEsphome:
         return tuple(self._services)
 
     def call_service(self, name, /, **args):
+        if "hold" in args:
+            return True
         self.commands.append((args["pan"], args["tilt"]))
         return True
 

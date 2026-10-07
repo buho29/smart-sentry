@@ -19,6 +19,12 @@ cards:
     aspect_ratio: "4:3"
     fit_mode: contain
     grid_options: { columns: full }
+  # Necesita la grabación configurada en el servicio
+  # (POST /cameras/{camera_id}/config/recording); si no, el servicio da 400.
+  - type: tile
+    entity: switch.detect_torreta_record
+    name: Grabar
+    grid_options: { columns: full }
   - type: tile
     entity: switch.detect_torreta_follow
     name: Seguimiento
@@ -98,3 +104,20 @@ cards:
       - type: numeric-input
         style: slider
     grid_options: { columns: full }
+
+  # Miniatura del último clip; al pulsarla se abre el MP4. Si HA va por https,
+  # el navegador bloquea estas URLs http (mixed content): ver ../README.md.
+  - type: markdown
+    title: Último clip
+    grid_options: { columns: full }
+    content: |-
+      {% set c = 'sensor.detect_torreta_last_clip' %}
+      {% set base = 'http://' ~ states('input_text.detect_host') ~ ':8080' %}
+      {% if states(c) in ['ninguno', 'unknown', 'unavailable'] %}
+      Sin clips todavía.
+      {% else %}
+      {% set labels = state_attr(c, 'labels') or {} %}
+      **{{ (state_attr(c, 'started_at') | float(0)) | timestamp_custom('%d/%m %H:%M') }}** · {{ state_attr(c, 'duration_sec') | round(0) }} s · {{ state_attr(c, 'trigger') }}{% if labels %} · {% for k, v in labels.items() %}{{ k }} ×{{ v }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}
+
+      <a href="{{ base }}{{ state_attr(c, 'url') }}" target="_blank"><img src="{{ base }}{{ state_attr(c, 'thumbnail_url') }}" width="100%"></a>
+      {% endif %}
