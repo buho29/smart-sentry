@@ -166,9 +166,17 @@ classDiagram
         +bool invert_pan
         +bool invert_tilt
         +float lost_target_sec
-        +float home_pan
-        +float home_tilt
+        +float pan_gear_ratio
+        +float tilt_gear_ratio
+        +float pan_servo_range_deg
+        +float tilt_servo_range_deg
+        +float pan_limit_deg
+        +float tilt_limit_deg
+        +float home_pan_deg
+        +float home_tilt_deg
         +bool return_home_on_lost
+        +to_servo(axis, deg)
+        +to_deg(axis, units)
     }
 
     class CameraSession {
@@ -809,15 +817,28 @@ Primer consumidor: mueve una torreta pan/tilt para centrar un objetivo.
   cada eje se multiplica por las vueltas de servo por vuelta de cámara (dientes
   de la cámara / dientes del servo). En la torreta del servo el tilt va con
   piñón de 21 y corona de 63, así que 3; el pan va directo, 1. Sin esto el eje
-  reducido centra el triple de lento. `move_to` y `home_*` siguen en unidades
-  de servo. Dos engranajes engranados giran en sentidos opuestos, así que al
-  añadir una reducción a un eje suele haber que dar la vuelta también a su
-  `invert_*`: con el sentido mal, ese eje huye del objetivo hasta el tope.
-- **Límites de recorrido** (`pan_limit`, `tilt_limit`, 0.9): `_send` recorta
-  toda orden a ±limit, venga del seguimiento, del control manual o del regreso
-  a home. Los extremos del PWM suelen coincidir con el tope mecánico, y un servo
-  pequeño forzado ahí consume mucha corriente y puede romper engranajes o
-  quemarse.
+  reducido centra el triple de lento. Dos engranajes engranados giran en
+  sentidos opuestos, así que al añadir una reducción a un eje suele haber que
+  dar la vuelta también a su `invert_*`: con el sentido mal, ese eje huye del
+  objetivo hasta el tope.
+- **Grados de cámara hacia fuera, unidades de servo dentro.** El lazo, la
+  placa y `self.pan/self.tilt` van en -1..1. Lo que toca una persona va en
+  grados de cámara: el body de `POST /servo` (`move_to`), `home_*_deg`,
+  `*_limit_deg` y `pan`/`tilt` de `/status` (que trae aparte
+  `pan_servo`/`tilt_servo` y `limits_deg`). La conversión vive solo en
+  `ServoConfig.to_servo`/`to_deg`: `grados = unidades × servo_range_deg / 2 /
+  gear_ratio`. En la torreta del servo, con 180° nominales, una unidad son 90°
+  de pan y 30° de tilt. Son grados **nominales**: `*_servo_range_deg` (180 por
+  defecto) no está medido. El signo es el de la unidad de servo, sin aplicar
+  `invert_*`. Una config guardada con los campos viejos (`home_pan`,
+  `pan_limit`… en unidades de servo) se migra al cargarla
+  (`_migrate_servo_units`), con el recorrido y la reducción del mismo dict.
+- **Límites de recorrido** (`pan_limit_deg`, `tilt_limit_deg`; vacío = 0.9 de
+  servo, ±81° de pan y ±27° de tilt con reducción 3): `_send` recorta toda orden
+  a ±limit, venga del seguimiento, del control manual o del regreso a home, y
+  nunca pasa de ±1 de servo. Los extremos del PWM suelen coincidir con el tope
+  mecánico, y un servo pequeño forzado ahí consume mucha corriente y puede
+  romper engranajes o quemarse.
 - **Reenganche** (`_relock`): si el ID bloqueado desaparece, antes de esperar
   `lost_target_sec` se busca un ID nuevo de la misma clase cuya caja solape con
   la última vista (IoU ≥ 0.3). Si lo hay, se cambia de ID en el mismo frame
@@ -918,7 +939,7 @@ Primer consumidor: mueve una torreta pan/tilt para centrar un objetivo.
 
 **Contrato con el firmware:** servicio `set_servo_position` con variables
 `pan` y `tilt` en el rango **-1.0 a 1.0** (lo que espera `servo.write` de
-ESPHome). El nombre es el valor por defecto de `ServoConfig.service` y se
+ESPHome); los grados se quedan en el lado Python. El nombre es el valor por defecto de `ServoConfig.service` y se
 comprueba con `has_service()` contra la lista que publica la placa: si se
 renombra en el YAML sin cambiarlo en `POST /config/servo`, el seguimiento queda
 mudo sin dar ningún error; `/status` lo expone en `consumers` justamente para
@@ -989,7 +1010,7 @@ defecto.
 
 | Método / ruta | Función | Qué hace |
 | --- | --- | --- |
-| `POST /cameras/{id}/servo` | `move_servo` | Control manual: `{"pan": p, "tilt": t}` en `[-1, 1]`. Salta el rate limit del seguimiento, para poder verificar el hardware sin depender de que haya detecciones. |
+| `POST /cameras/{id}/servo` | `move_servo` | Control manual: `{"pan": p, "tilt": t}` en grados de cámara (0 = centro), recortado a los límites. Salta el rate limit del seguimiento, para poder verificar el hardware sin depender de que haya detecciones. |
 
 El seguimiento se activa/desactiva con el campo `enabled` de
 `POST /cameras/{id}/config/servo`, junto al resto de ajustes; `/servo` a secas

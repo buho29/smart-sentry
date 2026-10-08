@@ -164,11 +164,11 @@ necesita la grabación configurada en el servicio con
 | Entidad | Qué es |
 | --- | --- |
 | `switch.detect_torreta_follow` | Seguimiento automático (`enabled` de `/config/servo`). Apagado, la torreta solo obedece al control manual |
-| `input_number.detect_torreta_pan` / `_tilt` | Posición en unidades de servo (-1 … 1). Al soltar el slider se manda; si el seguimiento mueve la torreta, los sliders la siguen |
+| `input_number.detect_torreta_pan` / `_tilt` | Posición en grados de cámara (pan -90 … 90, tilt -30 … 30, ya con la reducción del tilt). Al soltar el slider se manda; si el seguimiento mueve la torreta, los sliders la siguen |
 | `script.detect_torreta_move` | Ir a `pan`, `tilt` absolutos |
-| `script.detect_torreta_step` | Paso relativo `d_pan`, `d_tilt` desde la posición actual (lo usan las flechas) |
+| `script.detect_torreta_step` | Paso relativo `d_pan`, `d_tilt` en grados desde la posición actual (lo usan las flechas: 10° de pan, 3° de tilt) |
 | `script.detect_torreta_center` | A 0, 0 |
-| `sensor.detect_torreta_pan` / `_tilt` | Última posición enviada, ya recortada a `pan_limit` / `tilt_limit` |
+| `sensor.detect_torreta_pan` / `_tilt` | Última posición enviada en grados de cámara, ya recortada a `pan_limit_deg` / `tilt_limit_deg`. Atributos `pan_servo` / `tilt_servo` (lo enviado, -1 … 1) y `limits_deg` |
 | `binary_sensor.detect_torreta_servo_service` | Si la placa publica el servicio de servos. Apagado con la placa conectada = firmware sin servos |
 | `rest_command.detect_torreta_servo_move` / `_servo_config` | Para automatizaciones; `servo_config` admite cualquier campo de `/config/servo` en `body` |
 | `switch.detect_torreta_auto_record` | Grabar al detectar (`trigger_on_detection`). Apagado, solo graba a mano. Reenvía el resto de la config de grabación tal cual; sin grabación configurada no está disponible |

@@ -84,12 +84,13 @@ sections:
               columns: 5
               square: false
               cards:
-                - { type: button, icon: mdi:arrow-left-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: -0.1, d_tilt: 0 } } }
-                # tilt positivo baja la cámara en esta torreta: ↑ resta y ↓ suma.
-                - { type: button, icon: mdi:arrow-up-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0, d_tilt: -0.1 } } }
+                - { type: button, icon: mdi:arrow-left-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: -10, d_tilt: 0 } } }
+                # Pasos en grados de cámara. Tilt positivo baja la cámara en
+                # esta torreta: ↑ resta y ↓ suma.
+                - { type: button, icon: mdi:arrow-up-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0, d_tilt: -3 } } }
                 - { type: button, icon: mdi:image-filter-center-focus, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_center } }
-                - { type: button, icon: mdi:arrow-down-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0, d_tilt: 0.1 } } }
-                - { type: button, icon: mdi:arrow-right-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0.1, d_tilt: 0 } } }
+                - { type: button, icon: mdi:arrow-down-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0, d_tilt: 3 } } }
+                - { type: button, icon: mdi:arrow-right-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 10, d_tilt: 0 } } }
             - { type: custom:slider-entity-row, entity: input_number.detect_torreta_pan, name: Pan, icon: mdi:pan-horizontal }
             - { type: custom:slider-entity-row, entity: input_number.detect_torreta_tilt, name: Tilt, icon: mdi:pan-vertical }
 

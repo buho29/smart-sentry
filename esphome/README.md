@@ -125,7 +125,9 @@ corrigiendo la posición de la torreta para centrarlo.
 
 - **Contrato con Python:** la acción de la API `set_servo_position`, con las
   variables `pan` y `tilt` en el rango **-1.0 a 1.0** (lo que espera
-  `servo.write`; no se manejan grados en ninguna capa). Es el nombre por
+  `servo.write`). La placa no sabe de grados: la API de `detect/` habla en
+  grados de cámara y los traduce con la relación de engranajes y el
+  recorrido del servo (`*_gear_ratio`, `*_servo_range_deg`). Es el nombre por
   defecto de `ServoConfig.service` en `detect/`; si se renombra aquí hay que
   cambiarlo también con `POST /cameras/<camera_id>/config/servo` (campo
   `service`), o el seguimiento queda mudo — `GET /status` lo delata en

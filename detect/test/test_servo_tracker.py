@@ -278,7 +278,7 @@ t, board = make_tracker(min_interval_sec=10.0)
 for _ in range(5):
     t.on_detections([det(cx=W * 0.9, cy=H / 2)], W, H)
 check("5 frames seguidos -> 1 sola orden", len(board.commands) == 1, f"({len(board.commands)})")
-t.move_to(0.5, 0.5)
+t.move_to(45, 45)   # grados de cámara: 45° = 0.5 de servo sin reducción
 check("el control manual sí salta el rate limit", len(board.commands) == 2)
 check("y manda lo pedido", board.commands[-1] == (0.5, 0.5), f"({board.commands[-1]})")
 
@@ -325,15 +325,52 @@ check("ninguna orden del seguimiento se aleja más de 0.15 de la anterior",
 
 print("\n=== 4b. Límites de recorrido ===")
 t, board = make_tracker()
-t.move_to(1.0, -1.0)
-check("el manual se recorta a ±0.9 por defecto", board.commands[-1] == (0.9, -0.9),
+t.move_to(180, -180)
+check("el manual se recorta a ±0.9 de servo por defecto", board.commands[-1] == (0.9, -0.9),
       f"({board.commands[-1]})")
-t, board = make_tracker(pan_limit=0.5, gain=0.5)
+t, board = make_tracker(pan_limit_deg=45, gain=0.5)
 for _ in range(20):
     t.on_detections([det(cx=W * 0.95, cy=H / 2)], W, H)
-check("el seguimiento no pasa de pan_limit aunque empuje",
+check("el seguimiento no pasa de pan_limit_deg aunque empuje",
       all(abs(p) <= 0.5 + 1e-9 for p, _ in board.commands) and abs(t.pan) == 0.5,
       f"({t.pan})")
+t, board = make_tracker(tilt_limit_deg=170)
+t.move_to(0, 170)
+check("un límite en grados más allá del servo no pasa de ±1",
+      board.commands[-1][1] == 1.0, f"({board.commands[-1]})")
+
+print("\n=== 4c. Grados de cámara y relación de engranajes ===")
+t, board = make_tracker(tilt_gear_ratio=3)
+t.move_to(0, 15)
+check("tilt con reducción 3: 15° de cámara = 0.5 de servo",
+      abs(board.commands[-1][1] - 0.5) < 1e-9, f"({board.commands[-1]})")
+st = t.status()
+check("/status da grados de cámara y el valor de servo aparte",
+      st["tilt"] == 15.0 and st["tilt_servo"] == 0.5, f"({st['tilt']}, {st['tilt_servo']})")
+check("límite por defecto = 0.9 de servo en los dos ejes (±81° y ±27°)",
+      st["limits_deg"] == {"pan": 81.0, "tilt": 27.0}, f"({st['limits_deg']})")
+t.move_to(0, 60)
+check("y el manual se recorta a ese límite", abs(board.commands[-1][1] - 0.9) < 1e-9,
+      f"({board.commands[-1]})")
+t, board = make_tracker(pan_servo_range_deg=120)
+t.move_to(30, 0)
+check("pan_servo_range_deg cambia la escala (120°: 30° = 0.5)",
+      abs(board.commands[-1][0] - 0.5) < 1e-9, f"({board.commands[-1]})")
+
+# Config guardada antes de los grados: home_* y *_limit en unidades de servo.
+old = ServoConfig.model_validate({"tilt_gear_ratio": 3.0, "pan_limit": 0.5,
+                                  "tilt_limit": 0.9, "home_pan": 0.2, "home_tilt": -0.5})
+check("migra pan_limit 0.5 -> 45°", old.pan_limit_deg == 45.0, f"({old.pan_limit_deg})")
+check("un límite viejo de 0.9 (el de por defecto) queda en None",
+      old.tilt_limit_deg is None, f"({old.tilt_limit_deg})")
+check("migra home con la reducción del eje (-0.5 de tilt con ratio 3 = -15°)",
+      old.home_pan_deg == 18.0 and old.home_tilt_deg == -15.0,
+      f"({old.home_pan_deg}, {old.home_tilt_deg})")
+t, board = make_tracker(**old.model_dump())
+t.shutdown()
+check("y la torreta vuelve al mismo reposo que antes",
+      all(abs(a - b) < 1e-9 for a, b in zip(board.commands[-1], (0.2, -0.5))),
+      f"({board.commands[-1]})")
 
 print("\n=== 5. Bloqueo de objetivo por track ID ===")
 t, board = make_tracker()
@@ -399,7 +436,7 @@ t.on_idle()
 check("pero caduca igual que con imagen", t.target_id is None)
 
 print("\n=== 9. return_home_on_lost ===")
-t, board = make_tracker(lost_target_sec=0.1, return_home_on_lost=True, home_pan=0.0, home_tilt=-0.2)
+t, board = make_tracker(lost_target_sec=0.1, return_home_on_lost=True, home_pan_deg=0.0, home_tilt_deg=-18)
 t.on_detections([det(cx=W * 0.9, cy=H / 2, track_id=4)], W, H)
 time.sleep(0.15)
 t.on_idle()
@@ -438,7 +475,7 @@ t_with = ServoTracker(cfg, FakeBoard(has_servo_service=True), "test")
 check("y con servos también", t_with.status()["servo_service"] is True)
 
 print("\n=== 12. shutdown() deja la torreta en reposo ===")
-t, board = make_tracker(home_pan=0.1, home_tilt=-0.1)
+t, board = make_tracker(home_pan_deg=9, home_tilt_deg=-9)
 t.on_detections([det(cx=W * 0.9, cy=H / 2)], W, H)
 t.shutdown()
 check("última orden = posición de reposo", board.commands[-1] == (0.1, -0.1),
@@ -683,7 +720,7 @@ check("firmware sin 'set_servo_position' -> 503", status_code_of("no-firmware") 
 
 s_ok = fake_session("turret-ok")
 check("todo en orden -> devuelve el tracker", status_code_of("turret-ok") == 200)
-main.get_servo_tracker("turret-ok").move_to(0.25, -0.25)
+main.get_servo_tracker("turret-ok").move_to(22.5, -22.5)
 check("y la orden llega a la placa", s_ok.esphome.commands == [(0.25, -0.25)],
       f"({s_ok.esphome.commands})")
 

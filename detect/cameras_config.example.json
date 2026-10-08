@@ -50,8 +50,15 @@
       "invert_pan": false,
       "invert_tilt": false,
       "lost_target_sec": 1.5,
-      "home_pan": 0.0,
-      "home_tilt": 0.0,
+      "_comentario_grados": "home_*_deg y *_limit_deg van en grados de CÁMARA: se pasan a unidades de servo con *_servo_range_deg (lo que gira el servo de -1 a +1, 180 por defecto) y *_gear_ratio. *_limit_deg a null = el 90% del recorrido del servo.",
+      "pan_gear_ratio": 1.0,
+      "tilt_gear_ratio": 1.0,
+      "pan_servo_range_deg": 180.0,
+      "tilt_servo_range_deg": 180.0,
+      "pan_limit_deg": null,
+      "tilt_limit_deg": null,
+      "home_pan_deg": 0.0,
+      "home_tilt_deg": 0.0,
       "return_home_on_lost": false
     }
   }

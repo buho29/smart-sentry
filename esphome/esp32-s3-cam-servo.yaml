@@ -480,9 +480,10 @@ number:
           );
           id(cam)->update_camera_parameters();
 
-  # ±0.9 y no ±1: el mismo límite que pan_limit/tilt_limit del lado Python
-  # (detect/servo_tracker.py). HA habla directo con la placa y no pasa por
-  # ellos, y los extremos del PWM suelen coincidir con el tope mecánico.
+  # En unidades de servo, no en grados: HA habla directo con la placa y no
+  # pasa por la conversión del lado Python. ±0.9 y no ±1: el mismo límite por
+  # defecto que pan_limit_deg/tilt_limit_deg (detect/servo_tracker.py), y los
+  # extremos del PWM suelen coincidir con el tope mecánico.
   - platform: template
     name: "Servo Pan"
     id: servo_pan_number

@@ -41,8 +41,9 @@ cards:
     tap_action:
       action: perform-action
       perform_action: script.detect_torreta_step
-      # tilt positivo baja la cámara en esta torreta: ↑ resta y ↓ suma.
-      data: { d_pan: 0, d_tilt: -0.1 }
+      # Pasos en grados de cámara. Tilt positivo baja la cámara en esta
+      # torreta: ↑ resta y ↓ suma.
+      data: { d_pan: 0, d_tilt: -3 }
     grid_options: { columns: 4, rows: 1 }
   - type: button
     icon: mdi:arrow-left-bold
@@ -50,7 +51,7 @@ cards:
     tap_action:
       action: perform-action
       perform_action: script.detect_torreta_step
-      data: { d_pan: -0.1, d_tilt: 0 }
+      data: { d_pan: -10, d_tilt: 0 }
     grid_options: { columns: 4, rows: 1 }
   - type: button
     icon: mdi:image-filter-center-focus
@@ -65,7 +66,7 @@ cards:
     tap_action:
       action: perform-action
       perform_action: script.detect_torreta_step
-      data: { d_pan: 0.1, d_tilt: 0 }
+      data: { d_pan: 10, d_tilt: 0 }
     grid_options: { columns: 4, rows: 1 }
   - type: button
     icon: mdi:arrow-down-bold
@@ -73,7 +74,7 @@ cards:
     tap_action:
       action: perform-action
       perform_action: script.detect_torreta_step
-      data: { d_pan: 0, d_tilt: 0.1 }
+      data: { d_pan: 0, d_tilt: 3 }
     grid_options: { columns: 4, rows: 1 }
 
   - type: tile

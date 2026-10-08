@@ -9,9 +9,10 @@
 # El vídeo no está aquí: la cámara MJPEG se añade desde la UI de HA con el
 # nombre "Detect torreta", para que quede como camera.detect_torreta.
 #
-# Posiciones de servo en las mismas unidades que la API: -1 = un extremo,
-# 0 = reposo, 1 = el otro. El servicio recorta cada orden a ±pan_limit /
-# ±tilt_limit, así que el slider puede pedir más de lo que luego se envía.
+# Posiciones en grados de CÁMARA, como la API (ya aplicada la reducción del
+# tilt), 0 = centro. El servicio recorta cada orden a ±pan_limit_deg /
+# ±tilt_limit_deg (por defecto ±81° y ±27° en esta torreta, con el tilt a
+# 63/21), así que el slider puede pedir más de lo que luego se envía.
 
 rest_command:
   detect_torreta_start:
@@ -156,6 +157,7 @@ rest:
       - name: "Detect torreta pan"
         unique_id: detect_torreta_pan
         icon: mdi:pan-horizontal
+        unit_of_measurement: "°"
         value_template: "{{ value_json.consumers.get('ServoTracker', {}).get('pan', 0) }}"
         # Estado del seguimiento (los binary_sensor de rest no admiten atributos).
         json_attributes_path: "$.consumers.ServoTracker"
@@ -166,9 +168,13 @@ rest:
           - sends
           - transition_sec
           - auto_detach_sec
+          - pan_servo
+          - tilt_servo
+          - limits_deg
       - name: "Detect torreta tilt"
         unique_id: detect_torreta_tilt
         icon: mdi:pan-vertical
+        unit_of_measurement: "°"
         value_template: "{{ value_json.consumers.get('ServoTracker', {}).get('tilt', 0) }}"
       # Si sube, el disco no da abasto y el clip tendrá saltos.
       - name: "Detect torreta dropped frames"
@@ -333,19 +339,23 @@ input_number:
     max: 0.95
     step: 0.05
     mode: slider
+  # Grados de cámara. El rango cubre el recorrido de esta torreta (pan
+  # directo, tilt con reducción 3); el servicio recorta a sus límites.
   detect_torreta_pan:
     name: "Detect torreta pan"
     icon: mdi:pan-horizontal
-    min: -1
-    max: 1
-    step: 0.05
+    min: -90
+    max: 90
+    step: 1
+    unit_of_measurement: "°"
     mode: slider
   detect_torreta_tilt:
     name: "Detect torreta tilt"
     icon: mdi:pan-vertical
-    min: -1
-    max: 1
-    step: 0.05
+    min: -30
+    max: 30
+    step: 1
+    unit_of_measurement: "°"
     mode: slider
 
 # Ajustes de detección. Cada uno se envía al cambiarlo y se resincroniza con
@@ -388,14 +398,16 @@ script:
     mode: restart
     fields:
       pan:
-        description: "-1 a 1"
+        description: "Grados de cámara, 0 = centro"
         example: 0
       tilt:
-        description: "-1 a 1"
+        description: "Grados de cámara, 0 = centro"
         example: 0
     variables:
-      p: "{{ [[pan | float(0), -1] | max, 1] | min }}"
-      t: "{{ [[tilt | float(0), -1] | max, 1] | min }}"
+      # Al rango de los sliders: el servicio recorta igual, pero así las
+      # flechas no acumulan pasos más allá del tope.
+      p: "{{ [[pan | float(0), -90] | max, 90] | min }}"
+      t: "{{ [[tilt | float(0), -30] | max, 30] | min }}"
     sequence:
       - action: rest_command.detect_torreta_servo_move
         data:
@@ -427,10 +439,10 @@ script:
     mode: queued
     fields:
       d_pan:
-        description: "Incremento horizontal"
-        example: 0.1
+        description: "Incremento horizontal, en grados"
+        example: 10
       d_tilt:
-        description: "Incremento vertical"
+        description: "Incremento vertical, en grados"
         example: 0
     sequence:
       - action: script.detect_torreta_move
@@ -464,9 +476,9 @@ automation:
       - condition: template
         value_template: >-
           {{ (states('input_number.detect_torreta_pan') | float(0)
-              - states('sensor.detect_torreta_pan') | float(0)) | abs > 0.02
+              - states('sensor.detect_torreta_pan') | float(0)) | abs > 0.5
              or (states('input_number.detect_torreta_tilt') | float(0)
-              - states('sensor.detect_torreta_tilt') | float(0)) | abs > 0.02 }}
+              - states('sensor.detect_torreta_tilt') | float(0)) | abs > 0.5 }}
     actions:
       # Espera a que se suelte el slider antes de mandar.
       - delay: "00:00:00.5"

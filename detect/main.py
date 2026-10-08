@@ -526,10 +526,11 @@ app.openapi = _openapi_with_camera_examples
 # ---------------------------------------------------------------------------
 
 class ServoPosition(BaseModel):
-    # Mismo rango que espera `servo.write` en el YAML: -1 = un extremo,
-    # 0 = reposo, 1 = el otro. Nada de grados en ninguna capa.
-    pan: float = Field(..., ge=-1.0, le=1.0)
-    tilt: float = Field(..., ge=-1.0, le=1.0)
+    # Grados de CÁMARA (ya aplicada la reducción), 0 = centro. El tracker los
+    # pasa a unidades de servo y recorta a pan_limit_deg/tilt_limit_deg, así
+    # que se admite más de lo que luego se envía.
+    pan: float = Field(..., ge=-180.0, le=180.0, description="Grados de cámara en horizontal, 0 = centro.")
+    tilt: float = Field(..., ge=-180.0, le=180.0, description="Grados de cámara en vertical, 0 = centro.")
 
 
 def get_servo_tracker(camera_id: str) -> ServoTracker:
@@ -552,10 +553,11 @@ def get_servo_tracker(camera_id: str) -> ServoTracker:
 
 @app.post("/cameras/{camera_id}/servo")
 async def move_servo(camera_id: str, pos: ServoPosition):
-    """Control manual directo, para verificar el hardware sin depender de que
-    haya detecciones. Salta el rate limit del seguimiento a propósito, pero
-    no los límites de recorrido: la orden se recorta a ±pan_limit/tilt_limit,
-    y la respuesta trae la posición realmente enviada."""
+    """Control manual directo, en grados de cámara, para verificar el hardware
+    sin depender de que haya detecciones. Salta el rate limit del seguimiento
+    a propósito, pero no los límites de recorrido: la orden se recorta a
+    ±pan_limit_deg/tilt_limit_deg, y la respuesta trae la posición realmente
+    enviada (`pan`/`tilt` en grados, `pan_servo`/`tilt_servo` en -1..1)."""
     tracker = get_servo_tracker(camera_id)
     tracker.move_to(pos.pan, pos.tilt)
     return tracker.status()
@@ -575,12 +577,14 @@ class ServoConfigUpdate(BaseModel):
     invert_pan: Optional[bool] = Field(None, description="Invertir el sentido horizontal, según cómo haya quedado montado el servo.")
     invert_tilt: Optional[bool] = Field(None, description="Invertir el sentido vertical.")
     pan_gear_ratio: Optional[float] = Field(None, gt=0.0, description="Relación de engranajes horizontal: dientes del engranaje de la cámara / dientes del del servo. 1 = servo directo. Por defecto 1.")
-    tilt_gear_ratio: Optional[float] = Field(None, gt=0.0, description="Relación de engranajes vertical: dientes del engranaje de la cámara / dientes del del servo. Con 21 en el servo y 63 en la cámara, 63/21 = 3. Dos engranajes engranados giran en sentidos opuestos, así que con reducción suele hacer falta cambiar también invert_tilt. Por defecto 1.")
-    pan_limit: Optional[float] = Field(None, gt=0.0, le=1.0, description="Recorrido máximo horizontal, simétrico, en unidades de servo: ninguna orden (ni del seguimiento ni manual) pasa de ±pan_limit. Evita forzar el servo contra el tope mecánico. Por defecto 0.9.")
-    tilt_limit: Optional[float] = Field(None, gt=0.0, le=1.0, description="Recorrido máximo vertical, simétrico, en unidades de servo. Por defecto 0.9.")
+    tilt_gear_ratio: Optional[float] = Field(None, gt=0.0, description="Relación de engranajes vertical: dientes del engranaje de la cámara / dientes del del servo. Con 21 en el servo y 63 en la cámara, 63/21 = 3: con un servo de 180° la cámara gira 60° en total (±30°). Dos engranajes engranados giran en sentidos opuestos, así que con reducción suele hacer falta cambiar también invert_tilt. Por defecto 1.")
+    pan_servo_range_deg: Optional[float] = Field(None, gt=0.0, le=360.0, description="Grados que gira el SERVO horizontal de un extremo al otro (-1 a +1). Solo sirve para traducir los grados de cámara de esta API a unidades de servo. Por defecto 180 (nominal, sin medir).")
+    tilt_servo_range_deg: Optional[float] = Field(None, gt=0.0, le=360.0, description="Grados que gira el SERVO vertical de un extremo al otro. Por defecto 180.")
+    pan_limit_deg: Optional[float] = Field(None, gt=0.0, le=180.0, description="Recorrido máximo horizontal, simétrico, en grados de cámara: ninguna orden (ni del seguimiento ni manual) pasa de ±pan_limit_deg. Evita forzar el servo contra el tope mecánico. Vacío = el 90% del recorrido del servo (±81° con 180° y sin reducción). /status muestra el efectivo en limits_deg.")
+    tilt_limit_deg: Optional[float] = Field(None, gt=0.0, le=180.0, description="Recorrido máximo vertical, simétrico, en grados de cámara. Vacío = el 90% del recorrido del servo (±27° con reducción 3).")
     lost_target_sec: Optional[float] = Field(None, gt=0.0, description="Tiempo sin ver el objetivo antes de soltarlo y poder enganchar otro. Da margen para oclusiones de un par de frames. Por defecto 1.5 s.")
-    home_pan: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Posición de reposo horizontal: -1 y 1 son los extremos, 0 el centro.")
-    home_tilt: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Posición de reposo vertical.")
+    home_pan_deg: Optional[float] = Field(None, ge=-180.0, le=180.0, description="Posición de reposo horizontal en grados de cámara, 0 = centro.")
+    home_tilt_deg: Optional[float] = Field(None, ge=-180.0, le=180.0, description="Posición de reposo vertical en grados de cámara.")
     return_home_on_lost: Optional[bool] = Field(None, description="Al perder el objetivo, ¿volver a reposo? Por defecto no: suele interesar más quedarse mirando por donde se perdió, que es por donde reaparecerá.")
     lead_sec: Optional[float] = Field(None, ge=0.0, le=3.0, description="Anticipación horizontal en segundos: se apunta a donde estará el objetivo según su velocidad, así la torreta va por delante y queda más aire en la dirección en la que se mueve. Solo para objetivos que cruzan andando: con alguien cerca y quieto, su balanceo se toma por velocidad y oscila. Solo actúa si el objetivo ya está fuera de la zona muerta. 0 = sin anticipar. Por defecto 0.")
 

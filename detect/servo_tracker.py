@@ -6,15 +6,18 @@ descentrado" en órdenes de servo hacia la placa.
 
 El contrato con el firmware es un servicio de la API nativa de ESPHome llamado
 `set_servo_position` con dos variables float, `pan` y `tilt`, **en el rango
--1.0 a 1.0** (lo que espera `servo.write` de ESPHome). No se manejan grados en
-ninguna capa: no sabemos ni la geometría del montaje ni el campo de visión de la
-lente, así que hablar de ángulos absolutos sería inventarse una precisión que no
-existe.
+-1.0 a 1.0** (lo que espera `servo.write` de ESPHome). Internamente el tracker
+trabaja en esas unidades de servo.
 
-Por ese mismo motivo el control es proporcional y relativo: en vez de calcular
-"el objetivo está a 12 grados, apunta ahí", se corrige un poco en la dirección
-del error en cada frame y se deja que el lazo cerrado converja. Sale estable con
-ganancia baja y no necesita calibración.
+El lazo de seguimiento no usa ángulos: no sabemos el campo de visión de la
+lente, así que en vez de calcular "el objetivo está a 12 grados, apunta ahí" se
+corrige un poco en la dirección del error en cada frame y se deja que el lazo
+cerrado converja. Sale estable con ganancia baja y no necesita calibración.
+
+Lo que toca una persona (control manual, reposo, límites, /status) sí va en
+**grados de cámara**: ya aplicada la relación de engranajes, así que "tilt 15"
+es 15° de cámara aunque el servo gire 45. Son grados nominales, sacados de
+`*_servo_range_deg` (lo que gira el servo de -1 a +1, 180 si no se ha medido).
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from detections import Detection
 
@@ -71,24 +74,30 @@ class ServoConfig(BaseModel):
     # servo. Un tilt con piñón de 21 en el servo y corona de 63 en la cámara es
     # 63/21 = 3: la cámara gira un tercio de lo que gira el servo, así que el
     # paso se multiplica por 3 para que ese eje centre igual de rápido que el
-    # otro. Solo afecta al seguimiento; move_to y home_* van en unidades de
-    # servo, que es lo que recibe servo.write. Ojo: dos engranajes que engranan
-    # directamente giran en sentidos opuestos, así que al añadir una reducción
-    # a un eje suele haber que dar la vuelta también a su invert_*.
+    # otro. También entra en la conversión a grados de cámara (ver
+    # deg_per_unit). Ojo: dos engranajes que engranan directamente giran en
+    # sentidos opuestos, así que al añadir una reducción a un eje suele haber
+    # que dar la vuelta también a su invert_*.
     pan_gear_ratio: float = 1.0
     tilt_gear_ratio: float = 1.0
-    # Recorrido máximo de cada eje, simétrico, en unidades de servo: ninguna
-    # orden (ni del seguimiento ni manual) sale de [-limit, +limit]. Los
-    # extremos del PWM suelen coincidir con el tope mecánico, y un servo
-    # pequeño forzado ahí consume mucha corriente y puede romper engranajes o
-    # quemarse.
-    pan_limit: float = 0.9
-    tilt_limit: float = 0.9
+    # Lo que gira el SERVO de -1 a +1, en grados. Nominal: depende del servo y
+    # de los anchos de pulso del firmware, y no está medido. Solo sirve para
+    # traducir grados de cámara a unidades de servo; el seguimiento no lo usa.
+    pan_servo_range_deg: float = 180.0
+    tilt_servo_range_deg: float = 180.0
+    # Recorrido máximo de cada eje, simétrico, en grados de cámara: ninguna
+    # orden (ni del seguimiento ni manual) sale de [-limit, +limit]. None =
+    # el 90% del recorrido del servo (_DEFAULT_LIMIT), que con reducción son
+    # menos grados de cámara. Los extremos del PWM suelen coincidir con el tope
+    # mecánico, y un servo pequeño forzado ahí consume mucha corriente y puede
+    # romper engranajes o quemarse. Nunca se pasa de ±1 de servo.
+    pan_limit_deg: Optional[float] = None
+    tilt_limit_deg: Optional[float] = None
     # Tiempo sin ver el objetivo antes de soltarlo y poder enganchar otro.
     lost_target_sec: float = 1.5
-    # Posición de reposo, usada al arrancar y al apagar.
-    home_pan: float = 0.0
-    home_tilt: float = 0.0
+    # Posición de reposo en grados de cámara, usada al arrancar y al apagar.
+    home_pan_deg: float = 0.0
+    home_tilt_deg: float = 0.0
     # Al perder el objetivo, ¿volver a reposo? Por defecto no: en una torreta
     # suele interesar más quedarse mirando donde se perdió, que es por donde
     # probablemente reaparezca.
@@ -104,6 +113,52 @@ class ServoConfig(BaseModel):
     # mueve la torreta aunque ande.
     lead_sec: float = 0.0
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_servo_units(cls, data):
+        """Config guardada antes de los grados: `home_pan`, `pan_limit`... iban
+        en unidades de servo. Se pasan a grados de cámara con el recorrido y
+        la reducción del mismo dict, así que la torreta queda donde estaba."""
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        for axis in ("pan", "tilt"):
+            dpu = (data.get(f"{axis}_servo_range_deg", 180.0) / 2
+                   / data.get(f"{axis}_gear_ratio", 1.0))
+            old_limit = data.pop(f"{axis}_limit", None)
+            # 0.9 era el valor por defecto: se deja en None para que siga a la
+            # reducción si cambia.
+            if old_limit is not None and old_limit != _DEFAULT_LIMIT:
+                data.setdefault(f"{axis}_limit_deg", round(old_limit * dpu, 3))
+            old_home = data.pop(f"home_{axis}", None)
+            if old_home is not None:
+                data.setdefault(f"home_{axis}_deg", round(old_home * dpu, 3))
+        return data
+
+    def deg_per_unit(self, axis: str) -> float:
+        """Grados de cámara por unidad de servo en un eje ("pan" o "tilt")."""
+        return getattr(self, f"{axis}_servo_range_deg") / 2 / getattr(self, f"{axis}_gear_ratio")
+
+    def to_servo(self, axis: str, deg: float) -> float:
+        return deg / self.deg_per_unit(axis)
+
+    def to_deg(self, axis: str, units: float) -> float:
+        return units * self.deg_per_unit(axis)
+
+    def limit_units(self, axis: str) -> float:
+        """Límite de recorrido del eje en unidades de servo, nunca más de 1."""
+        limit_deg = getattr(self, f"{axis}_limit_deg")
+        if limit_deg is None:
+            return _DEFAULT_LIMIT
+        return min(1.0, self.to_servo(axis, limit_deg))
+
+    def limit_deg(self, axis: str) -> float:
+        """Límite efectivo en grados de cámara, para mostrarlo."""
+        return self.to_deg(axis, self.limit_units(axis))
+
+
+# Límite de recorrido por defecto, en unidades de servo (ver pan_limit_deg).
+_DEFAULT_LIMIT = 0.9
 
 # A cuántos px del borde de la imagen se considera que la caja está cortada:
 # el objeto se sale por ese lado. No es exactamente 0 porque YOLO rara vez
@@ -244,8 +299,8 @@ class ServoTracker:
         self._esphome = esphome
         self._camera_id = camera_id
 
-        self.pan = cfg.home_pan
-        self.tilt = cfg.home_tilt
+        # Última orden enviada, en unidades de servo.
+        self.pan, self.tilt = self._home()
         self.target_id: Optional[int] = None
         # Clase y última caja vista del objetivo, para reengancharlo si
         # ByteTrack le cambia el ID.
@@ -337,10 +392,14 @@ class ServoTracker:
         self.target_id = None
         self._last_box = None
         if self.cfg.return_home_on_lost:
-            self._send(self.cfg.home_pan, self.cfg.home_tilt, force=True,
-                       reason="objetivo perdido, a reposo")
+            self._send(*self._home(), force=True, reason="objetivo perdido, a reposo")
 
     # -- envío ---------------------------------------------------------------
+
+    def _home(self) -> tuple[float, float]:
+        """Posición de reposo en unidades de servo."""
+        return (self.cfg.to_servo("pan", self.cfg.home_pan_deg),
+                self.cfg.to_servo("tilt", self.cfg.home_tilt_deg))
 
     def _set_hold(self, hold: bool) -> None:
         """Pide a la placa que no suelte los servos (hold) o que vuelva a su
@@ -369,11 +428,15 @@ class ServoTracker:
         now = time.monotonic()
         if not force and (now - self._last_send) < self.cfg.min_interval_sec:
             return False
-        pan = _clamp(pan, -self.cfg.pan_limit, self.cfg.pan_limit)
-        tilt = _clamp(tilt, -self.cfg.tilt_limit, self.cfg.tilt_limit)
+        pan_lim = self.cfg.limit_units("pan")
+        tilt_lim = self.cfg.limit_units("tilt")
+        pan = _clamp(pan, -pan_lim, pan_lim)
+        tilt = _clamp(tilt, -tilt_lim, tilt_lim)
         if abs(pan - self.pan) >= _LOG_JUMP or abs(tilt - self.tilt) >= _LOG_JUMP:
+            to_deg = self.cfg.to_deg
             print(f"[{self._camera_id}] servo: salto pan {self.pan:+.2f}->{pan:+.2f} "
-                  f"tilt {self.tilt:+.2f}->{tilt:+.2f} ({reason})")
+                  f"({to_deg('pan', pan):+.0f}°) tilt {self.tilt:+.2f}->{tilt:+.2f} "
+                  f"({to_deg('tilt', tilt):+.0f}°) ({reason})")
         self.pan = pan
         self.tilt = tilt
         self._last_send = now
@@ -384,13 +447,15 @@ class ServoTracker:
         self._esphome.call_service(self.cfg.service, pan=self.pan, tilt=self.tilt)
         return True
 
-    def move_to(self, pan: float, tilt: float):
-        """Control manual (endpoint /servo): salta el rate limit a propósito.
+    def move_to(self, pan_deg: float, tilt_deg: float):
+        """Control manual (endpoint /servo), en grados de cámara: salta el rate
+        limit a propósito.
 
         Quien mueve la torreta a mano quiere que se mueva ya, y además así se
         puede verificar el hardware sin esperar a que haya detecciones.
         """
-        self._send(pan, tilt, force=True)
+        self._send(self.cfg.to_servo("pan", pan_deg),
+                   self.cfg.to_servo("tilt", tilt_deg), force=True)
 
     def _board_setting(self, object_id: str) -> Optional[float]:
         """Valor de un number de ajuste de la placa, o None si no lo publica
@@ -537,8 +602,13 @@ class ServoTracker:
     def status(self) -> dict:
         return {
             "enabled": self.cfg.enabled,
-            "pan": round(self.pan, 3),
-            "tilt": round(self.tilt, 3),
+            # Grados de cámara; *_servo es lo que de verdad se envía (-1..1).
+            "pan": round(self.cfg.to_deg("pan", self.pan), 1),
+            "tilt": round(self.cfg.to_deg("tilt", self.tilt), 1),
+            "pan_servo": round(self.pan, 3),
+            "tilt_servo": round(self.tilt, 3),
+            "limits_deg": {"pan": round(self.cfg.limit_deg("pan"), 1),
+                           "tilt": round(self.cfg.limit_deg("tilt"), 1)},
             "target_id": self.target_id,
             "last_target": self.last_target,
             "transition_sec": self._transition_sec()[0],
@@ -560,7 +630,7 @@ class ServoTracker:
         # A reposo antes de que se cierre la conexión: si no, el servo se queda
         # donde estuviera apuntando hasta el próximo arranque.
         try:
-            self._send(self.cfg.home_pan, self.cfg.home_tilt, force=True, reason="apagado")
+            self._send(*self._home(), force=True, reason="apagado")
             self._set_hold(False)
         except Exception as e:
             print(f"[{self._camera_id}] servo: fallo al volver a reposo:", repr(e))
