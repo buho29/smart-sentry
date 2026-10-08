@@ -136,6 +136,14 @@ bastan contra ellos:** con los MF90, servos y placa en el mismo 5V/USB y los
 dos condensadores puestos, siguen saliendo tirones, sobre todo en el pan.
 Solo aparecen con el PWM activo; con los servos en auto-detach, no.
 
+Con el PWM cortado (auto-detach) pasa lo contrario: con la torreta quieta y
+YOLO funcionando, el pan da a veces un giro solo de ~30° a la izquierda y
+vuelve en cuanto recibe una orden. Con auto-detach a 0 no pasa: sin señal, el
+servo obedece a cualquier pico espurio de la línea. Por eso el seguimiento
+activo no deja soltar los servos (`set_servo_hold`, ver más abajo). El
+remedio de hardware, sin probar todavía: pull-down de 10kΩ de la señal a GND
+junto al servo y 220-470Ω en serie, o cortar V+ de los servos al soltarlos.
+
 Descartado: GPIO47 a 1.8V (eso solo pasa en las S3 de la serie "V", como
 N8R8V; esta placa es N16R8 y el pin va a 3.3V) y un choque de timers LEDC con
 el XCLK de la cámara (ver el comentario de `output:` en
@@ -257,10 +265,12 @@ desde `POST /cameras/{id}/config/servo` del servicio):
   lazo oscila. Por defecto 0.03 s.
 - **"Servo auto detach"**: segundos quieto tras los que se corta el PWM. El
   interval deja de escribir al llegar, así que el auto-detach sigue
-  funcionando. Mientras el seguimiento tiene un objetivo no se aplica: el
-  servicio Python llama a la acción `set_servo_hold` (`hold: true`), que pone
-  el auto-detach a 0 sin tocar el number, y la repite cada 3 s. Con
-  `hold: false`, o a los 10 s sin refresco, vuelve el valor del number.
+  funcionando. Mientras el seguimiento está activo, haya objetivo o no, no se
+  aplica: el servicio Python llama a la acción `set_servo_hold`
+  (`hold: true`), que pone el auto-detach a 0 sin tocar el number, y la repite
+  cada 3 s. Con `hold: false` (seguimiento apagado), o a los 10 s sin
+  refresco, vuelve el valor del number. El motivo, en "Ruido en la imagen y
+  condensador de los servos".
 
 Los valores del bloque `servo:` del YAML son solo los de arranque. El servicio
 Python lee los tres number para mostrarlos en `/status`.

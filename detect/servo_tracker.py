@@ -39,9 +39,11 @@ class ServoConfig(BaseModel):
     # Va en la config y no cableado en el código para que una variante pueda
     # nombrarlo distinto sin tocar nada.
     service: str = "set_servo_position"
-    # Servicio que anula el auto-detach de la placa mientras hay objetivo, para
-    # que los servos sujeten aunque esté centrado y no lleguen órdenes. Un
-    # firmware sin él simplemente suelta como siempre.
+    # Servicio que anula el auto-detach de la placa mientras el seguimiento
+    # está activo. Con el PWM cortado el servo obedece a picos espurios de la
+    # señal y el pan daba giros solos de ~30°; con detección intermitente
+    # (de noche) soltarlo al perder el objetivo lo dejaba expuesto. Un
+    # firmware sin el servicio simplemente suelta como siempre.
     hold_service: str = "set_servo_hold"
     # Fracción del error que se corrige en cada envío. Más alto = más rápido
     # pero con riesgo de sobrepasar el objetivo y oscilar. Medido en la
@@ -131,7 +133,7 @@ _MAX_STEP = 0.15
 # explicar después un giro brusco (en unidades de servo, -1..1).
 _LOG_JUMP = 0.15
 
-# Cada cuánto se repite el hold mientras hay objetivo. El firmware lo da por
+# Cada cuánto se repite el hold con el seguimiento activo. El firmware lo da por
 # caducado a los 10 s sin refresco (por si este servicio cae); repetirlo
 # además lo recupera si la placa se reinicia o se pierde un mensaje.
 _HOLD_REFRESH_SEC = 3.0
@@ -302,7 +304,6 @@ class ServoTracker:
         self._last_box = (new_target.x1, new_target.y1, new_target.x2, new_target.y2)
         self._vx = 0.0  # la velocidad era la del objetivo anterior
         self._still_sample = None
-        self._set_hold(True)
         print(f"[{self._camera_id}] servo: objetivo #{self.target_id} "
               f"({new_target.label} {new_target.conf:.2f}) en "
               f"({new_target.cx:.0f}, {new_target.cy:.0f}) de {width}x{height}")
@@ -338,7 +339,6 @@ class ServoTracker:
         if self.cfg.return_home_on_lost:
             self._send(self.cfg.home_pan, self.cfg.home_tilt, force=True,
                        reason="objetivo perdido, a reposo")
-        self._set_hold(False)
 
     # -- envío ---------------------------------------------------------------
 
@@ -349,10 +349,20 @@ class ServoTracker:
         self._hold_sent_at = time.monotonic()
         self._esphome.call_service(self.cfg.hold_service, hold=hold)
 
-    def _refresh_hold(self) -> None:
-        if self.target_id is not None and \
-                time.monotonic() - self._hold_sent_at >= _HOLD_REFRESH_SEC:
-            self._set_hold(True)
+    def _sync_hold(self) -> None:
+        """Hold = seguimiento activo, haya objetivo o no. Se manda al cambiar
+        y, activo, se repite cada _HOLD_REFRESH_SEC."""
+        want = self.cfg.enabled
+        if want != self._hold or \
+                (want and time.monotonic() - self._hold_sent_at >= _HOLD_REFRESH_SEC):
+            self._set_hold(want)
+
+    def set_config(self, cfg: ServoConfig) -> None:
+        """Cambia la config en caliente. Apagar el seguimiento suelta el hold
+        en el acto: con enabled=False no hay inferencia ni on_detections, y
+        solo quedaría la caducidad de 10 s del firmware."""
+        self.cfg = cfg
+        self._sync_hold()
 
     def _send(self, pan: float, tilt: float, force: bool = False,
               reason: str = "manual") -> bool:
@@ -427,11 +437,11 @@ class ServoTracker:
     # -- interfaz DetectionConsumer -----------------------------------------
 
     def on_detections(self, dets: list[Detection], width: int, height: int) -> None:
+        self._sync_hold()
         if not self.cfg.enabled or width <= 0 or height <= 0:
             return
 
         target = self._pick_target(dets, width, height)
-        self._refresh_hold()
         if target is None:
             return
 
@@ -519,7 +529,7 @@ class ServoTracker:
         if self.target_id is not None and \
                 time.monotonic() - self._last_seen >= self.cfg.lost_target_sec:
             self._release_target()
-        self._refresh_hold()
+        self._sync_hold()
 
     def wants_inference(self) -> bool:
         return self.cfg.enabled
@@ -535,7 +545,8 @@ class ServoTracker:
             "transition_source": self._transition_sec()[1],
             "smoothing_sec": self._board_setting(_BOARD_SMOOTHING),
             "auto_detach_sec": self._board_setting(_BOARD_AUTO_DETACH),
-            # Con objetivo, la placa no aplica el auto-detach (ver _set_hold).
+            # Con el seguimiento activo la placa no aplica el auto-detach
+            # (ver _sync_hold).
             "hold": self._hold,
             "sends": self._sends,
             # Lo que de verdad se quiere saber cuando "no se mueve": si la placa

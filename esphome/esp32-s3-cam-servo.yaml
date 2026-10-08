@@ -126,8 +126,8 @@ logger:
 #
 # auto_detach_time corta el PWM cuando el servo lleva un rato quieto: menos
 # zumbido, menos consumo y menos calentamiento del servo manteniendo posición.
-# Mientras el seguimiento tiene objetivo lo anula con `set_servo_hold` (ver
-# api), para no soltar la cámara con alguien centrado y quieto.
+# Mientras el seguimiento está activo lo anula con `set_servo_hold` (ver api):
+# suelto, el servo hace caso a los picos espurios de la señal.
 #
 # MOVIMIENTO: transition_length va a 0 y la animación la hace el interval de
 # más abajo. La transición de ESPHome va a velocidad constante: arranca y para
@@ -290,9 +290,10 @@ api:
             id(pan_moving) = true;
             id(tilt_target) = std::max(-1.0f, std::min(1.0f, tilt));
             id(tilt_moving) = true;
-    # Con objetivo enganchado el seguimiento manda hold=true (y lo repite cada
-    # pocos segundos): auto-detach a 0, los servos sujetan aunque el objetivo
-    # esté centrado y no lleguen órdenes. Con hold=false, o si pasan 10 s sin
+    # Con el seguimiento activo el servicio Python manda hold=true (y lo repite
+    # cada pocos segundos): auto-detach a 0. Con el PWM cortado el servo
+    # obedece a picos espurios de la señal y el pan giraba solo ~30°. Con
+    # hold=false (seguimiento apagado), o si pasan 10 s sin
     # refresco, vuelve el valor del number "Servo auto detach". El number no
     # se toca: es el ajuste del usuario y se restaura al arrancar.
     - action: set_servo_hold

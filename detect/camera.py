@@ -543,7 +543,7 @@ class CameraSession:
             # Lee self.cfg en vivo en cada frame, así que basta con sustituirla;
             # lo único que conserva del anterior es la posición actual, que es
             # estado y no configuración.
-            self.servo_tracker.cfg = cfg
+            self.servo_tracker.set_config(cfg)
         return True
 
     def _on_esphome_state(self, value: Optional[bool]):

@@ -445,32 +445,37 @@ check("última orden = posición de reposo", board.commands[-1] == (0.1, -0.1),
       f"({board.commands[-1]})")
 check("y suelta el hold: vuelve el auto-detach", board.holds[-1] is False, f"({board.holds})")
 
-print("\n=== 12b. Hold: con objetivo la placa no suelta los servos ===")
+print("\n=== 12b. Hold: con el seguimiento activo la placa no suelta los servos ===")
 t, board = make_tracker(lost_target_sec=0.2)
-t.on_detections([], W, H)
-check("sin objetivo no se pide hold", board.holds == [], f"({board.holds})")
-t.on_detections([det(cx=W / 2, cy=H / 2, track_id=5)], W, H)
-check("al enganchar se pide hold", board.holds == [True], f"({board.holds})")
+t.on_idle()
+check("sin objetivo ya se pide hold", board.holds == [True], f"({board.holds})")
 check("y status lo dice", t.status()["hold"] is True)
+t.on_detections([], W, H)
 t.on_detections([det(cx=W / 2, cy=H / 2, track_id=5)], W, H)
-check("no se repite en cada frame", board.holds == [True], f"({board.holds})")
-t._hold_sent_at = time.monotonic() - 10  # como si llevara rato sin refrescar
-t.on_detections([det(cx=W / 2, cy=H / 2, track_id=5)], W, H)
-check("se refresca con el objetivo centrado (sin órdenes)",
-      board.holds == [True, True], f"({board.holds})")
+check("no se repite en cada frame ni al enganchar", board.holds == [True], f"({board.holds})")
 time.sleep(0.25)
 t.on_idle()
-check("al perder el objetivo se suelta", board.holds[-1] is False and t.status()["hold"] is False,
+check("al perder el objetivo NO se suelta", t.target_id is None and board.holds == [True],
       f"({board.holds})")
+t._hold_sent_at = time.monotonic() - 10  # como si llevara rato sin refrescar
+t.on_idle()
+check("se refresca aunque no haya objetivo", board.holds == [True, True], f"({board.holds})")
+
+t.set_config(t.cfg.model_copy(update={"enabled": False}))
+check("apagar el seguimiento suelta en el acto",
+      board.holds[-1] is False and t.status()["hold"] is False, f"({board.holds})")
 n = len(board.holds)
 t._hold_sent_at = time.monotonic() - 10
 t.on_idle()
-check("sin objetivo no se refresca nada", len(board.holds) == n, f"({board.holds})")
+t.on_detections([det(cx=W / 2, cy=H / 2)], W, H)
+check("apagado no se refresca nada", len(board.holds) == n, f"({board.holds})")
+t.set_config(t.cfg.model_copy(update={"enabled": True}))
+check("encenderlo vuelve a pedir hold", board.holds[-1] is True, f"({board.holds})")
 
-t, board = make_tracker()
-t.on_detections([det(cx=W * 0.7, cy=H / 2, track_id=1, width=200, height=300)], W, H)
-t.on_detections([det(cx=W * 0.72, cy=H / 2, track_id=3, width=240, height=300)], W, H)
-check("un reenganche por IoU no pide hold de nuevo", board.holds == [True], f"({board.holds})")
+t, board = make_tracker(enabled=False)
+t.on_idle()
+check("con el seguimiento apagado desde el inicio no se pide hold", board.holds == [],
+      f"({board.holds})")
 
 print("\n=== 13. Frames degenerados no revientan ===")
 t, board = make_tracker()

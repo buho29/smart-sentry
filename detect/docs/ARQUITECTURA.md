@@ -902,16 +902,19 @@ Primer consumidor: mueve una torreta pan/tilt para centrar un objetivo.
   seguimiento se aleja más de 0.15 de giro de cámara de la anterior
   (`_MAX_STEP` × `gear_ratio`). El control manual (`move_to`) salta el
   intervalo a propósito.
-- **Hold: con objetivo no se suelta** (`_set_hold`). Al enganchar un objetivo
-  se llama a `set_servo_hold(hold=true)` (`ServoConfig.hold_service`) y la
-  placa pone el auto-detach a 0: los servos sujetan aunque el objetivo esté
-  centrado y no lleguen órdenes. Al soltarlo (`_release_target`) y en
-  `shutdown` va `hold=false` y vuelve el valor del number "Servo auto detach",
-  que no se toca. Mientras hay objetivo se repite cada `_HOLD_REFRESH_SEC`
-  (3 s) desde `on_detections`/`on_idle`; el firmware lo caduca a los 10 s sin
-  refresco, para que una caída del servicio no deje los servos sujetando para
-  siempre. `/status` lo muestra en `hold`. Un firmware sin el servicio suelta
-  como antes.
+- **Hold: con el seguimiento activo no se suelta** (`_sync_hold`). Mientras
+  `enabled` es true, haya objetivo o no, se llama a
+  `set_servo_hold(hold=true)` (`ServoConfig.hold_service`) y la placa pone el
+  auto-detach a 0. Con el PWM cortado el servo obedece a picos espurios de la
+  señal: el pan daba giros solos de ~30° y volvía con la siguiente orden.
+  Soltar solo al perder el objetivo no bastaba, porque de noche la detección
+  va y viene. Al apagar el seguimiento (`set_config`, que es por donde
+  `CameraSession` cambia la config) y en `shutdown` va `hold=false` y vuelve
+  el valor del number "Servo auto detach", que no se toca. Activo, se repite
+  cada `_HOLD_REFRESH_SEC` (3 s) desde `on_detections`/`on_idle`; el firmware
+  lo caduca a los 10 s sin refresco, para que una caída del servicio no deje
+  los servos sujetando para siempre. `/status` lo muestra en `hold`. Un
+  firmware sin el servicio suelta como antes.
 
 **Contrato con el firmware:** servicio `set_servo_position` con variables
 `pan` y `tilt` en el rango **-1.0 a 1.0** (lo que espera `servo.write` de
