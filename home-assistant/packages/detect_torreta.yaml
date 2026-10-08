@@ -393,16 +393,34 @@ script:
       tilt:
         description: "-1 a 1"
         example: 0
+    variables:
+      p: "{{ [[pan | float(0), -1] | max, 1] | min }}"
+      t: "{{ [[tilt | float(0), -1] | max, 1] | min }}"
     sequence:
       - action: rest_command.detect_torreta_servo_move
         data:
-          pan: "{{ [[pan | float(0), -1] | max, 1] | min }}"
-          tilt: "{{ [[tilt | float(0), -1] | max, 1] | min }}"
+          pan: "{{ p }}"
+          tilt: "{{ t }}"
+      # Los sliders se ponen ya en la posición pedida: son la referencia de
+      # las flechas, porque el sensor tarda (ver detect_torreta_step).
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.detect_torreta_pan
+        data:
+          value: "{{ p }}"
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.detect_torreta_tilt
+        data:
+          value: "{{ t }}"
       - action: homeassistant.update_entity
         target:
           entity_id: sensor.detect_torreta_pan
 
-  # Un paso relativo desde la posición actual, para los botones de flecha.
+  # Un paso relativo para los botones de flecha. Parte de los sliders y no de
+  # sensor.detect_torreta_pan/tilt: HA limita los refrescos forzados de un
+  # sensor rest a uno cada 10 s, así que con varios clics seguidos el sensor
+  # seguía en la posición vieja y cada flecha repetía la misma orden.
   detect_torreta_step:
     alias: "Detect torreta: paso"
     icon: mdi:arrow-decision
@@ -417,8 +435,8 @@ script:
     sequence:
       - action: script.detect_torreta_move
         data:
-          pan: "{{ states('sensor.detect_torreta_pan') | float(0) + d_pan | default(0) | float }}"
-          tilt: "{{ states('sensor.detect_torreta_tilt') | float(0) + d_tilt | default(0) | float }}"
+          pan: "{{ states('input_number.detect_torreta_pan') | float(0) + d_pan | default(0) | float }}"
+          tilt: "{{ states('input_number.detect_torreta_tilt') | float(0) + d_tilt | default(0) | float }}"
 
   detect_torreta_center:
     alias: "Detect torreta: centrar"

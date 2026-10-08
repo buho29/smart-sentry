@@ -4,8 +4,8 @@
 # menú ⋮ -> Editar en YAML.
 #
 # Necesita packages/detect_torreta.yaml, la cámara MJPEG camera.detect_torreta
-# (ver ../README.md) y las tarjetas de HACS card-mod, slider-entity-row y
-# mushroom. Las entidades number./select./button.dormitorio_* son las que
+# (ver ../README.md) y las tarjetas de HACS card-mod, slider-entity-row,
+# mushroom y Advanced Camera Card. Las entidades number./select./button.dormitorio_* son las que
 # publica esphome/esp32-s3-cam-servo.yaml con el nombre de dispositivo de este HA.
 type: sections
 max_columns: 2
@@ -16,15 +16,44 @@ sections:
   # Izquierda: imagen y mando.
   - type: grid
     cards:
-      - type: picture-entity
-        entity: camera.detect_torreta
-        show_name: false
-        show_state: false
-        camera_view: auto
-        # La imagen de la torreta es vertical: contain la muestra entera.
-        aspect_ratio: "4:3"
-        fit_mode: contain
+      # Advanced Camera Card (HACS) y no picture-entity: su play/pausa y el
+      # refresco solo afectan a este navegador. Refrescar recarga el panel, que
+      # es lo que reabre el MJPEG cuando se congela al cambiar de modelo.
+      - type: custom:advanced-camera-card
         grid_options: { columns: full }
+        cameras:
+          - camera_entity: camera.detect_torreta
+            live_provider: ha
+        dimensions:
+          aspect_ratio_mode: static
+          aspect_ratio: "4:3"
+        menu:
+          style: overlay
+          position: bottom
+          buttons:
+            play: { enabled: true }
+            fullscreen: { enabled: true }
+            call: { enabled: false }
+            camera_ui: { enabled: false }
+            cameras: { enabled: false }
+            display_mode: { enabled: false }
+            download: { enabled: false }
+            folders: { enabled: false }
+            gallery: { enabled: false }
+            info: { enabled: false }
+            iris: { enabled: false }
+            live: { enabled: false }
+            media_player: { enabled: false }
+            set_review: { enabled: false }
+            substreams: { enabled: false }
+            timeline: { enabled: false }
+        elements:
+          - type: custom:advanced-camera-card-menu-icon
+            icon: mdi:refresh
+            title: Refrescar
+            tap_action:
+              action: custom:advanced-camera-card-action
+              advanced_camera_card_action: reload
 
       - type: grid
         columns: 5
@@ -56,9 +85,10 @@ sections:
               square: false
               cards:
                 - { type: button, icon: mdi:arrow-left-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: -0.1, d_tilt: 0 } } }
-                - { type: button, icon: mdi:arrow-up-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0, d_tilt: 0.1 } } }
+                # tilt positivo baja la cámara en esta torreta: ↑ resta y ↓ suma.
+                - { type: button, icon: mdi:arrow-up-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0, d_tilt: -0.1 } } }
                 - { type: button, icon: mdi:image-filter-center-focus, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_center } }
-                - { type: button, icon: mdi:arrow-down-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0, d_tilt: -0.1 } } }
+                - { type: button, icon: mdi:arrow-down-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0, d_tilt: 0.1 } } }
                 - { type: button, icon: mdi:arrow-right-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0.1, d_tilt: 0 } } }
             - { type: custom:slider-entity-row, entity: input_number.detect_torreta_pan, name: Pan, icon: mdi:pan-horizontal }
             - { type: custom:slider-entity-row, entity: input_number.detect_torreta_tilt, name: Tilt, icon: mdi:pan-vertical }

@@ -41,7 +41,8 @@ cards:
     tap_action:
       action: perform-action
       perform_action: script.detect_torreta_step
-      data: { d_pan: 0, d_tilt: 0.1 }
+      # tilt positivo baja la cámara en esta torreta: ↑ resta y ↓ suma.
+      data: { d_pan: 0, d_tilt: -0.1 }
     grid_options: { columns: 4, rows: 1 }
   - type: button
     icon: mdi:arrow-left-bold
@@ -72,7 +73,7 @@ cards:
     tap_action:
       action: perform-action
       perform_action: script.detect_torreta_step
-      data: { d_pan: 0, d_tilt: -0.1 }
+      data: { d_pan: 0, d_tilt: 0.1 }
     grid_options: { columns: 4, rows: 1 }
 
   - type: tile
