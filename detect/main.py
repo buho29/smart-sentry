@@ -407,6 +407,7 @@ class InferenceConfig(BaseModel):
     """Body de POST /cameras/{id}/config/inference. Todo opcional: lo que no
     venga se conserva. `classes: null` = todas las clases."""
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Confianza mínima para dar una detección por buena.")
+    track_confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Confianza con la que se alimenta ByteTrack (si es menor que `confidence`). Las cajas entre las dos no se pintan como buenas ni disparan grabación, pero mantienen el ID y el objetivo de la torreta. Por defecto 0.25.")
     imgsz: Optional[int] = Field(None, gt=0, description="Lado al que YOLO reescala el frame antes de inferir. Más grande ve objetos más pequeños, pero cuesta más GPU.")
     always_infer: Optional[bool] = Field(None, description="Correr YOLO aunque nadie mire el stream, para seguir detectando con el navegador cerrado.")
     classes: Optional[list[int]] = Field(None, description="IDs de clase COCO (0 = personas, 16 = pájaros). null = todas las clases.")
@@ -423,7 +424,7 @@ async def set_inference_config(camera_id: str, body: InferenceConfig):
     que quieras y envía. Lo que no se envía se conserva, y reenviar valores
     iguales no cuesta nada.
 
-    `confidence`, `imgsz`, `always_infer` y `classes` se releen en cada
+    `confidence`, `track_confidence`, `imgsz`, `always_infer` y `classes` se releen en cada
     frame, así que el cambio se nota al instante. `model_name` y `device`, en cambio, solo se resuelven al
     arrancar los hilos: cuando cambian la sesión se relanza sola.
     """
@@ -432,7 +433,7 @@ async def set_inference_config(camera_id: str, body: InferenceConfig):
 
     changes = body.model_dump(exclude_unset=True)
     # Solo classes admite null; en el resto, null o vacío = no tocar.
-    for k in ("confidence", "imgsz", "always_infer", "model_name", "device"):
+    for k in ("confidence", "track_confidence", "imgsz", "always_infer", "model_name", "device"):
         if k in changes:
             v = changes[k]
             if v is None or (isinstance(v, str) and not v.strip()):

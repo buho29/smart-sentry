@@ -146,6 +146,7 @@ rest:
         value_template: "{{ value_json.config.confidence }}"
         json_attributes_path: "$.config"
         json_attributes:
+          - track_confidence
           - model_name
           - device
           - imgsz
@@ -335,6 +336,16 @@ input_number:
   detect_torreta_confidence:
     name: "Detect torreta confianza"
     icon: mdi:target
+    min: 0.05
+    max: 0.95
+    step: 0.05
+    mode: slider
+  # Lo que ve ByteTrack (por debajo de la confianza): mantiene el ID y el
+  # objetivo de la torreta con lo que se detecta a ratos, sin pintarlo como
+  # bueno ni disparar grabación.
+  detect_torreta_track_confidence:
+    name: "Detect torreta confianza tracker"
+    icon: mdi:target-account
     min: 0.05
     max: 0.95
     step: 0.05
@@ -553,6 +564,46 @@ automation:
           entity_id: input_number.detect_torreta_confidence
         data:
           value: "{{ states('sensor.detect_torreta_confidence') | float }}"
+
+  - id: detect_torreta_track_confidence_push
+    alias: "Detect torreta: enviar confianza del tracker"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_number.detect_torreta_track_confidence
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ (states('input_number.detect_torreta_track_confidence') | float(0)
+              - state_attr('sensor.detect_torreta_confidence', 'track_confidence') | float(0)) | abs > 0.001 }}
+    actions:
+      - delay: "00:00:01"
+      - action: rest_command.detect_torreta_inference
+        data:
+          body:
+            track_confidence: "{{ states('input_number.detect_torreta_track_confidence') | float }}"
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.detect_torreta_confidence
+
+  - id: detect_torreta_track_confidence_sync
+    alias: "Detect torreta: sincronizar confianza del tracker"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: sensor.detect_torreta_confidence
+        attribute: track_confidence
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: template
+        value_template: "{{ state_attr('sensor.detect_torreta_confidence', 'track_confidence') | is_number }}"
+    actions:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.detect_torreta_track_confidence
+        data:
+          value: "{{ state_attr('sensor.detect_torreta_confidence', 'track_confidence') | float }}"
 
   # Modelo e imgsz -> servicio. Solo manda lo que difiere de lo que reporta,
   # para que la sincronización de abajo no provoque rebotes.

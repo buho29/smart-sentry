@@ -172,6 +172,7 @@ necesita la grabación configurada en el servicio con
 | `binary_sensor.detect_torreta_servo_service` | Si la placa publica el servicio de servos. Apagado con la placa conectada = firmware sin servos |
 | `rest_command.detect_torreta_servo_move` / `_servo_config` | Para automatizaciones; `servo_config` admite cualquier campo de `/config/servo` en `body` |
 | `switch.detect_torreta_auto_record` | Grabar al detectar (`trigger_on_detection`). Apagado, solo graba a mano. Reenvía el resto de la config de grabación tal cual; sin grabación configurada no está disponible |
+| `input_number.detect_torreta_track_confidence` | Confianza con la que se alimenta ByteTrack (`track_confidence`), por debajo de la confianza normal. Lo que queda entre las dos no se pinta como bueno ni dispara grabación, pero mantiene el ID y el objetivo de la torreta: es lo que deja seguir a un gato que se detecta a ratos. Se sincroniza con el atributo `track_confidence` de `sensor.detect_torreta_confidence` |
 | `input_select.detect_torreta_model` | Modelo YOLO (yolo26n/s/m, yolo11n/m). Cambiarlo relanza la sesión |
 | `input_select.detect_torreta_imgsz` | Lado de inferencia: 320, 480, 640 o 960 |
 | `input_boolean.detect_torreta_class_person` / `_car` / `_bird` / `_cat` / `_dog` | Clases COCO a detectar (0, 2, 14, 15, 16). `classes` se monta con las marcadas; ninguna marcada = todas las clases (`null`) |

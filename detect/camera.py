@@ -42,6 +42,9 @@ from servo_tracker import ServoConfig, ServoTracker
 # Estilo de las cajas de detección
 BOX_COLOR = (0, 220, 60)  # BGR: verde, para diferenciarlo del texto/overlay
 BOX_THICKNESS = 3
+# Cajas `weak` con ID: el tracker las sigue pero no son detecciones buenas.
+WEAK_BOX_COLOR = (0, 200, 255)  # BGR: ámbar
+WEAK_BOX_THICKNESS = 1
 FONT_SCALE = 0.6
 FONT_THICKNESS = 2
 CENTER_DOT_RADIUS = 4
@@ -368,6 +371,12 @@ class CameraConfig(BaseModel):
     model_name: str = DEFAULT_MODEL
     device: str = "cuda"
     confidence: float = 0.5
+    # Confianza con la que se llama a ByteTrack, por debajo de `confidence`. Con
+    # el corte alto antes del tracker, ByteTrack pierde su segunda pasada (la de
+    # cajas flojas) y un gato negro en sombra, visto en 1 de cada 3-4 frames,
+    # cambiaba de ID en cada hueco y la torreta no llegaba a seguirlo. Las cajas
+    # entre las dos confianzas salen marcadas `weak` (ver Detection).
+    track_confidence: float = 0.25
     imgsz: int = 640
     classes: Optional[list[int]] = None  # None = todas las clases
     default_infer: bool = True  # usado por /stream y /snapshot cuando no se pasa ?infer=
@@ -1050,8 +1059,10 @@ class CameraSession:
             if want_infer:
                 try:
                     t0 = time.time()
+                    conf = self.cfg.confidence
                     results = model.track(
-                        frame, persist=True, conf=self.cfg.confidence,
+                        frame, persist=True,
+                        conf=min(conf, self.cfg.track_confidence),
                         imgsz=self.cfg.imgsz, verbose=False,
                         tracker="bytetrack.yaml", classes=self.cfg.classes,
                     )[0]
@@ -1067,6 +1078,7 @@ class CameraSession:
                             label=model.names[int(box.cls)],
                             conf=float(box.conf[0]),
                             track_id=int(box.id) if box.id is not None else None,
+                            weak=float(box.conf[0]) < conf,
                         )
                         for box in results.boxes
                     ]
@@ -1075,13 +1087,18 @@ class CameraSession:
                     if want_draw:
                         annotated = frame.copy()
                         for d in dets:
+                            # Una floja sin ID es ruido: no se pinta.
+                            if d.weak and d.track_id is None:
+                                continue
+                            color = WEAK_BOX_COLOR if d.weak else BOX_COLOR
+                            thickness = WEAK_BOX_THICKNESS if d.weak else BOX_THICKNESS
                             tid = d.track_id if d.track_id is not None else -1
                             cv2.rectangle(annotated, (int(d.x1), int(d.y1)), (int(d.x2), int(d.y2)),
-                                          BOX_COLOR, BOX_THICKNESS)
-                            cv2.circle(annotated, (int(d.cx), int(d.cy)), CENTER_DOT_RADIUS, BOX_COLOR, -1)
+                                          color, thickness)
+                            cv2.circle(annotated, (int(d.cx), int(d.cy)), CENTER_DOT_RADIUS, color, -1)
                             cv2.putText(annotated, f"{d.label} {d.conf:.2f} #{tid}",
                                         (int(d.x1), int(d.y1) - 8),
-                                        cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, BOX_COLOR, FONT_THICKNESS)
+                                        cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, color, FONT_THICKNESS)
 
                         cv2.putText(annotated, f"{inference_ms:.0f} ms ({self.cfg.device}) | "
                                                 f"{self.pipeline_fps:.1f} fps", (10, 20),

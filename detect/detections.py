@@ -40,6 +40,12 @@ class Detection:
     # objetivo tiene que saber distinguir "sin ID" de un ID cualquiera, porque
     # esas cajas cambian de identidad entre frames.
     track_id: Optional[int] = None
+    # Por debajo de la `confidence` de la cámara: ByteTrack la necesita para no
+    # perder el ID de un objeto que se detecta a ratos (va con
+    # `track_confidence`), pero no cuenta como detección para grabar, ni para
+    # pintarla como buena, ni para enganchar un objetivo nuevo. Sí sirve para
+    # seguir uno ya enganchado.
+    weak: bool = False
 
     @property
     def cx(self) -> float:

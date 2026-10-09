@@ -177,6 +177,60 @@ check("ancha (persona a 1 m) tocando la izquierda: solo centra, sin golpe",
       c is None or abs(c[0]) < FULL_STEP, f"({c})")
 c = last_cmd(dets=[box(H * 0.3, H * 0.7, x1=0, x2=W)])
 check("más ancha que el frame y centrada: el pan no se mueve", c is None, f"({c})")
+c = last_cmd(dets=[box(H * 0.3, H * 0.7, x1=W * 0.75, x2=W)])
+check("estrecha y cortada: el paso es mayor que el de centrar con la caja junto al borde",
+      c and abs(c[0]) > abs(last_cmd(dets=[box(H * 0.3, H * 0.7, x1=W * 0.75, x2=W - 10)])[0]),
+      f"({c})")
+
+
+def wide(x1, x2, track_id=1):
+    return Detection(x1=x1, y1=H * 0.3, x2=x2, y2=H * 0.7, cls=0, label="person",
+                     conf=0.9, track_id=track_id)
+
+
+# Persona cerca (60% del ancho) que se sale por la derecha. Se ve entera y
+# centrada, luego cortada por la derecha con el borde izquierdo avanzando.
+t, b = make_tracker(deadzone=0.14)
+t.on_detections([wide(W * 0.2, W * 0.8)], W, H)
+check("entera y centrada: aprende el ancho y no se mueve",
+      abs(t._full_width - W * 0.6) < 1e-6 and b.commands == [], f"({t._full_width}, {b.commands})")
+t.on_detections([wide(W * 0.5, W)], W, H)    # el cuerpo ha avanzado 0.3 W
+virt = b.commands[-1] if b.commands else None
+# Sin ancho conocido sería el centro de la caja (0.75 W): la mitad de lo que se ha movido.
+plain = last_cmd(dets=[wide(W * 0.5, W)], deadzone=0.14)
+check("ancha y cortada por la derecha: va hacia la derecha con el centro virtual",
+      virt and virt[0] * right[0] > 0, f"({virt})")
+check("y más deprisa que con el centro de la caja cortada",
+      plain is None or abs(virt[0]) > abs(plain[0]), f"({virt} vs {plain})")
+
+t, b = make_tracker(deadzone=0.14)
+t.on_detections([wide(W * 0.2, W * 0.8)], W, H)
+t.on_detections([wide(W * 0.22, W)], W, H)  # roza la derecha pero no se ha movido
+check("sentada y rozando un lado: el centro virtual no se mueve, no hay golpe",
+      b.commands == [], f"({b.commands})")
+t.on_detections([wide(W * 0.2, W * 0.8)], W, H)
+check("y el ancho no se aprende de la caja cortada",
+      abs(t._full_width - W * 0.6) < 1e-6, f"({t._full_width})")
+
+t, b = make_tracker()
+t.on_detections([wide(W * 0.2, W * 0.8)], W, H)
+t.on_detections([wide(0, W)], W, H)
+check("cortada por los dos lados: solo centra", b.commands == [], f"({b.commands})")
+
+print("\n=== 1b. Más ganancia cerca del borde (solo pan) ===")
+inner = last_cmd(dets=[det(cx=W * 0.7, cy=H / 2)])                 # ex 0.4
+inner_same = last_cmd(dets=[det(cx=W * 0.7, cy=H / 2)], edge_gain=ServoConfig().gain)
+check("dentro de edge_zone el paso no cambia", inner == inner_same, f"({inner} vs {inner_same})")
+outer = last_cmd(dets=[det(cx=W * 0.95, cy=H / 2)])                # ex 0.9
+outer_same = last_cmd(dets=[det(cx=W * 0.95, cy=H / 2)], edge_gain=ServoConfig().gain)
+g = ServoConfig()
+expected = g.gain * g.edge_zone + g.edge_gain * (0.9 - g.edge_zone)
+check("fuera, el exceso va con edge_gain",
+      abs(abs(outer[0]) - expected) < 1e-9 and abs(outer[0]) > abs(outer_same[0]),
+      f"({outer} vs {outer_same}, esperado {expected:.3f})")
+tilt_edge = last_cmd(dets=[det(cx=W / 2, cy=H * 0.95)], deadzone=0.0)
+tilt_same = last_cmd(dets=[det(cx=W / 2, cy=H * 0.95)], deadzone=0.0, edge_gain=g.gain)
+check("el tilt no usa edge_gain", tilt_edge == tilt_same, f"({tilt_edge} vs {tilt_same})")
 
 # Anticipación: un objetivo que cruza hacia la derecha con la cámara quieta.
 def walk_right(**kwargs):
@@ -318,10 +372,14 @@ check("un eje sin error se queda donde está",
       board.commands[-1][1] == tilt_moved, f"({board.commands[-1]} vs tilt {tilt_moved})")
 
 # Tope por orden: ni con ganancia alta se dan saltos de 0.5.
-t, board = make_tracker(gain=0.9)
-t.on_detections([det(cx=W * 0.95, cy=H / 2)], W, H)
-check("ninguna orden del seguimiento se aleja más de 0.15 de la anterior",
-      abs(board.commands[-1][0]) <= 0.15 + 1e-9, f"({board.commands[-1]})")
+t, board = make_tracker(gain=0.9, edge_gain=0.9)
+t.on_detections([det(cx=W * 0.95, cy=H * 0.95)], W, H)
+check("ninguna orden del seguimiento se aleja más de 0.25 en pan",
+      abs(board.commands[-1][0]) <= 0.25 + 1e-9, f"({board.commands[-1]})")
+check("ni de 0.15 en tilt", abs(board.commands[-1][1]) <= 0.15 + 1e-9,
+      f"({board.commands[-1]})")
+check("y el de pan sí llega a 0.25", abs(abs(board.commands[-1][0]) - 0.25) < 1e-9,
+      f"({board.commands[-1]})")
 
 print("\n=== 4b. Límites de recorrido ===")
 t, board = make_tracker()
@@ -425,6 +483,50 @@ t, board = make_tracker()
 t.on_detections([det(cx=W * 0.7, cy=H / 2, track_id=1)], W, H)
 t.on_detections([det(cx=W * 0.7, cy=H / 2, track_id=3, label="cat")], W, H)
 check("otra clase en el mismo sitio no se reengancha", t.target_id == 1, f"(#{t.target_id})")
+
+# Gato rápido: entre detecciones avanza más que su ancho, IoU 0, ID nuevo.
+t, board = make_tracker()
+t.on_detections([det(cx=W * 0.3, cy=H / 2, track_id=44, label="cat", width=60, height=40)], W, H)
+n = len(board.commands)
+t.on_detections([det(cx=W * 0.3 + 200, cy=H / 2, track_id=45, label="cat", width=60, height=40)], W, H)
+check("ID nuevo sin solape pero cerca (200 px): reengancha en el acto y le sigue",
+      t.target_id == 45 and len(board.commands) > n, f"(#{t.target_id}, {board.commands})")
+
+print("\n=== 7c. Cajas sin ID y cajas flojas (weak) ===")
+t, board = make_tracker()
+t.on_detections([det(cx=W * 0.5, cy=H / 2, track_id=44, label="cat")], W, H)
+t.on_detections([det(cx=W * 0.75, cy=H / 2, track_id=None, label="cat")], W, H)
+check("objetivo perdido y caja sin ID de su clase cerca: apunta a ella",
+      board.commands and board.commands[-1][0] * right[0] > 0, f"({board.commands})")
+check("sin cambiar de objetivo", t.target_id == 44, f"(#{t.target_id})")
+t.on_detections([det(cx=W * 0.95, cy=H / 2, track_id=50, label="cat")], W, H)
+check("y el reenganche busca desde la caja sin ID, no desde la última con ID",
+      t.target_id == 50, f"(#{t.target_id})")
+
+t, board = make_tracker()
+t.on_detections([det(cx=W * 0.2, cy=H / 2, track_id=44, label="cat")], W, H)
+n = len(board.commands)
+t.on_detections([det(cx=W * 0.9, cy=H / 2, track_id=None, label="cat")], W, H)
+check("caja sin ID lejos de la última: no se sigue", len(board.commands) == n,
+      f"({board.commands})")
+
+
+def weak_det(cx, track_id, label="cat"):
+    return Detection(x1=cx - 20, y1=H / 2 - 20, x2=cx + 20, y2=H / 2 + 20, cls=15,
+                     label=label, conf=0.3, track_id=track_id, weak=True)
+
+
+t, board = make_tracker()
+t.on_detections([weak_det(W * 0.8, 7)], W, H)
+check("una caja floja no engancha objetivo nuevo", t.target_id is None and board.commands == [],
+      f"(#{t.target_id})")
+t.on_detections([det(cx=W * 0.6, cy=H / 2, track_id=7, label="cat")], W, H)
+t.on_detections([weak_det(W * 0.8, 7)], W, H)
+check("pero sí mantiene el enganchado y lo sigue",
+      t.target_id == 7 and board.commands[-1][0] < board.commands[-2][0] if len(board.commands) > 1
+      else False, f"({board.commands})")
+t.on_detections([weak_det(W * 0.85, 8)], W, H)
+check("y reengancha con una floja", t.target_id == 8, f"(#{t.target_id})")
 
 print("\n=== 8. on_idle (la cámara deja de dar imagen) ===")
 t, board = make_tracker(lost_target_sec=0.3)

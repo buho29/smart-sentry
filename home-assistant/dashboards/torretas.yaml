@@ -142,10 +142,12 @@ sections:
                 - { type: template, entity: input_boolean.detect_torreta_class_cat, icon: mdi:cat, content: Gatos, icon_color: "{{ 'blue' if is_state(entity, 'on') else 'disabled' }}", tap_action: { action: toggle } }
                 - { type: template, entity: input_boolean.detect_torreta_class_dog, icon: mdi:dog, content: Perros, icon_color: "{{ 'blue' if is_state(entity, 'on') else 'disabled' }}", tap_action: { action: toggle } }
                 - { type: template, entity: input_boolean.detect_torreta_class_car, icon: mdi:car, content: Coches, icon_color: "{{ 'blue' if is_state(entity, 'on') else 'disabled' }}", tap_action: { action: toggle } }
+                # Empieza por "clases " a propósito: si el texto fuera solo "[0]",
+                # HA lo leería como lista y el chip enseñaría "0" sin corchetes.
                 - type: template
-                  icon: mdi:code-brackets
-                  content: "{% set c = state_attr('sensor.detect_torreta_confidence', 'classes') %}{{ c if c is not none else 'todas' }}"
+                  content: "{% set c = state_attr('sensor.detect_torreta_confidence', 'classes') %}clases {{ '[' ~ c | join(', ') ~ ']' if c is not none else 'todas' }}"
             - { type: custom:slider-entity-row, entity: input_number.detect_torreta_confidence, name: Confianza, icon: mdi:target }
+            - { type: custom:slider-entity-row, entity: input_number.detect_torreta_track_confidence, name: Confianza tracker, icon: mdi:target-account }
 
             - { type: heading, heading: Servos, heading_style: title, icon: mdi:axis-arrow }
             - { type: custom:slider-entity-row, entity: number.dormitorio_esp32_s3_cam_servo_servo_transition, name: Transición, icon: mdi:timer-outline }

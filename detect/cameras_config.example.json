@@ -35,6 +35,8 @@
     "model_name": "yolo26m",
     "device": "cuda",
     "confidence": 0.5,
+    "_comentario_track_confidence": "track_confidence: confianza con la que se alimenta ByteTrack, por debajo de confidence. Las cajas entre las dos no se pintan como buenas (salen finas en ámbar si tienen ID) ni disparan grabación, pero mantienen el ID y el objetivo de la torreta: sin ellas, un gato visto a ratos cambia de ID en cada hueco.",
+    "track_confidence": 0.25,
     "imgsz": 640,
     "classes": [
       0
@@ -45,6 +47,9 @@
     "servo": {
       "enabled": true,
       "gain": 0.25,
+      "_comentario_edge": "edge_gain: ganancia del pan para la parte del error que pasa de edge_zone (0-1, desde el centro). Cerca del borde el objetivo se escapa y hay que ir más deprisa; dentro de edge_zone manda gain. edge_gain = gain desactiva la zona.",
+      "edge_zone": 0.5,
+      "edge_gain": 0.3,
       "deadzone": 0.06,
       "min_interval_sec": 0.08,
       "invert_pan": false,

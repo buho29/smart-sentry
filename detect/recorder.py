@@ -188,7 +188,9 @@ class ClipRecorder:
             return
 
         # Cualquier detección vale: la sesión ya las ha filtrado por `classes`
-        # y `confidence` de la cámara (y ha quitado las corruptas).
+        # (y ha quitado las corruptas). Las `weak` no llegan a la `confidence`
+        # de la cámara: solo están para que ByteTrack no pierda el ID.
+        dets = [d for d in dets if not d.weak]
         if not dets:
             self._hits = 0
             return

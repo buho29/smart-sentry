@@ -152,6 +152,16 @@ rec.on_jpeg(None, JPG, 100.0)
 check("cualquier detección recibida dispara", rec.status()["state"] == "recording")
 rec.shutdown()
 
+# Salvo las `weak`: están por debajo de la confianza de la cámara y solo le
+# llegan a ByteTrack y a la torreta.
+rec, enc, _ = make_recorder(min_hits=1)
+rec.on_detections([Detection(x1=10, y1=10, x2=30, y2=40, cls=15, label="cat",
+                             conf=0.3, track_id=1, weak=True)], 64, 48)
+rec.on_jpeg(None, JPG, 100.0)
+check("una detección weak no dispara", rec.status()["state"] == "idle",
+      f"({rec.status()['state']})")
+rec.shutdown()
+
 check("un cameras_config.json viejo con trigger_classes/min_conf/encoder carga",
       RecordingConfig(trigger_classes=[15], min_conf=0.5, encoder="ffmpeg",
                       min_hits=3).min_hits == 3)

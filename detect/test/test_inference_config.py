@@ -70,7 +70,7 @@ check("persistido a disco", any(c["camera_id"] == "cam" and c["confidence"] == 0
 print("\n=== 3. Reenviar la config entera (el ejemplo de Swagger) no relanza ===")
 s = fresh()
 full = s.cfg.model_dump(include=set(_main.InferenceConfig.model_fields))
-check("el ejemplo cubre todos los campos", set(full) == {"confidence", "imgsz", "always_infer", "classes", "model_name", "device"}, str(full))
+check("el ejemplo cubre todos los campos", set(full) == {"confidence", "track_confidence", "imgsz", "always_infer", "classes", "model_name", "device"}, str(full))
 r = client.post(URL, json=full)
 check("200", r.status_code == 200, r.text[:120])
 check("no relaunched", r.json()["relaunched"] is False)

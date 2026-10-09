@@ -22,6 +22,7 @@ es 15° de cámara aunque el servo gire 45. Son grados nominales, sacados de
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Optional
 
@@ -54,6 +55,14 @@ class ServoConfig(BaseModel):
     # desplaza la caja ~900 px, así que corregir el error entero sería ~0.27;
     # 0.15 corrige ~55% por vez. Con 0.3 (~110%) se pasaba siempre y oscilaba.
     gain: float = 0.15
+    # Ganancia del pan para la parte del error que pase de `edge_zone`: cerca
+    # del borde el objetivo se está escapando y hay que ir más deprisa, y si se
+    # pasa, sale del borde hacia el centro, no al otro lado. Con la ganancia
+    # única del centro, alguien andando rápido salía de imagen antes de que la
+    # torreta le alcanzara. Dentro de `edge_zone` manda `gain`, así que una
+    # persona sentada sigue igual de quieta. `edge_gain = gain` = sin zona.
+    edge_zone: float = 0.5
+    edge_gain: float = 0.3
     # Error normalizado por debajo del cual un eje se considera centrado y NO
     # se mueve. Sin zona muerta el servo tiembla sin parar persiguiendo el
     # ruido de la caja, que en una persona quieta baila más de un 6% entre
@@ -165,12 +174,22 @@ _DEFAULT_LIMIT = 0.9
 # pega la caja al píxel.
 _EDGE_PX = 2
 
-# Error con el que se mueve un eje cuando la caja está cortada por un lado. No
+# Error con el que se mueve el tilt cuando la caja está cortada por arriba. No
 # se puede medir cuánto falta (con y1=0 da igual un pelo que media cabeza), así
 # que se avanza a paso fijo y se deja que el lazo lo repita si hace falta. Con
 # 1.0 (paso máximo) el tilt, multiplicado por la reducción, daba saltos de 0.6
 # de servo, se pasaba al extremo contrario y ByteTrack perdía el ID.
 _CLIPPED_EDGE_ERROR = 0.4
+
+# Lo mismo para el pan cuando la caja está cortada por un lateral y no se
+# conoce su ancho entero (ver _pan_error). El pan no tiene reducción y el paso
+# lo limita _MAX_STEP_PAN. Con 0.4 un objetivo que se escapaba por un lado
+# hacía FRENAR la torreta: el paso era menor que el del centrado normal con la
+# caja cerca del borde.
+_CLIPPED_SIDE_ERROR = 1.0
+
+# Peso de la muestra nueva en la media del ancho del objetivo sin cortar.
+_FULL_WIDTH_ALPHA = 0.3
 
 # object_id de los number de ajuste que publica el firmware de la torreta
 # (esphome/esp32-s3-cam-servo.yaml): velocidad máxima, suavizado y auto-detach.
@@ -183,6 +202,11 @@ _BOARD_AUTO_DETACH = "servo_auto_detach"
 # contra una ganancia alta o un error grande: ningún frame puede mandar un
 # salto que deje al objetivo fuera de la imagen.
 _MAX_STEP = 0.15
+
+# El del pan es mayor: un gato cruza la imagen en ~1 s, y con 0.15 por orden
+# (~54°/s a 4 órdenes/s) no había forma de seguirle. 0.25 son ~90°/s; la placa
+# con "Servo transition" a 1 s llega a 180°/s.
+_MAX_STEP_PAN = 0.25
 
 # Saltos a partir de los cuales se deja constancia en el log, para poder
 # explicar después un giro brusco (en unidades de servo, -1..1).
@@ -231,9 +255,10 @@ _MIN_LEAD_SPEED = 40.0
 # empujando hacia un lado con el objetivo quieto.
 _LEAD_STALE_SEC = 1.0
 
-# En horizontal, los bordes solo se persiguen si la caja ocupa menos de esta
-# fracción del ancho. Una persona a 1 m llena casi todo el cuadro y toca los
-# lados casi siempre: perseguirlos daba golpes de un lado a otro.
+# Una caja cortada por un lateral sin ancho conocido solo se persigue a paso
+# fijo si ocupa menos de esta fracción del ancho. Una persona a 1 m llena casi
+# todo el cuadro y toca los lados casi siempre: perseguirlos daba golpes de un
+# lado a otro. Con el ancho conocido no hace falta: se usa el centro virtual.
 _SIDE_CHASE_MAX_FRACTION = 0.5
 
 
@@ -242,6 +267,13 @@ _SIDE_CHASE_MAX_FRACTION = 0.5
 # solo mover un brazo; 0.3 deja pasar ese cambio de postura y no engancha a
 # otra persona al lado.
 _RELOCK_IOU = 0.3
+
+# Si ninguna caja solapa, distancia máxima entre centros (en fracción del
+# ancho) a la que una caja de la misma clase se da por el mismo objetivo. Un
+# gato detectado a saltos avanza más que su ancho entre detecciones, el IoU da
+# 0 y ByteTrack le pone ID nuevo; sin esto la torreta esperaba lost_target_sec
+# quieta mientras el gato cruzaba la imagen.
+_RELOCK_DIST = 0.35
 
 
 def _iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
@@ -276,6 +308,47 @@ def _axis_error(lo: float, hi: float, size: int, center_err: float,
     if chase_hi and hi >= size - _EDGE_PX:
         return max(center_err, _CLIPPED_EDGE_ERROR), "hi"
     return center_err, None
+
+
+def _pan_center(x1: float, x2: float, width: int,
+                full_width: float) -> tuple[float, Optional[str], bool]:
+    """Centro horizontal con el que apuntar, lado cortado ("lo", "hi" o None) y
+    si hay que forzar el paso fijo de `_CLIPPED_SIDE_ERROR`.
+
+    Con la caja cortada por un solo lateral, su centro miente: la caja encoge
+    por ese lado y el centro avanza a la mitad de lo que avanza el objetivo.
+    Si se conoce el ancho que tenía entera (`full_width`, 0 si no), el centro
+    sale del borde libre: es lo que hace que alguien cerca no vaya a cámara
+    lenta, y que una persona sentada que roza un lado no rebote, porque su
+    centro virtual no se mueve.
+
+    Sin ancho conocido, como antes: paso fijo si la caja es estrecha y nada
+    especial si es ancha. Cortada por los dos lados, se centra sin más.
+    """
+    cx = (x1 + x2) / 2
+    cut_lo = x1 <= _EDGE_PX
+    cut_hi = x2 >= width - _EDGE_PX
+    if cut_lo == cut_hi:
+        return cx, None, False
+    side = "hi" if cut_hi else "lo"
+    if full_width > 0:
+        # Solo cuenta el borde libre, aunque la caja cortada sea más ancha que
+        # lo recordado: eso es un brazo o el cuerpo inclinado hacia el lado
+        # cortado, no el objetivo yéndose, y seguir su centro empujaba la
+        # torreta con alguien sentado.
+        if cut_hi:
+            return x1 + full_width / 2, side, False
+        return x2 - full_width / 2, side, False
+    if (x2 - x1) < width * _SIDE_CHASE_MAX_FRACTION:
+        return cx, side, True
+    return cx, None, False
+
+
+def _scaled_error(err: float, gain: float, zone: float, edge_gain: float) -> float:
+    """Paso para un error: `gain` hasta `zone` y `edge_gain` en lo que pase."""
+    a = abs(err)
+    step = gain * a if a <= zone else gain * zone + edge_gain * (a - zone)
+    return math.copysign(step, err)
 
 
 def _clamp(v: float, lo: float = -1.0, hi: float = 1.0) -> float:
@@ -316,6 +389,9 @@ class ServoTracker:
         self._vx: float = 0.0
         self._vx_at: float = 0.0  # instante de la última medida de velocidad
         self._still_sample: Optional[tuple[float, int, float, float]] = None
+        # Ancho en px del objetivo visto sin tocar ningún lateral (media), para
+        # el centro virtual de _pan_center. 0 = aún no se ha visto entero.
+        self._full_width: float = 0.0
         # Último hold pedido a la placa y cuándo, para refrescarlo.
         self._hold = False
         self._hold_sent_at: float = 0.0
@@ -325,16 +401,18 @@ class ServoTracker:
     def _pick_target(self, dets: list[Detection], width: int, height: int) -> Optional[Detection]:
         """Mantiene el objetivo bloqueado si sigue ahí; si no, engancha otro.
 
-        Solo se consideran cajas con track_id: sin ID confirmado, ByteTrack no
+        Solo se engancha a cajas con track_id: sin ID confirmado, ByteTrack no
         garantiza que la caja de este frame sea el mismo objeto que la del
-        anterior, y bloquearse a eso sería bloquearse a nada.
+        anterior, y bloquearse a eso sería bloquearse a nada. Ni a cajas
+        `weak`, que pueden ser ruido; esas solo sirven para seguir al que ya
+        está enganchado.
         """
         with_id = [d for d in dets if d.track_id is not None]
 
         if self.target_id is not None:
             current = next((d for d in with_id if d.track_id == self.target_id), None)
             if current is None and self._last_box is not None:
-                current = self._relock(with_id)
+                current = self._relock(with_id, width)
             if current is not None:
                 self._last_seen = time.monotonic()
                 self._last_box = (current.x1, current.y1, current.x2, current.y2)
@@ -343,9 +421,10 @@ class ServoTracker:
             # margen antes de soltarlo, para no cambiar de objetivo por un
             # parpadeo del detector.
             if time.monotonic() - self._last_seen < self.cfg.lost_target_sec:
-                return None
+                return self._near_untracked(dets, width)
             self._release_target()
 
+        with_id = [d for d in with_id if not d.weak]
         if not with_id:
             return None
 
@@ -359,30 +438,64 @@ class ServoTracker:
         self._last_box = (new_target.x1, new_target.y1, new_target.x2, new_target.y2)
         self._vx = 0.0  # la velocidad era la del objetivo anterior
         self._still_sample = None
+        self._full_width = 0.0
         print(f"[{self._camera_id}] servo: objetivo #{self.target_id} "
               f"({new_target.label} {new_target.conf:.2f}) en "
               f"({new_target.cx:.0f}, {new_target.cy:.0f}) de {width}x{height}")
         return new_target
 
-    def _relock(self, with_id: list[Detection]) -> Optional[Detection]:
-        """El ID bloqueado ha desaparecido: ¿hay un ID nuevo que sea la misma
-        persona? Se busca la caja de la misma clase que más solape con la
-        última vista. Si pasa de `_RELOCK_IOU` se cambia de ID en el acto, sin
-        esperar `lost_target_sec` y conservando la velocidad medida.
+    def _nearest(self, candidates: list[Detection], width: int) -> Optional[Detection]:
+        """La caja de la misma clase con el centro más cerca de la última caja
+        del objetivo, si está a menos de `_RELOCK_DIST`; si no, None."""
+        candidates = [d for d in candidates if d.label == self._target_label]
+        if not candidates or self._last_box is None:
+            return None
+        lx = (self._last_box[0] + self._last_box[2]) / 2
+        ly = (self._last_box[1] + self._last_box[3]) / 2
+        best = min(candidates, key=lambda d: (d.cx - lx) ** 2 + (d.cy - ly) ** 2)
+        dist = math.hypot(best.cx - lx, best.cy - ly)
+        return best if dist <= _RELOCK_DIST * width else None
+
+    def _relock(self, with_id: list[Detection], width: int) -> Optional[Detection]:
+        """El ID bloqueado ha desaparecido: ¿hay un ID nuevo que sea el mismo
+        objeto? Primero la caja de la misma clase que más solape con la última
+        vista (pasando de `_RELOCK_IOU`); si ninguna solapa, la más cercana
+        dentro de `_RELOCK_DIST`. Se cambia de ID en el acto, sin esperar
+        `lost_target_sec` y conservando la velocidad medida.
         """
         candidates = [d for d in with_id if d.label == self._target_label]
         if not candidates:
             return None
         best = max(candidates, key=lambda d: _iou(self._last_box, (d.x1, d.y1, d.x2, d.y2)))
         iou = _iou(self._last_box, (best.x1, best.y1, best.x2, best.y2))
-        if iou < _RELOCK_IOU:
-            return None
+        if iou >= _RELOCK_IOU:
+            why = f"IoU {iou:.2f}"
+        else:
+            best = self._nearest(candidates, width)
+            if best is None:
+                return None
+            why = "cerca"
         print(f"[{self._camera_id}] servo: reenganche #{self.target_id} -> "
-              f"#{best.track_id} (IoU {iou:.2f})")
+              f"#{best.track_id} ({why})")
         self.target_id = best.track_id
         # La muestra de velocidad era del ID viejo: se descarta, pero no la
         # velocidad, que es de la misma persona.
         self._still_sample = None
+        return best
+
+    def _near_untracked(self, dets: list[Detection], width: int) -> Optional[Detection]:
+        """Objetivo perdido y dentro del margen: si hay una caja SIN ID de su
+        clase cerca de donde se vio por última vez, se apunta a ella en este
+        frame. Muchas detecciones de un gato rápido salen sin ID (ByteTrack no
+        llega a confirmar el track) y descartarlas dejaba la torreta quieta.
+
+        No se engancha ni renueva `_last_seen`: si ByteTrack no le da ID antes
+        del plazo, el objetivo se suelta igual. Sí se actualiza la última caja,
+        para que el reenganche busque donde está ahora y no donde estaba.
+        """
+        best = self._nearest([d for d in dets if d.track_id is None], width)
+        if best is not None:
+            self._last_box = (best.x1, best.y1, best.x2, best.y2)
         return best
 
     def _release_target(self):
@@ -511,7 +624,10 @@ class ServoTracker:
             return
 
         # Anticipación: apuntar a donde estará el objetivo, no a donde está.
-        self._measure_velocity(target)
+        # Una caja sin ID (ver _near_untracked) no se mide: no hay forma de
+        # saber que la muestra anterior era del mismo objeto.
+        if target.track_id is not None:
+            self._measure_velocity(target)
         if time.monotonic() - self._vx_at > _LEAD_STALE_SEC:
             self._vx = 0.0  # sin medida reciente no se anticipa
         lead_px = self._vx * self.cfg.lead_sec if abs(self._vx) >= _MIN_LEAD_SPEED else 0.0
@@ -520,16 +636,23 @@ class ServoTracker:
 
         # Error normalizado a [-1, 1]: independiente de la resolución, así que
         # cambiar imgsz o la resolución de la cámara no descalibra la ganancia.
-        ex_now = (target.cx - width / 2) / (width / 2)
-        ex = ex_now + lead_px / (width / 2)
-        ey =(target.cy - height / 2) / (height / 2)
+        # El ancho entero solo se aprende con la caja sin tocar ningún lateral.
+        if target.x1 > _EDGE_PX and target.x2 < width - _EDGE_PX:
+            w = target.x2 - target.x1
+            self._full_width = (w if not self._full_width else
+                                _FULL_WIDTH_ALPHA * w + (1 - _FULL_WIDTH_ALPHA) * self._full_width)
 
-        # Centrar, pero ir a por el borde por el que se sale el objetivo: el de
-        # arriba siempre (la cabeza); los laterales solo si la caja es
-        # estrecha. El de abajo nunca: el cuerpo de una persona cerca sale
+        # Centrar, pero ir a por el borde por el que se sale el objetivo: los
+        # laterales con el centro virtual de _pan_center; el de arriba siempre
+        # (la cabeza); el de abajo nunca: el cuerpo de una persona cerca sale
         # siempre por abajo, y perseguirlo bajaba la cámara de golpe.
-        narrow = (target.x2 - target.x1) < width * _SIDE_CHASE_MAX_FRACTION
-        ex, cut_x = _axis_error(target.x1, target.x2, width, ex, narrow, narrow)
+        cx, cut_x, forced = _pan_center(target.x1, target.x2, width, self._full_width)
+        ex_now = (cx - width / 2) / (width / 2)
+        ex = ex_now + lead_px / (width / 2)
+        if forced:
+            ex = (max(ex, _CLIPPED_SIDE_ERROR) if cut_x == "hi"
+                  else min(ex, -_CLIPPED_SIDE_ERROR))
+        ey = (target.cy - height / 2) / (height / 2)
         ey, cut_y = _axis_error(target.y1, target.y2, height, ey, True, False)
         if cut_y is None and ey > 0:
             # Bajar la cámara sube la caja en la imagen: no más allá de dejar
@@ -551,14 +674,15 @@ class ServoTracker:
         # balanceo pasa de _MIN_LEAD_SPEED y la anticipación sacaba de la zona
         # muerta a una persona centrada. Fuera de ella sí se anticipa.
         if abs(ex) < self.cfg.deadzone or \
-                (cut_x is None and abs(ex_now) < self.cfg.deadzone):
+                (not forced and abs(ex_now) < self.cfg.deadzone):
             ex = 0.0
         if abs(ey) < self.cfg.deadzone:
             ey = 0.0
         if ex == 0.0 and ey == 0.0:
             return  # ya está centrado: no gastar movimiento ni ancho de banda
 
-        step_pan = self.cfg.gain * ex * self.cfg.pan_gear_ratio
+        step_pan = _scaled_error(ex, self.cfg.gain, self.cfg.edge_zone,
+                                 self.cfg.edge_gain) * self.cfg.pan_gear_ratio
         step_tilt = self.cfg.gain * ey * self.cfg.tilt_gear_ratio
         if self.cfg.invert_pan:
             step_pan = -step_pan
@@ -576,13 +700,14 @@ class ServoTracker:
         new_tilt = self.tilt + step_tilt if ey else self.tilt
         # El tope va en giro de CÁMARA: con reducción, el servo tiene que girar
         # más para lo mismo.
-        max_pan = _MAX_STEP * self.cfg.pan_gear_ratio
+        max_pan = _MAX_STEP_PAN * self.cfg.pan_gear_ratio
         max_tilt = _MAX_STEP * self.cfg.tilt_gear_ratio
         new_pan = _clamp(new_pan, self.pan - max_pan, self.pan + max_pan)
         new_tilt = _clamp(new_tilt, self.tilt - max_tilt, self.tilt + max_tilt)
         edges = {"lo": ("izq", "arriba"), "hi": ("der", "abajo")}
         cuts = [f"borde {edges[c][i]}" for i, c in enumerate((cut_x, cut_y)) if c]
-        reason = (f"#{target.track_id} {target.label} ex={ex:+.2f} ey={ey:+.2f} "
+        tid = f"#{target.track_id}" if target.track_id is not None else "sin ID"
+        reason = (f"{tid} {target.label} ex={ex:+.2f} ey={ey:+.2f} "
                   + (", ".join(cuts) or "centro")
                   + (f" lead={lead_px:+.0f}px" if lead_px else ""))
         self._send(new_pan, new_tilt, reason=reason)
