@@ -45,6 +45,11 @@ BOX_THICKNESS = 3
 # Cajas `weak` con ID: el tracker las sigue pero no son detecciones buenas.
 WEAK_BOX_COLOR = (0, 200, 255)  # BGR: ámbar
 WEAK_BOX_THICKNESS = 1
+# Línea de estado (modelo, ms, fps) arriba a la izquierda. Va sobre un fondo
+# negro: en cian y sin fondo no se leía contra el cielo o la baldosa.
+STATUS_COLOR = (0, 255, 255)  # BGR: amarillo
+STATUS_BG = (0, 0, 0)
+STATUS_SCALE = 0.55
 FONT_SCALE = 0.6
 FONT_THICKNESS = 2
 CENTER_DOT_RADIUS = 4
@@ -1100,9 +1105,15 @@ class CameraSession:
                                         (int(d.x1), int(d.y1) - 8),
                                         cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, color, FONT_THICKNESS)
 
-                        cv2.putText(annotated, f"{inference_ms:.0f} ms ({self.cfg.device}) | "
-                                                f"{self.pipeline_fps:.1f} fps", (10, 20),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                        status = (f"{self.cfg.model_name} | {inference_ms:.0f} ms "
+                                  f"({self.cfg.device}) | {self.pipeline_fps:.1f} fps")
+                        (tw, th), base = cv2.getTextSize(status, cv2.FONT_HERSHEY_SIMPLEX,
+                                                         STATUS_SCALE, 1)
+                        cv2.rectangle(annotated, (4, 4), (16 + tw, 12 + th + base),
+                                      STATUS_BG, -1)
+                        cv2.putText(annotated, status, (10, 8 + th),
+                                    cv2.FONT_HERSHEY_SIMPLEX, STATUS_SCALE, STATUS_COLOR, 1,
+                                    cv2.LINE_AA)
 
                         ok, buf = cv2.imencode(".jpg", annotated)
                         if ok:

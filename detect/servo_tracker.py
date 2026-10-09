@@ -63,6 +63,15 @@ class ServoConfig(BaseModel):
     # persona sentada sigue igual de quieta. `edge_gain = gain` = sin zona.
     edge_zone: float = 0.5
     edge_gain: float = 0.3
+    # Error con el que se mueve el tilt cuando la caja está cortada por arriba
+    # (la cabeza se sale). No se puede medir cuánto falta (con y1=0 da igual un
+    # pelo que media cabeza), así que se avanza a paso fijo y el lazo lo repite
+    # si hace falta. Pasa por gain y tilt_gear_ratio como cualquier error: con
+    # gain 0.14 y reducción 3, 0.4 son ~5° de cámara por orden, más lento que
+    # centrar con la cabeza cerca de arriba (error ~0.8). Con 1.0 (y la gain de
+    # entonces) daba saltos de 0.6 de servo, se pasaba al extremo contrario y
+    # ByteTrack perdía el ID.
+    top_edge_error: float = 0.4
     # Error normalizado por debajo del cual un eje se considera centrado y NO
     # se mueve. Sin zona muerta el servo tiembla sin parar persiguiendo el
     # ruido de la caja, que en una persona quieta baila más de un 6% entre
@@ -174,15 +183,8 @@ _DEFAULT_LIMIT = 0.9
 # pega la caja al píxel.
 _EDGE_PX = 2
 
-# Error con el que se mueve el tilt cuando la caja está cortada por arriba. No
-# se puede medir cuánto falta (con y1=0 da igual un pelo que media cabeza), así
-# que se avanza a paso fijo y se deja que el lazo lo repita si hace falta. Con
-# 1.0 (paso máximo) el tilt, multiplicado por la reducción, daba saltos de 0.6
-# de servo, se pasaba al extremo contrario y ByteTrack perdía el ID.
-_CLIPPED_EDGE_ERROR = 0.4
-
-# Lo mismo para el pan cuando la caja está cortada por un lateral y no se
-# conoce su ancho entero (ver _pan_error). El pan no tiene reducción y el paso
+# Error fijo del pan cuando la caja está cortada por un lateral y no se
+# conoce su ancho entero (ver _pan_center); el del tilt es top_edge_error. El pan no tiene reducción y el paso
 # lo limita _MAX_STEP_PAN. Con 0.4 un objetivo que se escapaba por un lado
 # hacía FRENAR la torreta: el paso era menor que el del centrado normal con la
 # caja cerca del borde.
@@ -288,7 +290,8 @@ def _iou(a: tuple[float, float, float, float], b: tuple[float, float, float, flo
 
 
 def _axis_error(lo: float, hi: float, size: int, center_err: float,
-                chase_lo: bool, chase_hi: bool) -> tuple[float, Optional[str]]:
+                chase_lo: bool, chase_hi: bool,
+                clipped_err: float) -> tuple[float, Optional[str]]:
     """Error de un eje: centrar, salvo que la caja esté cortada por un lado
     que se persigue.
 
@@ -296,17 +299,17 @@ def _axis_error(lo: float, hi: float, size: int, center_err: float,
     ancho o alto del frame. Un error positivo acerca la caja al lado `lo` de la
     imagen (izquierda o arriba), uno negativo la acerca a `hi`.
 
-    Si un lado perseguido está cortado, se va hacia él como mínimo a paso
-    máximo, porque el objeto se está saliendo por ahí. `lo` gana si están
+    Si un lado perseguido está cortado, se va hacia él como mínimo con
+    `clipped_err`, porque el objeto se está saliendo por ahí. `lo` gana si están
     cortados los dos: en vertical es la cabeza.
 
     Devuelve el error y qué lado cortado lo decidió ("lo", "hi" o None), solo
     para el log.
     """
     if chase_lo and lo <= _EDGE_PX:
-        return min(center_err, -_CLIPPED_EDGE_ERROR), "lo"
+        return min(center_err, -clipped_err), "lo"
     if chase_hi and hi >= size - _EDGE_PX:
-        return max(center_err, _CLIPPED_EDGE_ERROR), "hi"
+        return max(center_err, clipped_err), "hi"
     return center_err, None
 
 
@@ -653,7 +656,8 @@ class ServoTracker:
             ex = (max(ex, _CLIPPED_SIDE_ERROR) if cut_x == "hi"
                   else min(ex, -_CLIPPED_SIDE_ERROR))
         ey = (target.cy - height / 2) / (height / 2)
-        ey, cut_y = _axis_error(target.y1, target.y2, height, ey, True, False)
+        ey, cut_y = _axis_error(target.y1, target.y2, height, ey, True, False,
+                                self.cfg.top_edge_error)
         if cut_y is None and ey > 0:
             # Bajar la cámara sube la caja en la imagen: no más allá de dejar
             # la cabeza al borde de la franja superior.

@@ -142,12 +142,14 @@ down = last_cmd(dets=[det(cx=W / 2, cy=H * 0.8)])     # por debajo
 left = last_cmd(dets=[det(cx=W * 0.2, cy=H / 2)])     # a la izquierda
 right = last_cmd(dets=[det(cx=W * 0.8, cy=H / 2)])    # a la derecha
 
-from servo_tracker import _CLIPPED_EDGE_ERROR  # noqa: E402
-FULL_STEP = ServoConfig().gain * _CLIPPED_EDGE_ERROR   # paso por borde cortado, con ratio 1
+FULL_STEP = ServoConfig().gain * ServoConfig().top_edge_error  # paso por borde cortado, con ratio 1
 c = last_cmd(dets=[box(0, H * 0.7)])
 check("cortada arriba: el tilt sube a paso máximo",
       c and c[1] * up[1] > 0 and abs(c[1]) >= FULL_STEP - 1e-9 and c[0] == 0.0,
       f"({c} vs {up})")
+c08 = last_cmd(dets=[box(0, H * 0.7)], top_edge_error=0.8)
+check("top_edge_error=0.8: sube el doble que con 0.4",
+      c and c08 and abs(c08[1] - 2 * c[1]) < 1e-9, f"({c08} vs {c})")
 c = last_cmd(dets=[box(0, H)])
 check("cortada arriba Y abajo: manda arriba, sube",
       c and c[1] * up[1] > 0, f"({c})")
