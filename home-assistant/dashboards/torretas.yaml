@@ -88,11 +88,37 @@ sections:
                 # Pasos en grados de cámara. Tilt positivo baja la cámara en
                 # esta torreta: ↑ resta y ↓ suma.
                 - { type: button, icon: mdi:arrow-up-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0, d_tilt: -3 } } }
-                - { type: button, icon: mdi:image-filter-center-focus, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_center } }
+                - { type: button, icon: mdi:home-import-outline, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_home } }
                 - { type: button, icon: mdi:arrow-down-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 0, d_tilt: 3 } } }
                 - { type: button, icon: mdi:arrow-right-bold, show_name: false, icon_height: 24px, tap_action: { action: perform-action, perform_action: script.detect_torreta_step, data: { d_pan: 10, d_tilt: 0 } } }
             - { type: custom:slider-entity-row, entity: input_number.detect_torreta_pan, name: Pan, icon: mdi:pan-horizontal }
             - { type: custom:slider-entity-row, entity: input_number.detect_torreta_tilt, name: Tilt, icon: mdi:pan-vertical }
+            # Home: a donde van el botón del medio y el chip de home, la placa al
+            # arrancar y, con "Volver a home", la torreta al perder el objetivo.
+            - type: entities
+              show_header_toggle: false
+              card_mod: &flat
+                style: |
+                  ha-card {
+                    background: none;
+                    box-shadow: none;
+                    border: none;
+                    padding: 0;
+                  }
+                  .card-content {
+                    padding: 0 !important;
+                  }
+              entities:
+                - { entity: input_number.detect_torreta_home_pan, name: Home pan }
+                - { entity: input_number.detect_torreta_home_tilt, name: Home tilt }
+            # Tarjetas button y no una fila de entities: la fila abría la ficha
+            # del script en vez de ejecutarlo.
+            - type: grid
+              columns: 2
+              square: false
+              cards:
+                - { type: button, icon: mdi:home-edit-outline, name: Fijar home aquí, icon_height: 28px, tap_action: { action: perform-action, perform_action: script.detect_torreta_set_home } }
+                - { type: button, entity: switch.detect_torreta_return_home, name: Volver a home, show_state: false, icon_height: 28px, tap_action: { action: toggle } }
 
       # Miniatura del último clip; al pulsarla se abre el MP4. Si HA va por
       # https, el navegador bloquea estas URLs http (mixed content).
@@ -120,17 +146,7 @@ sections:
             - { type: heading, heading: Detección, heading_style: title, icon: mdi:brain }
             - type: entities
               show_header_toggle: false
-              card_mod: &flat
-                style: |
-                  ha-card {
-                    background: none;
-                    box-shadow: none;
-                    border: none;
-                    padding: 0;
-                  }
-                  .card-content {
-                    padding: 0 !important;
-                  }
+              card_mod: *flat
               entities:
                 - { entity: input_select.detect_torreta_model, name: Modelo }
                 - { entity: input_select.detect_torreta_imgsz, name: imgsz }
@@ -174,6 +190,6 @@ sections:
                 - { type: entity, entity: sensor.dormitorio_s3proxy2_wifi_signal_db, icon: mdi:wifi }
                 - { type: entity, entity: sensor.dormitorio_esp32_s3_cam_temperature }
                 - { type: entity, entity: binary_sensor.detect_torreta_servo_service, icon: mdi:axis-arrow, content_info: name, name: Servos }
-                - { type: action, icon: mdi:home-import-outline, tap_action: { action: perform-action, perform_action: button.press, target: { entity_id: button.dormitorio_esp32_s3_cam_servo_servos_home } } }
+                - { type: action, icon: mdi:home-import-outline, tap_action: { action: perform-action, perform_action: script.detect_torreta_home } }
                 - { type: action, icon: mdi:restart, icon_color: red, tap_action: { action: perform-action, perform_action: button.press, target: { entity_id: button.dormitorio_s3proxy2_restart }, confirmation: { text: "¿Seguro que quieres reiniciar?" } } }
                 - { type: action, icon: mdi:power-cycle, icon_color: red, tap_action: { action: perform-action, perform_action: button.press, target: { entity_id: button.dormitorio_s3proxy2_safe_mode }, confirmation: { text: "¿Seguro que quieres entrar en Safe Mode?" } } }

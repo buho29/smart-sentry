@@ -484,7 +484,12 @@ def _board_servo_settings(session) -> dict:
     if esphome is None:
         return {}
     values = {field: esphome.get_state(oid) for field, oid in _BOARD_SERVO_FIELDS.items()}
-    return {k: v for k, v in values.items() if isinstance(v, (int, float))}
+    values = {k: v for k, v in values.items() if isinstance(v, (int, float))}
+    # El reposo, en grados como lo pide el body.
+    home = session.servo_tracker.home_deg() if session.servo_tracker else None
+    if home:
+        values.update(home_pan_deg=home["pan"], home_tilt_deg=home["tilt"])
+    return values
 
 
 def _openapi_with_camera_examples():
@@ -564,6 +569,16 @@ async def move_servo(camera_id: str, pos: ServoPosition):
     return tracker.status()
 
 
+@app.post("/cameras/{camera_id}/servo/home")
+async def servo_home(camera_id: str):
+    """Lleva la torreta a su reposo, el que guarda la placa (`home_pan_deg`/
+    `home_tilt_deg` de /config/servo). Es una orden manual más: con el seguimiento encendido, se
+    volverá a mover en cuanto vea algo."""
+    tracker = get_servo_tracker(camera_id)
+    tracker.go_home()
+    return tracker.status()
+
+
 class ServoConfigUpdate(BaseModel):
     """Body de POST /cameras/{id}/config/servo. Todo opcional: lo que no venga
     se conserva."""
@@ -587,8 +602,8 @@ class ServoConfigUpdate(BaseModel):
     pan_limit_deg: Optional[float] = Field(None, gt=0.0, le=180.0, description="Recorrido máximo horizontal, simétrico, en grados de cámara: ninguna orden (ni del seguimiento ni manual) pasa de ±pan_limit_deg. Evita forzar el servo contra el tope mecánico. Vacío = el 90% del recorrido del servo (±81° con 180° y sin reducción). /status muestra el efectivo en limits_deg.")
     tilt_limit_deg: Optional[float] = Field(None, gt=0.0, le=180.0, description="Recorrido máximo vertical, simétrico, en grados de cámara. Vacío = el 90% del recorrido del servo (±27° con reducción 3).")
     lost_target_sec: Optional[float] = Field(None, gt=0.0, description="Tiempo sin ver el objetivo antes de soltarlo y poder enganchar otro. Da margen para oclusiones de un par de frames. Por defecto 1.5 s.")
-    home_pan_deg: Optional[float] = Field(None, ge=-180.0, le=180.0, description="Posición de reposo horizontal en grados de cámara, 0 = centro.")
-    home_tilt_deg: Optional[float] = Field(None, ge=-180.0, le=180.0, description="Posición de reposo vertical en grados de cámara.")
+    home_pan_deg: Optional[float] = Field(None, ge=-180.0, le=180.0, description="Ajuste de la PLACA, no se guarda aquí: posición de reposo horizontal en grados de cámara, 0 = centro. Se convierte a unidades de servo y se manda al number 'Servo home pan', que es a donde va la placa al arrancar y con su botón 'Servos home'.")
+    home_tilt_deg: Optional[float] = Field(None, ge=-180.0, le=180.0, description="Ajuste de la PLACA, no se guarda aquí: posición de reposo vertical en grados de cámara (number 'Servo home tilt').")
     return_home_on_lost: Optional[bool] = Field(None, description="Al perder el objetivo, ¿volver a reposo? Por defecto no: suele interesar más quedarse mirando por donde se perdió, que es por donde reaparecerá.")
     lead_sec: Optional[float] = Field(None, ge=0.0, le=3.0, description="Anticipación horizontal en segundos: se apunta a donde estará el objetivo según su velocidad, así la torreta va por delante y queda más aire en la dirección en la que se mueve. Solo para objetivos que cruzan andando: con alguien cerca y quieto, su balanceo se toma por velocidad y oscila. Solo actúa si el objetivo ya está fuera de la zona muerta. 0 = sin anticipar. Por defecto 0.")
 
@@ -615,6 +630,8 @@ async def set_servo_config(camera_id: str, body: ServoConfigUpdate):
     transition = changes.pop("transition_sec", None)
     smoothing = changes.pop("smoothing_sec", None)
     auto_detach = changes.pop("auto_detach_sec", None)
+    home_pan = changes.pop("home_pan_deg", None)
+    home_tilt = changes.pop("home_tilt_deg", None)
     base = session.cfg.servo or ServoConfig()
     cfg = base.model_copy(update=changes)
     if not session.configure_servo(cfg):
@@ -638,6 +655,13 @@ async def set_servo_config(camera_id: str, body: ServoConfigUpdate):
     if auto_detach is not None:
         board["servo_auto_detach"] = session.esphome.set_number(
             "servo_auto_detach", auto_detach)
+    # El reposo va en unidades de servo, convertido con la config ya aplicada.
+    if home_pan is not None:
+        board["servo_home_pan"] = session.esphome.set_number(
+            "servo_home_pan", round(cfg.to_servo("pan", home_pan), 3))
+    if home_tilt is not None:
+        board["servo_home_tilt"] = session.esphome.set_number(
+            "servo_home_tilt", round(cfg.to_servo("tilt", home_tilt), 3))
     return {**session.status(), **({"board_sent": board} if board else {})}
 
 

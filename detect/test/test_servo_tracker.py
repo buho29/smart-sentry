@@ -76,10 +76,13 @@ def det(cx, cy, track_id=1, label="person", width=40, height=80):
     )
 
 
-def make_tracker(**kwargs):
-    """Tracker con rate limit desactivado salvo que el test lo pida."""
+def make_tracker(home=None, **kwargs):
+    """Tracker con rate limit desactivado salvo que el test lo pida. `home` es
+    el reposo que publica la placa, (pan, tilt) en unidades de servo."""
     kwargs.setdefault("min_interval_sec", 0.0)
     board = FakeBoard()
+    if home is not None:
+        board.states = {"servo_home_pan": home[0], "servo_home_tilt": home[1]}
     return ServoTracker(ServoConfig(**kwargs), board, camera_id="test"), board
 
 
@@ -423,14 +426,14 @@ old = ServoConfig.model_validate({"tilt_gear_ratio": 3.0, "pan_limit": 0.5,
 check("migra pan_limit 0.5 -> 45°", old.pan_limit_deg == 45.0, f"({old.pan_limit_deg})")
 check("un límite viejo de 0.9 (el de por defecto) queda en None",
       old.tilt_limit_deg is None, f"({old.tilt_limit_deg})")
-check("migra home con la reducción del eje (-0.5 de tilt con ratio 3 = -15°)",
-      old.home_pan_deg == 18.0 and old.home_tilt_deg == -15.0,
-      f"({old.home_pan_deg}, {old.home_tilt_deg})")
+check("el home viejo se descarta: ahora vive en la placa",
+      "home_pan" not in old.model_dump() and "home_pan_deg" not in old.model_dump())
+check("y el home_*_deg de antes de pasarlo a la placa también",
+      "home_tilt_deg" not in ServoConfig.model_validate({"home_tilt_deg": 21.0}).model_dump())
 t, board = make_tracker(**old.model_dump())
 t.shutdown()
-check("y la torreta vuelve al mismo reposo que antes",
-      all(abs(a - b) < 1e-9 for a, b in zip(board.commands[-1], (0.2, -0.5))),
-      f"({board.commands[-1]})")
+check("una config vieja con home sigue arrancando, y el reposo es el de la placa",
+      board.commands[-1] == (0.0, 0.0), f"({board.commands[-1]})")
 
 print("\n=== 5. Bloqueo de objetivo por track ID ===")
 t, board = make_tracker()
@@ -540,7 +543,7 @@ t.on_idle()
 check("pero caduca igual que con imagen", t.target_id is None)
 
 print("\n=== 9. return_home_on_lost ===")
-t, board = make_tracker(lost_target_sec=0.1, return_home_on_lost=True, home_pan_deg=0.0, home_tilt_deg=-18)
+t, board = make_tracker(lost_target_sec=0.1, return_home_on_lost=True, home=(0.0, -0.2))
 t.on_detections([det(cx=W * 0.9, cy=H / 2, track_id=4)], W, H)
 time.sleep(0.15)
 t.on_idle()
@@ -579,12 +582,27 @@ t_with = ServoTracker(cfg, FakeBoard(has_servo_service=True), "test")
 check("y con servos también", t_with.status()["servo_service"] is True)
 
 print("\n=== 12. shutdown() deja la torreta en reposo ===")
-t, board = make_tracker(home_pan_deg=9, home_tilt_deg=-9)
+t, board = make_tracker(home=(0.1, -0.1))
 t.on_detections([det(cx=W * 0.9, cy=H / 2)], W, H)
 t.shutdown()
 check("última orden = posición de reposo", board.commands[-1] == (0.1, -0.1),
       f"({board.commands[-1]})")
 check("y suelta el hold: vuelve el auto-detach", board.holds[-1] is False, f"({board.holds})")
+
+print("\n=== 12a. go_home() va al reposo de la placa, sin rate limit ===")
+t, board = make_tracker(home=(0.58, 0.7), tilt_gear_ratio=3.0)
+t.move_to(30, 0)
+t.go_home()
+check("última orden = reposo de la placa, tal cual (unidades de servo)",
+      board.commands[-1] == (0.58, 0.7), f"({board.commands[-1]})")
+check("status trae el reposo en grados (tilt con reducción 3)",
+      t.status()["home_deg"] == {"pan": 52.2, "tilt": 21.0}, f"({t.status()['home_deg']})")
+t, board = make_tracker()
+t.move_to(30, 0)
+t.go_home()
+check("placa sin number de reposo (firmware viejo): al centro",
+      board.commands[-1] == (0.0, 0.0), f"({board.commands[-1]})")
+check("y status lo dice con home_deg None", t.status()["home_deg"] is None)
 
 print("\n=== 12b. Hold: con el seguimiento activo la placa no suelta los servos ===")
 t, board = make_tracker(lost_target_sec=0.2)

@@ -113,9 +113,8 @@ class ServoConfig(BaseModel):
     tilt_limit_deg: Optional[float] = None
     # Tiempo sin ver el objetivo antes de soltarlo y poder enganchar otro.
     lost_target_sec: float = 1.5
-    # Posición de reposo en grados de cámara, usada al arrancar y al apagar.
-    home_pan_deg: float = 0.0
-    home_tilt_deg: float = 0.0
+    # La posición de reposo no está aquí: vive en la placa (number "Servo
+    # home pan/tilt", ver _home), que es quien la usa al arrancar.
     # Al perder el objetivo, ¿volver a reposo? Por defecto no: en una torreta
     # suele interesar más quedarse mirando donde se perdió, que es por donde
     # probablemente reaparezca.
@@ -148,9 +147,9 @@ class ServoConfig(BaseModel):
             # reducción si cambia.
             if old_limit is not None and old_limit != _DEFAULT_LIMIT:
                 data.setdefault(f"{axis}_limit_deg", round(old_limit * dpu, 3))
-            old_home = data.pop(f"home_{axis}", None)
-            if old_home is not None:
-                data.setdefault(f"home_{axis}_deg", round(old_home * dpu, 3))
+            # El reposo pasó a la placa: el de configs viejas se descarta.
+            data.pop(f"home_{axis}", None)
+            data.pop(f"home_{axis}_deg", None)
         return data
 
     def deg_per_unit(self, axis: str) -> float:
@@ -198,6 +197,9 @@ _FULL_WIDTH_ALPHA = 0.3
 _BOARD_TRANSITION = "servo_transition"
 _BOARD_SMOOTHING = "servo_smoothing"
 _BOARD_AUTO_DETACH = "servo_auto_detach"
+# Reposo, en unidades de servo. La placa es la única que lo guarda.
+_BOARD_HOME_PAN = "servo_home_pan"
+_BOARD_HOME_TILT = "servo_home_tilt"
 
 # Máximo que se aleja una orden del seguimiento de la anterior, por eje y en
 # giro de cámara (se multiplica por el gear_ratio del eje). Red de seguridad
@@ -513,9 +515,19 @@ class ServoTracker:
     # -- envío ---------------------------------------------------------------
 
     def _home(self) -> tuple[float, float]:
-        """Posición de reposo en unidades de servo."""
-        return (self.cfg.to_servo("pan", self.cfg.home_pan_deg),
-                self.cfg.to_servo("tilt", self.cfg.home_tilt_deg))
+        """Posición de reposo en unidades de servo, la de los number de la
+        placa. Si no los publica (firmware viejo o sin conectar), el centro."""
+        return (self._board_setting(_BOARD_HOME_PAN) or 0.0,
+                self._board_setting(_BOARD_HOME_TILT) or 0.0)
+
+    def home_deg(self) -> Optional[dict]:
+        """Reposo de la placa en grados de cámara, o None si no lo publica."""
+        pan = self._board_setting(_BOARD_HOME_PAN)
+        tilt = self._board_setting(_BOARD_HOME_TILT)
+        if pan is None or tilt is None:
+            return None
+        return {"pan": round(self.cfg.to_deg("pan", pan), 1),
+                "tilt": round(self.cfg.to_deg("tilt", tilt), 1)}
 
     def _set_hold(self, hold: bool) -> None:
         """Pide a la placa que no suelte los servos (hold) o que vuelva a su
@@ -572,6 +584,10 @@ class ServoTracker:
         """
         self._send(self.cfg.to_servo("pan", pan_deg),
                    self.cfg.to_servo("tilt", tilt_deg), force=True)
+
+    def go_home(self):
+        """A la posición de reposo de la placa, como una orden manual."""
+        self._send(*self._home(), force=True, reason="a reposo")
 
     def _board_setting(self, object_id: str) -> Optional[float]:
         """Valor de un number de ajuste de la placa, o None si no lo publica
@@ -738,6 +754,7 @@ class ServoTracker:
             "tilt_servo": round(self.tilt, 3),
             "limits_deg": {"pan": round(self.cfg.limit_deg("pan"), 1),
                            "tilt": round(self.cfg.limit_deg("tilt"), 1)},
+            "home_deg": self.home_deg(),
             "target_id": self.target_id,
             "last_target": self.last_target,
             "transition_sec": self._transition_sec()[0],

@@ -50,14 +50,21 @@ esphome:
           id(servo_tilt).set_auto_detach_time(ad);
       # Servos a reposo antes que nada: al arrancar, un servo sin señal se queda
       # donde lo dejó el apagón, y conviene partir de una posición conocida.
+      # El reposo es el de los number "Servo home pan/tilt" (restaurados).
       # Va directo y no por el interval: no se sabe dónde está, así que no hay
-      # desde dónde suavizar. Las globals ya arrancan a 0.
-      - servo.write:
-          id: servo_pan
-          level: 0%
-      - servo.write:
-          id: servo_tilt
-          level: 0%
+      # desde dónde suavizar. La animación parte de ahí, y los sliders de
+      # posición lo publican.
+      - lambda: |-
+          float hp = id(servo_home_pan).state;
+          float ht = id(servo_home_tilt).state;
+          if (std::isnan(hp)) hp = 0;
+          if (std::isnan(ht)) ht = 0;
+          id(pan_target) = id(pan_mid) = id(pan_pos) = hp;
+          id(tilt_target) = id(tilt_mid) = id(tilt_pos) = ht;
+          id(servo_pan).write(hp);
+          id(servo_tilt).write(ht);
+          id(servo_pan_number).publish_state(hp);
+          id(servo_tilt_number).publish_state(ht);
       # Ajustes de imagen y exposición (idénticos a esp32-s3-cam.yaml)
       - lambda: |-
 
@@ -566,6 +573,34 @@ number:
           id(servo_pan).set_auto_detach_time((uint32_t) (x * 1000.0f));
           id(servo_tilt).set_auto_detach_time((uint32_t) (x * 1000.0f));
 
+  # Posición de reposo, en unidades de servo como "Servo Pan"/"Servo Tilt": a
+  # donde van los servos al arrancar y con el botón "Servos home". Es la única
+  # copia del reposo: el servicio Python la lee de aquí (object_id
+  # servo_home_pan/servo_home_tilt) y la cambia en grados con
+  # POST /config/servo (home_pan_deg/home_tilt_deg).
+  - platform: template
+    name: "Servo home pan"
+    id: servo_home_pan
+    entity_category: config
+    mode: box
+    min_value: -0.9
+    max_value: 0.9
+    step: 0.01
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+  - platform: template
+    name: "Servo home tilt"
+    id: servo_home_tilt
+    entity_category: config
+    mode: box
+    min_value: -0.9
+    max_value: 0.9
+    step: 0.01
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
 select:
   - platform: template
     name: "Cam Resolution"
@@ -608,8 +643,8 @@ text:
 
 # -----------------------------------------------------------------------------
 # Botones de control y diagnóstico.
-# Los dos de centrado sirven para comprobar el recorrido mecánico de la torreta
-# sin necesidad de tener el servicio Python levantado.
+# Los de reposo sirven para mover la torreta sin necesidad de tener el
+# servicio Python levantado.
 # -----------------------------------------------------------------------------
 button:
   - platform: restart
@@ -629,10 +664,23 @@ button:
       # y actualiza el slider de HA a la vez.
       - number.set:
           id: servo_pan_number
-          value: 0
+          value: !lambda return id(servo_home_pan).state;
       - number.set:
           id: servo_tilt_number
-          value: 0
+          value: !lambda return id(servo_home_tilt).state;
+
+  # Guarda como reposo a donde apunta ahora (lo último pedido, aunque aún
+  # esté de camino).
+  - platform: template
+    name: "Servos set home"
+    entity_category: config
+    on_press:
+      - number.set:
+          id: servo_home_pan
+          value: !lambda return id(pan_target);
+      - number.set:
+          id: servo_home_tilt
+          value: !lambda return id(tilt_target);
 
 sensor:
   - platform: internal_temperature

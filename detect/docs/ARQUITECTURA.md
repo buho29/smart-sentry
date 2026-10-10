@@ -172,8 +172,6 @@ classDiagram
         +float tilt_servo_range_deg
         +float pan_limit_deg
         +float tilt_limit_deg
-        +float home_pan_deg
-        +float home_tilt_deg
         +bool return_home_on_lost
         +to_servo(axis, deg)
         +to_deg(axis, units)
@@ -823,7 +821,7 @@ Primer consumidor: mueve una torreta pan/tilt para centrar un objetivo.
   objetivo hasta el tope.
 - **Grados de cámara hacia fuera, unidades de servo dentro.** El lazo, la
   placa y `self.pan/self.tilt` van en -1..1. Lo que toca una persona va en
-  grados de cámara: el body de `POST /servo` (`move_to`), `home_*_deg`,
+  grados de cámara: el body de `POST /servo` (`move_to`), `home_*_deg` (que se convierte y se guarda en la placa),
   `*_limit_deg` y `pan`/`tilt` de `/status` (que trae aparte
   `pan_servo`/`tilt_servo` y `limits_deg`). La conversión vive solo en
   `ServoConfig.to_servo`/`to_deg`: `grados = unidades × servo_range_deg / 2 /
@@ -1004,13 +1002,14 @@ defecto.
 
 | `POST /cameras/{id}/config/inference` | `set_inference_config` | Body JSON (`InferenceConfig`), todos los campos opcionales: **lo que no se envía se conserva** (`model_dump(exclude_unset=True)`); `classes: null` = todas, `null`/vacío en el resto = no tocar. Va en JSON y no en formulario porque Swagger rellena los formularios con `"string"`/`0` y los envía tal cual; con JSON, `app.openapi` se sustituye por `_openapi_with_camera_examples`, que regenera el esquema en cada `/openapi.json` metiendo como `examples` del body los valores actuales de cada cámara, así que en Swagger se edita partiendo de lo real (recargar `/docs` tras cambiar algo). Se filtra lo que no cambia respecto a `session.cfg` (reenviar el ejemplo entero es un no-op) y se sustituye `session.cfg` por `cfg.model_copy(update=...)`: `confidence`/`imgsz`/`always_infer`/`classes` se releen por frame y cambian al instante; `model_name`/`device` los resuelve `_process_loop` una sola vez al arrancar, así que cambiarlos precarga el modelo (400 si no existe) y llama a `session.restart()`. Devuelve `relaunched`. |
 | `POST /cameras/{id}/config/stream` | `set_stream_default` | Cambia `default_infer` y/o `rotation` (lo que no se envía se conserva). `default_infer`: los streams en modo "follow" cambian en caliente. `rotation`: relanza la sesión para que ByteTrack empiece de cero. |
-| `POST /cameras/{id}/config/servo` | `set_servo_config` | Body JSON parcial (`ServoConfigUpdate`): lo que no se envía se conserva, y los ejemplos de Swagger traen la `ServoConfig` actual de cada cámara. **Es donde se le ponen servos a una cámara**: el alta no los pide, así que la primera llamada crea el `ServoTracker` y lo enchufa como consumidor. 400 sin `noise_psk`. `transition_sec` y `auto_detach_sec` se mandan además a la placa con `EsphomeController.set_number` (numbers `servo_transition`/`servo_auto_detach`); `board_sent` en la respuesta dice si llegaron. |
+| `POST /cameras/{id}/config/servo` | `set_servo_config` | Body JSON parcial (`ServoConfigUpdate`): lo que no se envía se conserva, y los ejemplos de Swagger traen la `ServoConfig` actual de cada cámara. **Es donde se le ponen servos a una cámara**: el alta no los pide, así que la primera llamada crea el `ServoTracker` y lo enchufa como consumidor. 400 sin `noise_psk`. `transition_sec` y `auto_detach_sec` se mandan además a la placa con `EsphomeController.set_number` (numbers `servo_transition`/`servo_auto_detach`); `board_sent` en la respuesta dice si llegaron. `home_pan_deg`/`home_tilt_deg` tampoco se guardan aquí: se pasan a unidades de servo y van a los numbers `servo_home_pan`/`servo_home_tilt`, la única copia del reposo (la placa va ahí al arrancar y con su botón "Servos home"; `ServoTracker._home` la lee de ahí). |
 
 ### Servos (variantes con torreta)
 
 | Método / ruta | Función | Qué hace |
 | --- | --- | --- |
 | `POST /cameras/{id}/servo` | `move_servo` | Control manual: `{"pan": p, "tilt": t}` en grados de cámara (0 = centro), recortado a los límites. Salta el rate limit del seguimiento, para poder verificar el hardware sin depender de que haya detecciones. |
+| `POST /cameras/{id}/servo/home` | `servo_home` | Lleva la torreta al reposo de la placa (`ServoTracker.go_home`), como una orden manual. Lo usa el botón de home de Home Assistant. |
 
 El seguimiento se activa/desactiva con el campo `enabled` de
 `POST /cameras/{id}/config/servo`, junto al resto de ajustes; `/servo` a secas

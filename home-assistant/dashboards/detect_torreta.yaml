@@ -34,7 +34,7 @@ cards:
     name: Servos
     grid_options: { columns: 6 }
 
-  # Cruceta: pasos de 0.1 en unidades de servo (-1..1), y centrar.
+  # Cruceta: pasos de 0.1 en unidades de servo (-1..1), y en medio el reposo.
   - type: button
     icon: mdi:arrow-up-bold
     show_name: false
@@ -54,11 +54,11 @@ cards:
       data: { d_pan: -10, d_tilt: 0 }
     grid_options: { columns: 4, rows: 1 }
   - type: button
-    icon: mdi:image-filter-center-focus
+    icon: mdi:home-import-outline
     show_name: false
     tap_action:
       action: perform-action
-      perform_action: script.detect_torreta_center
+      perform_action: script.detect_torreta_home
     grid_options: { columns: 4, rows: 1 }
   - type: button
     icon: mdi:arrow-right-bold
