@@ -120,12 +120,24 @@ por GB. HA se limita a listar los clips y reproducirlos por HTTP. Ver
 [`detect/docs/GRABACION.md`](detect/docs/GRABACION.md).
 
 **Siguiente paso — mover servos.** La API nativa de ESPHome no es solo para
-leer estado: `ServoTracker` (`detect/servo_tracker.py`) ya llama al servicio
+leer estado: `ServoTracker` (`detect/servo_tracker.py`) llama al servicio
 `set_servo_position` del YAML vía `EsphomeController.call_service()` si la
-placa lo expone. La idea es cerrar el bucle:
-el hilo de proceso calcula el centro del objetivo detectado y, si todo va bien,
-manda al ESP32 la corrección de pan/tilt para que la **cámara persiga** a lo
-que se mueve por la huerta.
+placa lo expone. Con eso se cierra el bucle:
+el hilo de proceso calcula el centro del objetivo detectado y manda al ESP32 la
+corrección de pan/tilt para que la **cámara persiga** a lo que se mueve por la
+huerta. La torreta pan/tilt está impresa en 3D; las piezas están en [`3D/`](3D/).
+
+- [▶ Vídeo: la torreta en control manual](detect/docs/esp32-s3-cam-servo_20261007-193016_man.mp4)
+- [▶ Vídeo: la torreta siguiendo lo que detecta YOLO](detect/docs/esp32-s3-cam-servo_20261010-195751_det.mp4)
+
+| | |
+| --- | --- |
+| <img src="3D/img/render-corte.png" width="260" alt="Render en corte de la torreta"><br>Render en corte: engranajes de pan y tilt y la placa en la carcasa | <img src="3D/img/render-vistas.png" width="420" alt="Render en transparencia de la torreta"><br>Render en transparencia, de frente y por detrás |
+
+| | |
+| --- | --- |
+| <img src="3D/img/PXL_20260930_115525876.jpg" width="320" alt="Primer prototipo con la carcasa abierta"><br>Primer prototipo, con la ESP32-S3 dentro de la carcasa | <img src="3D/img/PXL_20261005_102144301.jpg" width="320" alt="Torreta de frente"><br>Versión actual, de frente |
+| <img src="3D/img/PXL_20261005_102140974.MP.jpg" width="320" alt="Torreta de lado con los engranajes"><br>De lado: engranajes del tilt | <img src="3D/img/PXL_20261005_104419182.MACRO_FOCUS.jpg" width="320" alt="Detalle del servo de tilt"><br>Detalle del servo de tilt y su engranaje |
 
 **Meta final — el espantapájaros definitivo.(water-tower-defense)** Un nodo exterior autónomo:
 batería + placa solar, montado sobre los servos de pan/tilt y equipado con una

@@ -1,0 +1,6 @@
+# Solo se suben el modelo completo y las imágenes; las piezas sueltas se quedan en local
+*
+!.gitignore
+!smart-sentry.*
+!img/
+!img/*
