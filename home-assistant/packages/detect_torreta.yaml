@@ -176,7 +176,7 @@ rest:
           - pan_servo
           - tilt_servo
           - limits_deg
-          # Reposo en grados de cámara ({pan, tilt}).
+          # Home en grados de cámara ({pan, tilt}), lo usa detect_torreta_home.
           - home_deg
       - name: "Detect torreta tilt"
         unique_id: detect_torreta_tilt
@@ -257,8 +257,8 @@ template:
             target:
               entity_id: binary_sensor.detect_torreta_running
 
-      # Al perder el objetivo, volver a home (return_home_on_lost). Apagado,
-      # se queda mirando por donde se perdió.
+      # "Home al perder" (return_home_on_lost): al perder el objetivo vuelve a
+      # home. Apagado, se queda mirando por donde se perdió.
       - name: "Detect torreta return home"
         unique_id: detect_torreta_return_home_switch
         icon: mdi:home-search-outline
@@ -395,26 +395,6 @@ input_number:
     step: 1
     unit_of_measurement: "°"
     mode: slider
-  # Reposo (home_pan_deg/home_tilt_deg de /config/servo, que lo guarda en la
-  # placa): a donde va el botón de home, la placa al arrancar, el servicio al
-  # apagarse y, con return_home_on_lost, al perder el objetivo. Se manda al
-  # cambiarlo y se sincroniza con el servicio.
-  detect_torreta_home_pan:
-    name: "Detect torreta home pan"
-    icon: mdi:home-import-outline
-    min: -90
-    max: 90
-    step: 1
-    unit_of_measurement: "°"
-    mode: box
-  detect_torreta_home_tilt:
-    name: "Detect torreta home tilt"
-    icon: mdi:home-import-outline
-    min: -30
-    max: 30
-    step: 1
-    unit_of_measurement: "°"
-    mode: box
 
 # Ajustes de detección. Cada uno se envía al cambiarlo y se resincroniza con
 # lo que reporta el servicio (automatizaciones de abajo).
@@ -508,22 +488,24 @@ script:
           pan: "{{ states('input_number.detect_torreta_pan') | float(0) + d_pan | default(0) | float }}"
           tilt: "{{ states('input_number.detect_torreta_tilt') | float(0) + d_tilt | default(0) | float }}"
 
-  # A la posición de reposo. Sale del servicio (atributo home_deg), no de los
-  # input_number, por si se ha cambiado desde Swagger y aún no se han
-  # resincronizado.
+  # A home: el que guarda la placa, en grados (atributo home_deg). Sin dato
+  # (placa desconectada o firmware viejo) no hace nada.
   detect_torreta_home:
-    alias: "Detect torreta: a reposo"
+    alias: "Detect torreta: a home"
     icon: mdi:home-import-outline
     mode: restart
     variables:
       home: "{{ state_attr('sensor.detect_torreta_pan', 'home_deg') or {} }}"
     sequence:
+      - condition: template
+        value_template: "{{ home is mapping and home | count > 0 }}"
       - action: script.detect_torreta_move
         data:
-          pan: "{{ home.get('pan', states('input_number.detect_torreta_home_pan')) | float(0) }}"
-          tilt: "{{ home.get('tilt', states('input_number.detect_torreta_home_tilt')) | float(0) }}"
+          pan: "{{ home.pan | float(0) }}"
+          tilt: "{{ home.tilt | float(0) }}"
 
-  # Guarda como reposo a donde apunta ahora (la posición de los sliders).
+  # Guarda como home (en la placa) a donde apunta ahora: la posición de los
+  # sliders.
   detect_torreta_set_home:
     alias: "Detect torreta: fijar home aquí"
     icon: mdi:home-edit-outline
@@ -592,68 +574,6 @@ automation:
           entity_id: input_number.detect_torreta_tilt
         data:
           value: "{{ states('sensor.detect_torreta_tilt') | float }}"
-
-  # Reposo -> servicio. Solo lo que difiere del home_deg que reporta, para
-  # que la sincronización de abajo no provoque rebotes. El from_state deja
-  # fuera la creación de los input_number: nacen en el mínimo (-90/-30) y eso se
-  # mandaría como reposo.
-  - id: detect_torreta_home_push
-    alias: "Detect torreta: enviar reposo"
-    mode: restart
-    triggers:
-      - trigger: state
-        entity_id:
-          - input_number.detect_torreta_home_pan
-          - input_number.detect_torreta_home_tilt
-    variables:
-      home: "{{ state_attr('sensor.detect_torreta_pan', 'home_deg') or {} }}"
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ trigger.from_state is not none
-             and trigger.from_state.state not in ['unknown', 'unavailable']
-             and home is mapping and home | count > 0
-             and ((states('input_number.detect_torreta_home_pan') | float(0)
-                   - home.get('pan', 0) | float(0)) | abs > 0.05
-               or (states('input_number.detect_torreta_home_tilt') | float(0)
-                   - home.get('tilt', 0) | float(0)) | abs > 0.05) }}
-    actions:
-      - delay: "00:00:01"
-      - action: rest_command.detect_torreta_servo_config
-        data:
-          body:
-            home_pan_deg: "{{ states('input_number.detect_torreta_home_pan') | float }}"
-            home_tilt_deg: "{{ states('input_number.detect_torreta_home_tilt') | float }}"
-      - action: homeassistant.update_entity
-        target:
-          entity_id: sensor.detect_torreta_pan
-
-  # Servicio -> reposo.
-  - id: detect_torreta_home_sync
-    alias: "Detect torreta: sincronizar reposo"
-    mode: queued
-    triggers:
-      - trigger: state
-        entity_id: sensor.detect_torreta_pan
-        attribute: home_deg
-      - trigger: homeassistant
-        event: start
-    variables:
-      home: "{{ state_attr('sensor.detect_torreta_pan', 'home_deg') }}"
-    conditions:
-      - condition: template
-        value_template: "{{ home is mapping and home.pan is number and home.tilt is number }}"
-    actions:
-      - action: input_number.set_value
-        target:
-          entity_id: input_number.detect_torreta_home_pan
-        data:
-          value: "{{ home.pan }}"
-      - action: input_number.set_value
-        target:
-          entity_id: input_number.detect_torreta_home_tilt
-        data:
-          value: "{{ home.tilt }}"
 
   - id: detect_torreta_confidence_push
     alias: "Detect torreta: enviar confianza"

@@ -168,9 +168,8 @@ necesita la grabación configurada en el servicio con
 | `script.detect_torreta_move` | Ir a `pan`, `tilt` absolutos |
 | `script.detect_torreta_step` | Paso relativo `d_pan`, `d_tilt` en grados desde la posición actual (lo usan las flechas: 10° de pan, 3° de tilt) |
 | `script.detect_torreta_home` | A la posición de reposo (`home_deg`). Es lo que hace el botón del medio de las flechas, y el chip de home del panel |
-| `input_number.detect_torreta_home_pan` / `_home_tilt` | Home (posición de reposo) en grados de cámara. Se guarda en la placa (numbers `Servo home pan` / `Servo home tilt`, en unidades de servo) a través de `home_pan_deg` / `home_tilt_deg` de `/config/servo`, y se sincroniza con el atributo `home_deg` de `sensor.detect_torreta_pan`. La placa va ahí al arrancar y con su botón `Servos home`; `Servos set home` guarda la posición actual |
-| `script.detect_torreta_set_home` | Guarda como home la posición actual de los sliders (botón "Fijar home aquí") |
-| `switch.detect_torreta_return_home` | Volver a home al perder el objetivo (`return_home_on_lost` de `/config/servo`). Apagado, la torreta se queda mirando por donde se perdió (botón "Volver a home") |
+| `script.detect_torreta_set_home` | Guarda como home la posición actual de los sliders (botón "Fijar home aquí"). El home vive en la placa (numbers `Servo home pan` / `Servo home tilt`, en unidades de servo); también se cambia con `home_pan_deg` / `home_tilt_deg` de `/config/servo` |
+| `switch.detect_torreta_return_home` | Volver a home al perder el objetivo (`return_home_on_lost` de `/config/servo`). Apagado, la torreta se queda mirando por donde se perdió (botón "Home al perder") |
 | `sensor.detect_torreta_pan` / `_tilt` | Última posición enviada en grados de cámara, ya recortada a `pan_limit_deg` / `tilt_limit_deg`. Atributos `pan_servo` / `tilt_servo` (lo enviado, -1 … 1), `limits_deg` y `home_deg` |
 | `binary_sensor.detect_torreta_servo_service` | Si la placa publica el servicio de servos. Apagado con la placa conectada = firmware sin servos |
 | `rest_command.detect_torreta_servo_move` / `_servo_config` | Para automatizaciones; `servo_config` admite cualquier campo de `/config/servo` en `body` |

@@ -94,23 +94,8 @@ sections:
             - { type: custom:slider-entity-row, entity: input_number.detect_torreta_pan, name: Pan, icon: mdi:pan-horizontal }
             - { type: custom:slider-entity-row, entity: input_number.detect_torreta_tilt, name: Tilt, icon: mdi:pan-vertical }
             # Home: a donde van el botón del medio y el chip de home, la placa al
-            # arrancar y, con "Volver a home", la torreta al perder el objetivo.
-            - type: entities
-              show_header_toggle: false
-              card_mod: &flat
-                style: |
-                  ha-card {
-                    background: none;
-                    box-shadow: none;
-                    border: none;
-                    padding: 0;
-                  }
-                  .card-content {
-                    padding: 0 !important;
-                  }
-              entities:
-                - { entity: input_number.detect_torreta_home_pan, name: Home pan }
-                - { entity: input_number.detect_torreta_home_tilt, name: Home tilt }
+            # arrancar y, con "Home al perder", la torreta al perder el objetivo.
+            # Se fija apuntando con las flechas y "Fijar home aquí".
             # Tarjetas button y no una fila de entities: la fila abría la ficha
             # del script en vez de ejecutarlo.
             - type: grid
@@ -118,7 +103,7 @@ sections:
               square: false
               cards:
                 - { type: button, icon: mdi:home-edit-outline, name: Fijar home aquí, icon_height: 28px, tap_action: { action: perform-action, perform_action: script.detect_torreta_set_home } }
-                - { type: button, entity: switch.detect_torreta_return_home, name: Volver a home, show_state: false, icon_height: 28px, tap_action: { action: toggle } }
+                - { type: button, entity: switch.detect_torreta_return_home, name: Home al perder, show_state: false, icon_height: 28px, tap_action: { action: toggle } }
 
       # Miniatura del último clip; al pulsarla se abre el MP4. Si HA va por
       # https, el navegador bloquea estas URLs http (mixed content).
@@ -146,7 +131,17 @@ sections:
             - { type: heading, heading: Detección, heading_style: title, icon: mdi:brain }
             - type: entities
               show_header_toggle: false
-              card_mod: *flat
+              card_mod: &flat
+                style: |
+                  ha-card {
+                    background: none;
+                    box-shadow: none;
+                    border: none;
+                    padding: 0;
+                  }
+                  .card-content {
+                    padding: 0 !important;
+                  }
               entities:
                 - { entity: input_select.detect_torreta_model, name: Modelo }
                 - { entity: input_select.detect_torreta_imgsz, name: imgsz }
