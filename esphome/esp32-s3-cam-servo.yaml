@@ -120,7 +120,15 @@ logger:
   level: DEBUG
   logs:
     esp32_camera_web_server: WARN
-#  baud_rate: 0
+    # El interval de los servos llama a servo.write() cada 20 ms, y el
+    # componente servo saca "New target"/"Reached target" en DEBUG en cada
+    # llamada: cientos de líneas por segundo. El filtro por tag se comprueba
+    # antes de formatear el mensaje, así que tampoco gasta CPU ni UART.
+    servo: INFO
+  # Sin salida por UART: la placa va por OTA y el log se ve por la API. Para
+  # depurar por cable (p. ej. si no conecta al WiFi) hay que volver a
+  # comentarlo y flashear por USB.
+  baud_rate: 0
 
 # -----------------------------------------------------------------------------
 # Servos pan/tilt.
