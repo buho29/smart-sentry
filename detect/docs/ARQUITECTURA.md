@@ -715,7 +715,11 @@ Referencias locales otra vez. Obtiene el modelo con `get_model()`. Bucle:
    `continue`.
 4. **Si llega frame:** `_update_fps()`.
 5. **Si `want_infer`:** `model.track(frame, persist=True,
-   tracker="bytetrack.yaml", classes=...)`, y las cajas se traducen **una sola
+   tracker="bytetrack.yaml", classes=...)`. Antes, `_sync_tracker_thresholds()`
+   pone los umbrales de ByteTrack en caliente: `confidence` como umbral alto y
+   de ID nuevo, y `track_confidence` como el bajo. Así una caja `weak` solo
+   continúa un track que abrió una buena; con los 0.25 del yaml abría IDs
+   sobre ruido y la torreta se reenganchaba a ellos. Las cajas se traducen **una sola
    vez** a una lista de `Detection` (objetos planos, sin dependencia de
    ultralytics). `_drop_corrupt()` la vacía si trae alguna caja imposible
    (confianza fuera de `[0,1]`): un frame así se descarta **entero** y suma 1 a

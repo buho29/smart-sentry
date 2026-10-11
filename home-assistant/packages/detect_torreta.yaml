@@ -600,8 +600,11 @@ automation:
     alias: "Detect torreta: sincronizar confianza"
     mode: queued
     triggers:
+      # `to: ~`: solo el estado, no los atributos. Si no, al cambiar
+      # track_confidence devolvía este slider a su valor viejo antes de enviarlo.
       - trigger: state
         entity_id: sensor.detect_torreta_confidence
+        to: ~
       - trigger: homeassistant
         event: start
     conditions:

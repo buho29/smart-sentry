@@ -290,6 +290,28 @@ def _is_corrupt(d: Detection) -> bool:
             or not all(map(math.isfinite, (d.x1, d.y1, d.x2, d.y2))))
 
 
+def _sync_tracker_thresholds(model, confidence: float, track_confidence: float) -> None:
+    """Alinea los umbrales de ByteTrack con las dos confianzas de la cámara.
+
+    Sin esto ByteTrack usa los de bytetrack.yaml (alto y de ID nuevo 0.25):
+    las cajas `weak` entraban en su primera pasada como si fueran buenas y
+    abrían IDs nuevos sobre ruido, a los que la torreta se reenganchaba. Con
+    `confidence` como umbral alto y de ID nuevo, y `track_confidence` como el
+    bajo, una `weak` solo puede continuar un track que abrió una buena.
+
+    ByteTrack relee sus `args` en cada update, así que se llama en cada frame
+    y los cambios de confianza se notan al instante. El tracker no existe
+    hasta el primer `model.track`: ese frame usa los del yaml.
+    """
+    trackers = getattr(getattr(model, "predictor", None), "trackers", None)
+    if not trackers:
+        return
+    args = trackers[0].args
+    args.track_high_thresh = confidence
+    args.new_track_thresh = confidence
+    args.track_low_thresh = min(confidence, track_confidence)
+
+
 # ---------------------------------------------------------------------------
 # Modelos YOLO cacheados, UNO POR CÁMARA
 # ---------------------------------------------------------------------------
@@ -380,7 +402,9 @@ class CameraConfig(BaseModel):
     # el corte alto antes del tracker, ByteTrack pierde su segunda pasada (la de
     # cajas flojas) y un gato negro en sombra, visto en 1 de cada 3-4 frames,
     # cambiaba de ID en cada hueco y la torreta no llegaba a seguirlo. Las cajas
-    # entre las dos confianzas salen marcadas `weak` (ver Detection).
+    # entre las dos confianzas salen marcadas `weak` (ver Detection). Para
+    # ByteTrack es su umbral bajo, y `confidence` su umbral alto y el de abrir
+    # IDs (ver _sync_tracker_thresholds).
     track_confidence: float = 0.25
     imgsz: int = 640
     classes: Optional[list[int]] = None  # None = todas las clases
@@ -1065,6 +1089,7 @@ class CameraSession:
                 try:
                     t0 = time.time()
                     conf = self.cfg.confidence
+                    _sync_tracker_thresholds(model, conf, self.cfg.track_confidence)
                     results = model.track(
                         frame, persist=True,
                         conf=min(conf, self.cfg.track_confidence),

@@ -230,7 +230,8 @@ Los ajustes de una cámara cuelgan de `/config/`:
 
 - `POST /cameras/{camera_id}/config/inference` — `confidence`,
   `track_confidence` (lo que ve ByteTrack, más bajo: mantiene el ID de lo que
-  se detecta a ratos sin ensuciar el dibujo ni las grabaciones), `imgsz`,
+  se detecta a ratos sin ensuciar el dibujo ni las grabaciones; solo
+  `confidence` abre IDs nuevos), `imgsz`,
   `classes`, `always_infer`, y también el `model_name` y el `device`. En la
   GTX 1080, con una sola cámara se recomienda `yolo26m` (ver la tabla de
   síntomas más abajo). Va en JSON: en Swagger el desplegable
