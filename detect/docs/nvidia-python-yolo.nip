@@ -1,0 +1,18 @@
+﻿<?xml version="1.0" encoding="utf-16"?>
+<ArrayOfProfile>
+  <Profile>
+    <ProfileName>python yolo</ProfileName>
+    <Executeables>
+      <string>python.exe</string>
+    </Executeables>
+    <Settings>
+      <ProfileSetting>
+        <SettingNameInfo>Power management mode</SettingNameInfo>
+        <SettingID>274197361</SettingID>
+        <SettingValue>1</SettingValue>
+        <ValueType>Dword</ValueType>
+      </ProfileSetting>
+    </Settings>
+    <ExecutableFindFiles />
+  </Profile>
+</ArrayOfProfile>

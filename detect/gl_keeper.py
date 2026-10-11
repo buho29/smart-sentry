@@ -14,7 +14,8 @@ proceso como una aplicación 3D y mantiene la GPU a 1657 MHz fijos: 3000 de 3000
 frames con detección, 0 corruptos, ~53 W. Da igual cuánto se dibuje (con un
 frame por minuto basta) y no encarece la inferencia. **Sin ese ajuste del
 perfil no hace nada**: se comprueba con `nvidia-smi` (P0/P2 fijo, `gpu_idle`
-Not Active).
+Not Active). El perfil tiene que apuntar al intérprete base (el `home` de
+venv/pyvenv.cfg), no a venv\Scripts\python.exe, que solo es un lanzador.
 
 La ventana va en un **proceso hijo** y no en un hilo del servicio: el driver
 deja el proceso en P0 mientras viva, aunque se cierre la ventana (medido), así

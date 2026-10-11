@@ -131,7 +131,8 @@ del todo, pero en 73 minutos salieron unas **1.700 detecciones corruptas
 (~23/min)**. Merece la pena dejarlo en Off, pero no sustituye a un modelo
 pesado. Lo que se cambia en el Profile Inspector sobrevive a los reinicios. Una
 actualización del driver puede borrarlo (una instalación limpia lo borra
-seguro), así que conviene exportar el perfil.
+seguro), así que conviene exportar el perfil. El que se usa hoy está en
+[`nvidia-python-yolo.nip`](nvidia-python-yolo.nip) (ver GL keeper).
 
 ### Un relleno mínimo tampoco compensa
 
@@ -196,6 +197,15 @@ contexto OpenGL abierto el driver trata a `python.exe` como un juego y mantiene
 los relojes. Sin el ajuste, la ventana no hace nada. Con *Force P2 State* = On
 además, se queda en P2 y gasta un poco menos.
 
+**Ojo con la ruta:** `venv\Scripts\python.exe` es solo un lanzador que arranca
+el intérprete base, y es ese el que usa CUDA y OpenGL. Su carpeta es el `home`
+de `venv\pyvenv.cfg` (python.org, Microsoft Store, conda, el Python de
+PlatformIO...); también se ve con
+`nvidia-smi --query-compute-apps=pid,process_name --format=csv`. Un perfil del
+Panel de NVIDIA que apunte al `python.exe` del venv no hace nada. Lo más seguro
+es poner el perfil en el Profile Inspector con `python.exe` por nombre, que
+vale para cualquier ruta.
+
 Medido el 26/09/2026 con `test/despertar_gpu.py`, `yolo26n` a 640, 3 min por
 prueba:
 
@@ -222,9 +232,17 @@ prueba:
 
 **Comprobarlo:** con cámaras activas y el GL keeper encendido, `nvidia-smi`
 (§3) tiene que mostrar P0/P2 fijo y `gpu_idle` en Not Active. Si se ve P5, el
-perfil del driver se ha perdido (una actualización del driver puede borrarlo;
-conviene exportarlo desde el Profile Inspector). **Ojo: un cambio en el perfil
-puede no aplicarse del todo hasta reiniciar el PC.**
+perfil del driver se ha perdido (una actualización del driver o la NVIDIA App
+pueden borrarlo). **Ojo: un cambio en el perfil puede no aplicarse del todo
+hasta reiniciar el PC.**
+
+**Restaurarlo:** el perfil está exportado en
+[`nvidia-python-yolo.nip`](nvidia-python-yolo.nip): `python.exe` por nombre y
+*Power Management - Mode* = Prefer maximum performance. En NVIDIA Profile
+Inspector: *Import* → el `.nip` → *Apply changes*; luego reiniciar detect y, si
+sigue en P5, el PC. *CUDA - Force P2 State* = On no aparece en el fichero
+porque es el valor por defecto del driver (Profile Inspector solo exporta lo
+que se cambia).
 
 **Quitarlo:** los pasos están al principio de `gl_keeper.py`.
 
