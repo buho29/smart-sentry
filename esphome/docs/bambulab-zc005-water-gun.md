@@ -45,13 +45,19 @@ control propia que haya que respetar ni "hablar" con protocolo alguno.
 
 ## Integración en el proyecto
 
-- **Sustituir el pulsador por un GPIO del ESP32-S3**, siguiendo la
-  recomendación ya comentada de usar un **MOSFET de canal N a nivel lógico**
-  (con diodo flyback en el motor) en vez de un relé: es un motor DC de bajo
-  consumo (0.9A en marcha), conmuta en silencio y sin desgaste — encaja
-  igual de bien aquí que para una electroválvula. "Disparar una ráfaga"
-  desde firmware es simplemente poner el GPIO en alto el tiempo necesario
-  para que el husillo complete uno o varios ciclos de leva, no un PWM.
+- **Sustituir el pulsador por un GPIO del ESP32-S3** con un MOSFET en vez
+  de un relé: es un motor DC de bajo consumo (0.9A en marcha), conmuta en
+  silencio y sin desgaste. "Disparar una ráfaga" desde firmware es
+  simplemente poner el GPIO en alto el tiempo necesario para que el husillo
+  complete uno o varios ciclos de leva: **solo on/off, no un PWM**. Hay dos
+  variantes, las dos con un **1N4007** (franja hacia el +) y un cerámico
+  **104 (100nF)** en los bornes del motor:
+  - **[IRLZ44N](irlz44n-mosfet.md) cortando la GND del motor** (montaje del
+    autor, que ya lo tenía): 1 MOSFET, 220Ω y 10k. Cortar la GND vale aquí
+    porque el motor solo tiene dos cables y ninguno va al ESP32.
+  - **[IPP120P04P4L-03](ipp120p04p4l-p-mosfet.md) cortando el positivo**,
+    con el mismo circuito que corta los servos (PN2222A, 10k, 1k, 10k). Para
+    quien replique el proyecto: un solo tipo de MOSFET para todo.
 - **Corriente a presupuestar:** 0.9A en marcha es modesto comparado con los
   servos de la torreta (ver [`servos-pan-tilt.md`](servos-pan-tilt.md)),
   pero un motor DC puede dar un **pico de arranque/atasco de 3-5× la
@@ -77,9 +83,15 @@ control propia que haya que respetar ni "hablar" con protocolo alguno.
   recarga automática, esa pieza vendría del "Kit 01" (u otra solución aparte),
   no de este componente.
 
-El esquema de este interruptor (mismo circuito que para los servos) está en
-[`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo)
-como SVG.
+Esquemas de las dos variantes del interruptor:
+
+![Esquema: disparo de la pistola por GND con IRLZ44N](img/water-gun-switch-irlz44n.svg)
+
+*Esquema generado con IA; no verificado en banco.*
+
+![Esquema: disparo de la pistola por el positivo con IPP120P04P4L-03 y PN2222A](img/water-gun-switch-pmosfet.svg)
+
+*Esquema generado con IA; no verificado en banco.*
 
 ---
 

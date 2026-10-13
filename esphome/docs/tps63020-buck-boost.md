@@ -120,7 +120,9 @@ opción deseada antes de usar el módulo; de fábrica puede no venir puenteado.
 - **El motor de la [pistola de agua ZC005](bambulab-zc005-water-gun.md)
   tampoco cuelga de aquí**: corre de fábrica a 3.7V, así que sale más simple
   alimentarlo directo desde la batería 1S, en paralelo con la entrada `VIN`
-  de este mismo `TPS63020`, cortado por su [IRLZ44N](irlz44n-mosfet.md).
+  de este mismo `TPS63020`, cortado por su [IRLZ44N](irlz44n-mosfet.md) o
+  por un [IPP120P04P4L-03](ipp120p04p4l-p-mosfet.md) (las dos variantes
+  están en la ficha de la pistola).
 
 ---
 

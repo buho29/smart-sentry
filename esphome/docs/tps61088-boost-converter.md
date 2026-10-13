@@ -4,11 +4,13 @@ Ficha de referencia del módulo boost basado en el chip **TPS61088**
 (Texas Instruments), **elegido como riel de 5V de los servos** de la torreta
 en lugar del [MT3608](mt3608-boost-converter.md) y el
 [XL6009](xl6009-boost-converter.md) (ver
-[`step-up-boost-comparativa.md`](step-up-boost-comparativa.md)). A
-diferencia de esos dos, hay módulos reales en venta que sí sacan el pin `EN`
-a un pad — por ejemplo
-[este de AliExpress](https://es.aliexpress.com/item/1005009535413093.html)
-("TPS61088 Boost Module 5V/9V/12V 10A 1MHz").
+[`step-up-boost-comparativa.md`](step-up-boost-comparativa.md)). Módulo
+previsto: "TPS61088 Boost Module 5V/9V/12V 10A 1MHz", por ejemplo
+[este](https://es.aliexpress.com/item/1005010313046314.html) o
+[este](https://es.aliexpress.com/item/1005009535413093.html) de AliExpress
+(es la misma placa). **No saca el pin `EN`**: los servos se apagan cortando
+la entrada con un [P-MOSFET](ipp120p04p4l-p-mosfet.md) (ver "Rol en el
+proyecto").
 
 ![Módulo TPS61088 5V/9V/12V 10A](img/TPS61088.webp)
 
@@ -29,14 +31,20 @@ a un pad — por ejemplo
 - **Modo de luz de carga:** seleccionable entre PFM (más eficiente, pin
   `MODE` flotante) y PWM forzado (`MODE` a GND) — igual filosofía que el
   MT3608 y el TPS63020, pero aquí es una elección explícita, no automática.
-- **Diferencia clave frente a MT3608/XL6009:** el pin `EN` de este chip
-  tiene una **resistencia de pull-down interna de 800kΩ** — es decir, si se
-  deja flotando, el regulador **se apaga por defecto**, al revés que el
-  XL6009 (flota a nivel alto = encendido). Esto obliga a cualquier módulo
-  comercial a exponer una forma de llevar `EN` a nivel alto (jumper, botón o
-  pad), porque si no el módulo ni siquiera arrancaría — es la garantía de
-  que, a diferencia del XL6009, aquí sí hay un control de apagado real y
-  accesible sin modificar la placa.
+  En el módulo es el **pad "PWM"** junto a la borna de GND: abierto (de
+  fábrica) = PFM, puenteado = PWM forzado. Según el vendedor, en vacío
+  consume **200-600µA en PFM** y **15-65mA en PWM**: **no se puentea**.
+- **`EN` en el módulo:** el chip lo tiene, con pull-down interno de 800kΩ,
+  pero la placa lo lleva fijo a VIN y **no lo saca a ningún pad**. Los
+  únicos pads son VIN, VOUT, dos GND, los puentes 5V/9V/12V/ADJ y el "PWM".
+- **Además, `EN` no desconecta la salida.** Es un boost síncrono sin
+  desconexión de carga: con `EN` bajo deja de conmutar, pero la batería pasa
+  a VOUT por el diodo interno del MOSFET de salida (VOUT ≈ VBAT − Vf, unos
+  3.3-3.8V). Lo confirma TI en sus foros
+  ([E2E](https://e2e.ti.com/support/power-management-group/power-management/f/power-management-forum/1190693/tps61088-shutdown-current),
+  [E2E China](https://e2echina.ti.com/support/power-management/f/power-management-forum/185489/tps61088rhlr-how-to-turn-off-vout-by-en-pin)).
+  Aunque se sacara `EN` modificando la placa, los servos seguirían
+  alimentados.
 
 ## Consumo en reposo (quiescent current)
 
@@ -53,10 +61,11 @@ Datos de la tabla "Electrical Characteristics" del datasheet TI (VIN =
 sin carga ronda **~100-250µA** (dominado por la corriente que se pierde en
 el propio divisor de feedback en `VOUT`, no por el núcleo del chip) — muy
 por debajo de los 2.5-5mA del XL6009 y comparable o mejor que los 100-200µA
-del MT3608 en PFM. Y en apagado (`EN=0V`) cae a **1-3µA**, prácticamente
-igual de bueno que el TPS63020 (<1µA) y muy por debajo del XL6009 en
-shutdown (70-100µA, y encima sin poder llegar a ese modo en el módulo
-típico).
+del MT3608 en PFM. El vendedor del módulo da 200-600µA en PFM, medido a 9V
+de salida. El modo `EN=0V` (1-3µA) **no es alcanzable** con el módulo, que
+no saca `EN`, y además no apagaría los servos (ver arriba). El apagado real
+es cortar VIN con el [P-MOSFET](ipp120p04p4l-p-mosfet.md), que deja boost y
+servos en la fuga del MOSFET (µA).
 
 ## Rol en el proyecto
 
@@ -73,11 +82,12 @@ alimenta.
   ~85% de eficiencia y la celda a 3.3V eso son **~2.5-3A de entrada** en el
   peor caso. La batería y su cableado tienen que aguantarlo, no solo el
   módulo.
-- **Sin necesitar el MOSFET [IRLZ44N](irlz44n-mosfet.md)**: al tener el
-  módulo un pin `EN` real y funcional, un GPIO de la ESP32 puede controlar
-  directamente el encendido/apagado del regulador (con las mismas
-  precauciones de un pull-down si el pin quedara flotando durante el
-  arranque, aunque aquí el propio chip ya trae uno de 800kΩ internamente).
+- **Apagado: cortando VIN por el positivo.** Un P-MOSFET
+  [IPP120P04P4L-03](ipp120p04p4l-p-mosfet.md) entre BAT+ y VIN, con un
+  PN2222A como driver, apaga a la vez el boost y los servos. No sirve
+  cortar la GND de los servos con un [IRLZ44N](irlz44n-mosfet.md): buscan
+  masa por la señal PWM (ver
+  [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo)).
 - **10A de corriente de switch** deja mucho margen por encima de los picos
   de stall documentados en [`servos-pan-tilt.md`](servos-pan-tilt.md)
   (hasta ~4.2A con dos DS3218MG/DS3225MG a la vez) — a diferencia del
@@ -89,24 +99,23 @@ alimenta.
 
 ## Notas de integración
 
-- Comprobar en la placa concreta si la salida viene fijada por jumper/pad
-  (5V/9V/12V) o por potenciómetro — el listado de AliExpress citado arriba
-  la anuncia como seleccionable entre 5V/9V/12V, más simple de fijar que un
-  trimpot analógico como el del MT3608/XL6009.
-- Verificar con multímetro qué pad concreto de la placa corresponde a `EN`
-  antes de conectarlo a un GPIO — el pinout exacto puede variar entre
-  clones, igual que se advierte para el [IRLZ44N](irlz44n-mosfet.md).
-- Si el módulo no expone `EN` a pesar de lo anunciado (variante de placa
-  distinta a la fotografiada en el anuncio), la alternativa de respaldo es
-  la misma que para el XL6009: cortar la línea de entrada con un MOSFET
-  externo.
+- **Tensión de salida por puentes de soldadura:** junto al chip hay tres
+  pads, **5V / 9V / 12V**, y un hueco marcado **ADJ**. Se cortocircuita con
+  estaño **solo el de 5V**. ADJ es el sitio para soldar una resistencia
+  propia (o un potenciómetro en la versión ajustable) si se quiere otra
+  tensión; según el vendedor solo funciona si ningún puente está hecho, y
+  no se pueden combinar. Aquí se deja vacío. **Medir VOUT con el
+  multímetro antes de conectar los servos**, por si la placa viniera con
+  otro puente hecho de fábrica.
+- **No puentear el pad "PWM"**: de fábrica queda en PFM, que es el modo de
+  bajo consumo en vacío.
 - Poner un condensador electrolítico de **1000-2200µF** en la salida, lo más
   cerca posible de los servos, para amortiguar los picos cortos de stall (ya
   recomendado en [`servos-pan-tilt.md`](servos-pan-tilt.md)); no sustituye
   a dimensionar la fuente, pero evita que un golpe de corriente hunda el riel.
 - Respetar el orden de apagado de [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo):
   primero dejar que ESPHome suelte la señal PWM (`auto_detach_time`), después
-  bajar `EN`.
+  bajar el GPIO que corta VIN.
 
 ---
 

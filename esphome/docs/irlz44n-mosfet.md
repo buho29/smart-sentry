@@ -1,11 +1,13 @@
 # MOSFET de conmutación IRLZ44N
 
-Ficha de referencia del MOSFET usado como interruptor de bajo lado para
-cortar la alimentación de los [servos](servos-pan-tilt.md) y disparar el
-motor de la [pistola de agua ZC005](bambulab-zc005-water-gun.md). El
-esquema completo de ese circuito (resistencia de gate, pull-down, diodo
-flyback) está en [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo);
-este documento se centra solo en el componente.
+Ficha de referencia del MOSFET usado como interruptor de bajo lado (corta
+la GND) para disparar el motor de la
+[pistola de agua ZC005](bambulab-zc005-water-gun.md) en el montaje del
+autor. **No se usa para los servos**: cortarles la GND hace que busquen masa
+por la señal PWM. Los servos se cortan por el positivo con un
+[IPP120P04P4L-03](ipp120p04p4l-p-mosfet.md), y ese mismo P-MOSFET es la
+alternativa para la pistola si se quiere un solo tipo de MOSFET en todo el
+proyecto.
 
 ![IRLZ44N en encapsulado TO-220](img/IRLZ44N.webp)
 
@@ -17,6 +19,12 @@ este documento se centra solo en el componente.
   MOSFET de potencia "normal" que necesita ~10V en la puerta.
 - **Encapsulado:** TO-220 (3 patillas: Gate, Drain, Source; con lengüeta
   metálica trasera unida al Drain, para disipador si hiciera falta).
+  Patillaje del datasheet: **1 = G, 2 = D, 3 = S**, mirando la cara con las
+  letras y las patas hacia abajo.
+
+![Patillaje del IRLZ44N: 1 Gate, 2 Drain, 3 Source](img/IRLZ44N-pinout.webp)
+
+*Etiquetas añadidas con IA sobre la foto; comprobar con el datasheet.*
 
 ## Specs clave
 
@@ -35,13 +43,16 @@ este documento se centra solo en el componente.
   umbral (1.0–2.0V) está por debajo de los **3.3V** que da un GPIO de la
   ESP32-S3 directamente — se satura sin necesitar un driver de puerta
   aparte. A 3.3V la R_DS(on) es algo mayor que la de la hoja de datos
-  (que se mide a 5V/10V), pero para las corrientes de este proyecto
-  (0.9A del motor de la pistola, hasta ~1-1.5A de los servos según
-  [servos-pan-tilt.md](servos-pan-tilt.md)) esa diferencia no genera
-  calentamiento apreciable.
-- **Muy sobredimensionado en corriente:** 47A de capacidad frente a <2A
-  reales de carga — no hace falta disipador para este uso; el margen
-  térmico es enorme.
+  (que se mide a 5V/10V), pero con los 0.9A del motor de la pistola (picos
+  de 2.7-4.5A si se atasca) esa diferencia no genera calentamiento
+  apreciable.
+- **Muy sobredimensionado en corriente:** 47A de capacidad frente a ~1A
+  real de carga — no hace falta disipador para este uso; el margen térmico
+  es enorme.
+- **Cortar la GND sí vale aquí:** el motor solo tiene dos cables y ninguno va
+  al ESP32, así que al cortar la masa no hay otro camino de retorno. Es
+  justo lo que falla con los servos (ver
+  [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo)).
 - **Ya en la mano del usuario:** no es una elección de catálogo, es la
   pieza que ya estaba disponible (reaprovechada de un proyecto de tira de
   LED), de ahí que este documento parta del componente real en vez de
@@ -49,19 +60,23 @@ este documento se centra solo en el componente.
 
 ## Notas de la implementación en este proyecto
 
-- El circuito completo (resistencia de gate ~220Ω, pull-down ~10kΩ en la
-  puerta, diodo flyback en la carga) está documentado en
-  [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo) —
-  no se repite aquí para no duplicar.
-- **Drain vs. Source:** el Drain va hacia la carga (servo o motor de la
-  pistola), el Source va directo a GND — no hay ninguna resistencia entre
+![Esquema: disparo de la pistola por GND con IRLZ44N](img/water-gun-switch-irlz44n.svg)
+
+*Esquema generado con IA; no verificado en banco.*
+
+- **Circuito:** resistencia de puerta de 220Ω desde el GPIO, pull-down de
+  10kΩ a GND, y en los bornes del motor un **1N4007** (franja hacia el +) y
+  un cerámico **104 (100nF)**. El motor va de BAT+ al Drain.
+- **Solo on/off:** el GPIO se pone en alto mientras dura la ráfaga; las
+  ráfagas las hace el mecanismo de leva, no un PWM.
+- **Drain vs. Source:** el Drain va hacia el − del motor, el Source va
+  directo a GND — no hay ninguna resistencia entre
   Source y GND; el pull-down de 10kΩ solo está entre la puerta y GND, para
   evitar que el MOSFET conduzca sin querer si el GPIO queda flotando
   durante el arranque de la ESP32.
-- Al ser TO-220, el pin central (con la lengüeta metálica) suele ser el
-  Drain — comprobar la serigrafía del componente físico concreto antes de
-  soldar, ya que el pinout G-D-S por posición puede variar entre fabricantes
-  de clones.
+- El patillaje G-D-S es el de la foto de arriba. En clones podría variar:
+  si hay dudas, comprobar con el multímetro que la lengüeta y la pata
+  central están unidas (son el Drain).
 
 ---
 

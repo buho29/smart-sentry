@@ -199,36 +199,45 @@ de solo despertar/dormir el regulador.
 ## Cortar la alimentación de los servos (ahorro en reposo)
 
 Además de separar el riel, se corta del todo la corriente a los servos
-cuando no hay seguimiento activo. Con el [TPS61088](tps61088-boost-converter.md)
-elegido esto se hace **por su pin `EN`** desde un GPIO del ESP32-S3, sin
-ningún componente extra: con `EN` bajo el regulador queda en 1-3µA y los
-servos sin tensión.
+cuando no hay seguimiento activo. Hay tres formas que parecen valer y no
+valen:
 
-El esquema con **IRLZ44N** que sigue (el mismo MOSFET usado para el motor de
-la [pistola de agua](bambulab-zc005-water-gun.md), como interruptor de bajo
-lado en el retorno a GND del servo) queda como **respaldo** por si el módulo
-TPS61088 que llegue no expone `EN` en un pad accesible. Las precauciones de
-orden de apagado del final de esta sección aplican igual en ambos casos.
+- **El pin `EN` del [TPS61088](tps61088-boost-converter.md):** los módulos
+  que se venden no lo sacan a ningún pad (el pad "PWM" es el selector de
+  modo). Y aunque lo sacaran, el chip no desconecta la salida: con `EN` bajo
+  la batería llega a los servos por el diodo interno del MOSFET de salida
+  (VOUT ≈ VBAT − Vf).
+- **Cortar la GND de los servos** (un N-MOSFET como el
+  [IRLZ44N](irlz44n-mosfet.md) en el retorno): el servo sigue con el + puesto
+  y el cable de señal enchufado a un GPIO, y busca masa por ahí. Da tirones,
+  consumo fantasma y riesgo para el pin.
+- **Un relé:** funciona, pero la bobina gasta 70-90mA mientras está
+  encendido, hace ruido y abulta en la caja estanca.
 
-![Esquema: corte de alimentación de los servos con IRLZ44N](img/servo-power-switch-mosfet.svg)
+Lo que se usa es un **P-MOSFET [IPP120P04P4L-03](ipp120p04p4l-p-mosfet.md)
+cortando BAT+ antes del VIN del TPS61088**, con un PN2222A como driver de la
+puerta. Así se apagan a la vez el boost y los servos, con una fuga de µA.
+
+![Esquema: corte de servos por el positivo con IPP120P04P4L-03 y PN2222A](img/servo-power-switch-pmosfet.svg)
 
 *Esquema generado con IA; no verificado en banco.*
 
 Puntos clave del esquema:
 
-- **Diodo flyback** entre V+ y GND del servo (mismo criterio que en el
-  motor de la pistola: dentro del servo hay un motor DC, sigue siendo carga
-  inductiva).
-- **Resistencia de gate** (~220Ω) entre el GPIO y la puerta del MOSFET, y
-  **pull-down** (~10kΩ) de la puerta a GND — el pull-down es lo que evita
-  que el servo reciba corriente sin querer si el GPIO queda flotando durante
-  el arranque del ESP32.
-- **Orden de apagado importante** (vale igual para el `EN` del TPS61088):
-  primero dejar que ESPHome corte la señal PWM (`auto_detach_time: 2s`, ya
-  presente en `esp32-s3-cam-servo.yaml`), y solo después bajar el GPIO de
-  corte. Cortar la alimentación mientras el pin de señal todavía manda PWM
-  puede alimentar el servo a medias a través de sus diodos de protección
-  internos.
+- **R1 10k** de la puerta a BAT+ (apagado por defecto), **R2 1k** del GPIO
+  a la base y **R3 10k** de la base a GND. R3 mantiene el NPN cortado si el
+  GPIO flota en el arranque o en deep sleep.
+- **Sin diodo flyback** en esta rama: el corte va antes del boost, y sus
+  condensadores absorben la descarga de los motores de los servos.
+- **Si el ESP32 se reinicia al encender los servos**, es el pico de carga de
+  los condensadores del boost. Se suaviza con 10k en serie con la puerta del
+  P-MOSFET y 100nF entre puerta y source (detalle en la
+  [ficha](ipp120p04p4l-p-mosfet.md)).
+- **Orden de apagado importante:** primero dejar que ESPHome corte la señal
+  PWM (`auto_detach_time: 2s`, ya presente en `esp32-s3-cam-servo.yaml`), y
+  solo después bajar el GPIO de corte. Cortar la alimentación mientras el pin
+  de señal todavía manda PWM puede alimentar el servo a medias a través de
+  sus diodos de protección internos.
 
 ## Qué necesita el proyecto a nivel de firmware
 

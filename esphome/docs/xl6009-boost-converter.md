@@ -92,6 +92,11 @@ eliminado mediante un interruptor de carga: un MOSFET **IRLZ44N** en
 conmutación de **lado bajo** (low-side), controlado por un GPIO de la
 ESP32.
 
+> **Ojo si se reutiliza:** cortar la GND de los servos no es fiable. Con la
+> masa cortada, el servo busca retorno por la señal PWM y el GPIO. El corte
+> hay que hacerlo por el positivo, como en
+> [`servos-pan-tilt.md`](servos-pan-tilt.md#cortar-la-alimentación-de-los-servos-ahorro-en-reposo).
+
 - **Conexión:** batería → `VIN` del XL6009 (directo, sin pasar por el
   interruptor) → salida `VOUT` a los servos. El retorno a masa del módulo
   (`GND`) va al `drain` del IRLZ44N; el `source` va a la masa común del
