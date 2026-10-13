@@ -56,8 +56,10 @@ control propia que haya que respetar ni "hablar" con protocolo alguno.
     autor, que ya lo tenía): 1 MOSFET, 220Ω y 10k. Cortar la GND vale aquí
     porque el motor solo tiene dos cables y ninguno va al ESP32.
   - **[IPP120P04P4L-03](ipp120p04p4l-p-mosfet.md) cortando el positivo**,
-    con el mismo circuito que corta los servos (PN2222A, 10k, 1k, 10k). Para
-    quien replique el proyecto: un solo tipo de MOSFET para todo.
+    con el mismo circuito que corta los servos (PN2222A, 10k, 1k, 10k),
+    basado en el artículo de Taste The Code
+    [Sensor Power Switch Using an ESP32 and P-Channel MOSFET](https://www.tastethecode.com/sensor-power-switch-using-an-esp32-and-p-channel-mosfet).
+    Para quien replique el proyecto: un solo tipo de MOSFET para todo.
 - **Corriente a presupuestar:** 0.9A en marcha es modesto comparado con los
   servos de la torreta (ver [`servos-pan-tilt.md`](servos-pan-tilt.md)),
   pero un motor DC puede dar un **pico de arranque/atasco de 3-5× la

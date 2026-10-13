@@ -216,7 +216,9 @@ valen:
 
 Lo que se usa es un **P-MOSFET [IPP120P04P4L-03](ipp120p04p4l-p-mosfet.md)
 cortando BAT+ antes del VIN del TPS61088**, con un PN2222A como driver de la
-puerta. Así se apagan a la vez el boost y los servos, con una fuga de µA.
+puerta. Así se apagan a la vez el boost y los servos, con una fuga de µA. El
+circuito se basa en el artículo de Taste The Code
+[Sensor Power Switch Using an ESP32 and P-Channel MOSFET](https://www.tastethecode.com/sensor-power-switch-using-an-esp32-and-p-channel-mosfet).
 
 ![Esquema: corte de servos por el positivo con IPP120P04P4L-03 y PN2222A](img/servo-power-switch-pmosfet.svg)
 

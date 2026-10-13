@@ -67,8 +67,10 @@ Por eso un **NPN (PN2222A / 2N2222)** hace de driver:
 - **GPIO a 0 o flotando** (arranque, deep sleep) → R3 corta el NPN y R1 sube
   la puerta a BAT+ → apagado, con fuga de µA.
 
-Es el montaje estándar de P-MOSFET + transistor que tira de la puerta (por
-ejemplo, [asciimx – MOSFET switches](https://asciimx.com/log/mosfet-switches/)),
+El circuito se basa en el artículo de Taste The Code
+[Sensor Power Switch Using an ESP32 and P-Channel MOSFET](https://www.tastethecode.com/sensor-power-switch-using-an-esp32-and-p-channel-mosfet).
+Es el montaje estándar de P-MOSFET + transistor que tira de la puerta (ver
+también [asciimx – MOSFET switches](https://asciimx.com/log/mosfet-switches/)),
 cambiando el típico IRF9540N, que necesita ~10V en la puerta, por este.
 
 ### Servos
