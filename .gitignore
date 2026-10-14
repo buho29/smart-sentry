@@ -3,3 +3,8 @@ venv/
 .pio/
 .esphome/
 __pycache__/
+
+# Esquemas y placas KiCad generados con los MCP de KiCad (de momento fuera del repo)
+esphome/docs/diagrams/
+# config.ini que mcp-kicad guarda en la carpeta desde la que se lanza
+/config.ini

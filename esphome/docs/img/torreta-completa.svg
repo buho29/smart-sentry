@@ -1,0 +1,318 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 1410" font-family="Consolas, Menlo, monospace" font-size="15">
+  <defs>
+    <!-- Simbolo de GND: el punto de enganche es (0,0) -->
+    <g id="gnd" stroke="#111" stroke-width="2">
+      <line x1="-12" y1="0" x2="12" y2="0"/>
+      <line x1="-8" y1="5" x2="8" y2="5"/>
+      <line x1="-4" y1="10" x2="4" y2="10"/>
+    </g>
+  </defs>
+  <rect x="0" y="0" width="1120" height="1410" fill="#ffffff"/>
+
+  <!-- Titulo -->
+  <text x="20" y="30" font-size="18" font-weight="bold" fill="#111">Torreta completa: ESP32-S3-CAM + servos pan/tilt + pistola de agua</text>
+
+  <!-- ===================================================================== -->
+  <!-- 1) Alimentacion y ESP32-S3-CAM                                        -->
+  <!-- ===================================================================== -->
+  <text x="20" y="65" font-size="16" font-weight="bold" fill="#264">1) Alimentacion y ESP32-S3-CAM</text>
+
+  <!-- Bateria 18650 -->
+  <line x1="100" y1="110" x2="100" y2="150" stroke="#111" stroke-width="2"/>
+  <line x1="78" y1="150" x2="122" y2="150" stroke="#111" stroke-width="3"/>
+  <line x1="90" y1="162" x2="110" y2="162" stroke="#111" stroke-width="5"/>
+  <text x="128" y="148" fill="#111" font-size="13">+</text>
+  <line x1="100" y1="162" x2="100" y2="225" stroke="#111" stroke-width="2"/>
+  <use href="#gnd" x="100" y="225"/>
+  <text x="128" y="172" fill="#111" font-size="13">Bateria 18650 1S</text>
+  <text x="128" y="190" fill="#555" font-size="12">3.0-4.2V</text>
+
+  <!-- Rail BAT+ -->
+  <line x1="100" y1="110" x2="330" y2="110" stroke="#111" stroke-width="2"/>
+  <text x="140" y="100" fill="#111">BAT+</text>
+  <text x="190" y="100" fill="#555" font-size="12">(tambien a 2 y 3)</text>
+
+  <!-- TPS63020 -->
+  <rect x="330" y="80" width="150" height="80" fill="#f5f5f5" stroke="#111" stroke-width="2"/>
+  <text x="336" y="104" fill="#333" font-size="13">VIN</text>
+  <text x="440" y="104" fill="#333" font-size="13">VOUT</text>
+  <text x="405" y="132" font-weight="bold" fill="#111" text-anchor="middle">TPS63020</text>
+  <text x="405" y="151" fill="#555" font-size="12" text-anchor="middle">buck-boost 3.3V</text>
+  <line x1="405" y1="160" x2="405" y2="225" stroke="#111" stroke-width="2"/>
+  <use href="#gnd" x="405" y="225"/>
+
+  <!-- Rail +3V3 -->
+  <line x1="480" y1="110" x2="620" y2="110" stroke="#111" stroke-width="2"/>
+  <text x="520" y="100" fill="#111">+3V3</text>
+
+  <!-- ESP32-S3-CAM -->
+  <rect x="620" y="80" width="280" height="160" fill="#e8f0ff" stroke="#111" stroke-width="2"/>
+  <text x="745" y="130" font-weight="bold" fill="#111" text-anchor="middle">ESP32-S3-CAM</text>
+  <text x="745" y="150" fill="#333" font-size="12" text-anchor="middle">(N16R8)</text>
+  <text x="628" y="114" fill="#333" font-size="13">3V3</text>
+  <text x="628" y="214" fill="#333" font-size="13">GND</text>
+  <line x1="620" y1="210" x2="590" y2="210" stroke="#111" stroke-width="2"/>
+  <line x1="590" y1="210" x2="590" y2="225" stroke="#111" stroke-width="2"/>
+  <use href="#gnd" x="590" y="225"/>
+
+  <!-- Salidas de la ESP32 -->
+  <text x="892" y="114" fill="#333" font-size="13" text-anchor="end">GPIO21</text>
+  <text x="892" y="144" fill="#333" font-size="13" text-anchor="end">GPIO47</text>
+  <text x="892" y="174" fill="#333" font-size="13" text-anchor="end">GPIO ?</text>
+  <text x="892" y="204" fill="#333" font-size="13" text-anchor="end">GPIO ?</text>
+  <line x1="900" y1="110" x2="950" y2="110" stroke="#888" stroke-width="2" stroke-dasharray="6,4"/>
+  <line x1="900" y1="140" x2="950" y2="140" stroke="#888" stroke-width="2" stroke-dasharray="6,4"/>
+  <line x1="900" y1="170" x2="950" y2="170" stroke="#111" stroke-width="2"/>
+  <line x1="900" y1="200" x2="950" y2="200" stroke="#111" stroke-width="2"/>
+  <rect x="950" y="99" width="150" height="22" fill="#fff8e6" stroke="#a88" stroke-width="1.5"/>
+  <text x="958" y="115" fill="#663" font-size="13">PWM servo pan</text>
+  <rect x="950" y="129" width="150" height="22" fill="#fff8e6" stroke="#a88" stroke-width="1.5"/>
+  <text x="958" y="145" fill="#663" font-size="13">PWM servo tilt</text>
+  <rect x="950" y="159" width="150" height="22" fill="#e8f0ff" stroke="#111" stroke-width="1.5"/>
+  <text x="958" y="175" fill="#111" font-size="13">SERVOS_ON (2)</text>
+  <rect x="950" y="189" width="150" height="22" fill="#e8f0ff" stroke="#111" stroke-width="1.5"/>
+  <text x="958" y="205" fill="#111" font-size="13">DISPARO (3)</text>
+  <text x="900" y="262" fill="#555" font-size="12" text-anchor="end">GPIO de corte y disparo: por asignar</text>
+
+  <!-- ===================================================================== -->
+  <!-- 2) Corte de servos + TPS61088 + servos                                -->
+  <!-- ===================================================================== -->
+  <g transform="translate(0,320)">
+    <text x="20" y="-15" font-size="16" font-weight="bold" fill="#264">2) Corte de servos por el positivo + TPS61088 5V</text>
+
+    <!-- Rail BAT+ hasta el source del P-MOSFET -->
+    <text x="60" y="32" fill="#111">BAT+</text>
+    <line x1="60" y1="45" x2="330" y2="45" stroke="#111" stroke-width="2"/>
+    <circle cx="250" cy="45" r="4" fill="#111"/>
+
+    <!-- P-MOSFET IPP120P04P4L-03 -->
+    <rect x="330" y="15" width="150" height="70" fill="#f5f5f5" stroke="#111" stroke-width="2"/>
+    <text x="338" y="42" font-weight="bold" fill="#111">IPP120P04P4L-03</text>
+    <text x="362" y="64" fill="#333" font-size="13">(4PP04L03)</text>
+    <text x="314" y="38" fill="#333" font-size="13">S</text>
+    <text x="486" y="38" fill="#333" font-size="13">D</text>
+    <text x="412" y="105" fill="#333" font-size="13">G</text>
+
+    <!-- Drain -> VIN del TPS61088 -->
+    <line x1="480" y1="45" x2="560" y2="45" stroke="#111" stroke-width="2"/>
+
+    <!-- TPS61088 -->
+    <rect x="560" y="15" width="170" height="110" fill="#f5f5f5" stroke="#111" stroke-width="2"/>
+    <text x="566" y="40" fill="#333" font-size="13">VIN</text>
+    <text x="690" y="40" fill="#333" font-size="13">VOUT</text>
+    <text x="645" y="70" font-weight="bold" fill="#111" text-anchor="middle">TPS61088</text>
+    <text x="645" y="92" fill="#555" font-size="12" text-anchor="middle">boost 5V fijo</text>
+    <text x="645" y="110" fill="#555" font-size="12" text-anchor="middle">(pad PWM abierto)</text>
+    <text x="652" y="142" fill="#333" font-size="13">GND</text>
+    <line x1="645" y1="125" x2="645" y2="430" stroke="#111" stroke-width="2"/>
+
+    <!-- Riel +5V servos -->
+    <text x="742" y="32" fill="#111">+5V servos</text>
+    <line x1="730" y1="45" x2="1020" y2="45" stroke="#111" stroke-width="2"/>
+    <circle cx="760" cy="45" r="4" fill="#111"/>
+    <circle cx="830" cy="45" r="4" fill="#111"/>
+    <circle cx="910" cy="45" r="4" fill="#111"/>
+
+    <!-- C1 electrolitico -->
+    <line x1="760" y1="45" x2="760" y2="150" stroke="#111" stroke-width="2"/>
+    <line x1="742" y1="150" x2="778" y2="150" stroke="#111" stroke-width="3"/>
+    <line x1="742" y1="162" x2="778" y2="162" stroke="#111" stroke-width="3"/>
+    <line x1="760" y1="162" x2="760" y2="430" stroke="#111" stroke-width="2"/>
+    <text x="782" y="145" fill="#111" font-size="13">+</text>
+    <text x="736" y="182" fill="#111" font-size="13" text-anchor="end">C1</text>
+    <text x="736" y="200" fill="#111" font-size="13" text-anchor="end">1000uF</text>
+    <text x="736" y="217" fill="#555" font-size="12" text-anchor="end">10V+</text>
+
+    <!-- C2 ceramico 104 -->
+    <line x1="830" y1="45" x2="830" y2="150" stroke="#111" stroke-width="2"/>
+    <line x1="812" y1="150" x2="848" y2="150" stroke="#111" stroke-width="3"/>
+    <line x1="812" y1="162" x2="848" y2="162" stroke="#111" stroke-width="3"/>
+    <line x1="830" y1="162" x2="830" y2="430" stroke="#111" stroke-width="2"/>
+    <text x="836" y="190" fill="#111" font-size="13">C2</text>
+    <text x="836" y="207" fill="#111" font-size="13">104</text>
+    <text x="836" y="224" fill="#555" font-size="12">100nF</text>
+
+    <!-- Servo pan -->
+    <line x1="910" y1="45" x2="910" y2="150" stroke="#111" stroke-width="2"/>
+    <rect x="890" y="150" width="95" height="80" fill="#f5f5f5" stroke="#111" stroke-width="2"/>
+    <text x="898" y="176" font-weight="bold" fill="#111" font-size="14">Servo pan</text>
+    <text x="898" y="196" fill="#333" font-size="13">MF90</text>
+    <text x="898" y="222" fill="#333" font-size="12">-      S</text>
+    <text x="916" y="144" fill="#333" font-size="12">+</text>
+    <line x1="910" y1="230" x2="910" y2="430" stroke="#111" stroke-width="2"/>
+    <line x1="960" y1="230" x2="960" y2="290" stroke="#888" stroke-width="2" stroke-dasharray="6,4"/>
+    <rect x="930" y="290" width="60" height="22" fill="#fff8e6" stroke="#a88" stroke-width="1.5"/>
+    <text x="937" y="306" fill="#663" font-size="13">GPIO21</text>
+
+    <!-- Servo tilt -->
+    <line x1="1020" y1="45" x2="1020" y2="150" stroke="#111" stroke-width="2"/>
+    <rect x="1000" y="150" width="100" height="80" fill="#f5f5f5" stroke="#111" stroke-width="2"/>
+    <text x="1008" y="176" font-weight="bold" fill="#111" font-size="14">Servo tilt</text>
+    <text x="1008" y="196" fill="#333" font-size="13">MF90</text>
+    <text x="1008" y="222" fill="#333" font-size="12">-      S</text>
+    <text x="1026" y="144" fill="#333" font-size="12">+</text>
+    <line x1="1020" y1="230" x2="1020" y2="430" stroke="#111" stroke-width="2"/>
+    <line x1="1070" y1="230" x2="1070" y2="290" stroke="#888" stroke-width="2" stroke-dasharray="6,4"/>
+    <rect x="1040" y="290" width="60" height="22" fill="#fff8e6" stroke="#a88" stroke-width="1.5"/>
+    <text x="1047" y="306" fill="#663" font-size="13">GPIO47</text>
+
+    <!-- R1 10k: puerta -> BAT+ -->
+    <line x1="250" y1="45" x2="250" y2="90" stroke="#111" stroke-width="2"/>
+    <rect x="238" y="90" width="24" height="50" fill="#fff" stroke="#111" stroke-width="2"/>
+    <line x1="250" y1="140" x2="250" y2="165" stroke="#111" stroke-width="2"/>
+    <text x="230" y="120" fill="#111" font-size="13" text-anchor="end">R1 10k</text>
+    <line x1="250" y1="165" x2="405" y2="165" stroke="#111" stroke-width="2"/>
+
+    <!-- Puerta del P-MOSFET -->
+    <line x1="405" y1="85" x2="405" y2="210" stroke="#111" stroke-width="2"/>
+    <circle cx="405" cy="165" r="4" fill="#111"/>
+
+    <!-- PN2222A -->
+    <rect x="365" y="210" width="110" height="80" fill="#f5f5f5" stroke="#111" stroke-width="2"/>
+    <text x="378" y="244" font-weight="bold" fill="#111">PN2222A</text>
+    <text x="381" y="265" fill="#333" font-size="13">(2N2222)</text>
+    <text x="412" y="205" fill="#333" font-size="13">C</text>
+    <text x="350" y="242" fill="#333" font-size="13">B</text>
+    <text x="412" y="308" fill="#333" font-size="13">E</text>
+    <line x1="405" y1="290" x2="405" y2="430" stroke="#111" stroke-width="2"/>
+
+    <!-- Base: R2 1k desde el GPIO y R3 10k a GND -->
+    <line x1="365" y1="250" x2="260" y2="250" stroke="#111" stroke-width="2"/>
+    <circle cx="300" cy="250" r="4" fill="#111"/>
+    <rect x="200" y="238" width="60" height="24" fill="#fff" stroke="#111" stroke-width="2"/>
+    <text x="205" y="230" fill="#111" font-size="13">R2 1k</text>
+    <line x1="200" y1="250" x2="150" y2="250" stroke="#111" stroke-width="2"/>
+    <rect x="60" y="228" width="90" height="44" fill="#e8f0ff" stroke="#111" stroke-width="2"/>
+    <text x="72" y="246" fill="#111">GPIO ?</text>
+    <text x="68" y="264" fill="#333" font-size="12">SERVOS_ON</text>
+
+    <line x1="300" y1="250" x2="300" y2="320" stroke="#111" stroke-width="2"/>
+    <rect x="288" y="320" width="24" height="50" fill="#fff" stroke="#111" stroke-width="2"/>
+    <text x="320" y="350" fill="#111" font-size="13">R3 10k</text>
+    <line x1="300" y1="370" x2="300" y2="430" stroke="#111" stroke-width="2"/>
+
+    <!-- GND -->
+    <line x1="60" y1="430" x2="1100" y2="430" stroke="#111" stroke-width="2"/>
+    <text x="60" y="455" fill="#111">GND comun</text>
+    <circle cx="300" cy="430" r="4" fill="#111"/>
+    <circle cx="405" cy="430" r="4" fill="#111"/>
+    <circle cx="645" cy="430" r="4" fill="#111"/>
+    <circle cx="760" cy="430" r="4" fill="#111"/>
+    <circle cx="830" cy="430" r="4" fill="#111"/>
+    <circle cx="910" cy="430" r="4" fill="#111"/>
+    <circle cx="1020" cy="430" r="4" fill="#111"/>
+  </g>
+
+  <!-- ===================================================================== -->
+  <!-- 3) Disparo de la pistola                                              -->
+  <!-- ===================================================================== -->
+  <g transform="translate(0,820)">
+    <text x="20" y="-15" font-size="16" font-weight="bold" fill="#264">3) Disparo de la pistola por el positivo (mismo circuito)</text>
+
+    <!-- Rail BAT+ hasta el source del P-MOSFET -->
+    <text x="60" y="32" fill="#111">BAT+</text>
+    <line x1="60" y1="45" x2="330" y2="45" stroke="#111" stroke-width="2"/>
+    <circle cx="250" cy="45" r="4" fill="#111"/>
+
+    <!-- P-MOSFET IPP120P04P4L-03 -->
+    <rect x="330" y="15" width="150" height="70" fill="#f5f5f5" stroke="#111" stroke-width="2"/>
+    <text x="338" y="42" font-weight="bold" fill="#111">IPP120P04P4L-03</text>
+    <text x="362" y="64" fill="#333" font-size="13">(4PP04L03)</text>
+    <text x="314" y="38" fill="#333" font-size="13">S</text>
+    <text x="486" y="38" fill="#333" font-size="13">D</text>
+    <text x="412" y="105" fill="#333" font-size="13">G</text>
+
+    <!-- Drain -> + del motor -->
+    <text x="560" y="32" fill="#111">+ motor</text>
+    <line x1="480" y1="45" x2="680" y2="45" stroke="#111" stroke-width="2"/>
+    <line x1="680" y1="45" x2="680" y2="190" stroke="#111" stroke-width="2"/>
+    <circle cx="680" cy="110" r="4" fill="#111"/>
+
+    <!-- Motor ZC005 -->
+    <rect x="605" y="190" width="150" height="90" fill="#f5f5f5" stroke="#111" stroke-width="2"/>
+    <text x="620" y="220" font-weight="bold" fill="#111">Motor ZC005</text>
+    <text x="620" y="242" fill="#333" font-size="13">DC 3.7V ~0.9A</text>
+    <text x="620" y="262" fill="#555" font-size="12">(pico 2.7-4.5A)</text>
+    <line x1="680" y1="280" x2="680" y2="430" stroke="#111" stroke-width="2"/>
+    <circle cx="680" cy="350" r="4" fill="#111"/>
+
+    <!-- Rama del diodo y del condensador, en paralelo con el motor -->
+    <line x1="680" y1="110" x2="900" y2="110" stroke="#111" stroke-width="2"/>
+    <circle cx="810" cy="110" r="4" fill="#111"/>
+    <line x1="680" y1="350" x2="900" y2="350" stroke="#111" stroke-width="2"/>
+    <circle cx="810" cy="350" r="4" fill="#111"/>
+
+    <!-- Diodo 1N4007, catodo arriba (hacia +) -->
+    <line x1="810" y1="110" x2="810" y2="205" stroke="#111" stroke-width="2"/>
+    <line x1="795" y1="205" x2="825" y2="205" stroke="#111" stroke-width="3"/>
+    <polygon points="795,235 825,235 810,205" fill="#fff" stroke="#111" stroke-width="2"/>
+    <line x1="810" y1="235" x2="810" y2="350" stroke="#111" stroke-width="2"/>
+    <text x="700" y="378" fill="#111" font-size="13">D1 1N4007</text>
+    <text x="700" y="396" fill="#555" font-size="12">franja (catodo) hacia el +</text>
+
+    <!-- Condensador ceramico 104 -->
+    <line x1="900" y1="110" x2="900" y2="222" stroke="#111" stroke-width="2"/>
+    <line x1="882" y1="222" x2="918" y2="222" stroke="#111" stroke-width="3"/>
+    <line x1="882" y1="234" x2="918" y2="234" stroke="#111" stroke-width="3"/>
+    <line x1="900" y1="234" x2="900" y2="350" stroke="#111" stroke-width="2"/>
+    <text x="926" y="222" fill="#111" font-size="13">C3 104</text>
+    <text x="926" y="240" fill="#555" font-size="12">100nF</text>
+
+    <!-- R4 10k: puerta -> BAT+ -->
+    <line x1="250" y1="45" x2="250" y2="90" stroke="#111" stroke-width="2"/>
+    <rect x="238" y="90" width="24" height="50" fill="#fff" stroke="#111" stroke-width="2"/>
+    <line x1="250" y1="140" x2="250" y2="165" stroke="#111" stroke-width="2"/>
+    <text x="230" y="120" fill="#111" font-size="13" text-anchor="end">R4 10k</text>
+    <line x1="250" y1="165" x2="405" y2="165" stroke="#111" stroke-width="2"/>
+
+    <!-- Puerta del P-MOSFET -->
+    <line x1="405" y1="85" x2="405" y2="210" stroke="#111" stroke-width="2"/>
+    <circle cx="405" cy="165" r="4" fill="#111"/>
+
+    <!-- PN2222A -->
+    <rect x="365" y="210" width="110" height="80" fill="#f5f5f5" stroke="#111" stroke-width="2"/>
+    <text x="378" y="244" font-weight="bold" fill="#111">PN2222A</text>
+    <text x="381" y="265" fill="#333" font-size="13">(2N2222)</text>
+    <text x="412" y="205" fill="#333" font-size="13">C</text>
+    <text x="350" y="242" fill="#333" font-size="13">B</text>
+    <text x="412" y="308" fill="#333" font-size="13">E</text>
+    <line x1="405" y1="290" x2="405" y2="430" stroke="#111" stroke-width="2"/>
+
+    <!-- Base: R5 1k desde el GPIO y R6 10k a GND -->
+    <line x1="365" y1="250" x2="260" y2="250" stroke="#111" stroke-width="2"/>
+    <circle cx="300" cy="250" r="4" fill="#111"/>
+    <rect x="200" y="238" width="60" height="24" fill="#fff" stroke="#111" stroke-width="2"/>
+    <text x="205" y="230" fill="#111" font-size="13">R5 1k</text>
+    <line x1="200" y1="250" x2="150" y2="250" stroke="#111" stroke-width="2"/>
+    <rect x="60" y="228" width="90" height="44" fill="#e8f0ff" stroke="#111" stroke-width="2"/>
+    <text x="72" y="246" fill="#111">GPIO ?</text>
+    <text x="72" y="264" fill="#333" font-size="12">DISPARO</text>
+
+    <line x1="300" y1="250" x2="300" y2="320" stroke="#111" stroke-width="2"/>
+    <rect x="288" y="320" width="24" height="50" fill="#fff" stroke="#111" stroke-width="2"/>
+    <text x="320" y="350" fill="#111" font-size="13">R6 10k</text>
+    <line x1="300" y1="370" x2="300" y2="430" stroke="#111" stroke-width="2"/>
+
+    <!-- GND -->
+    <line x1="60" y1="430" x2="960" y2="430" stroke="#111" stroke-width="2"/>
+    <text x="60" y="455" fill="#111">GND comun</text>
+    <circle cx="300" cy="430" r="4" fill="#111"/>
+    <circle cx="405" cy="430" r="4" fill="#111"/>
+    <circle cx="680" cy="430" r="4" fill="#111"/>
+  </g>
+
+  <!-- ===================================================================== -->
+  <!-- Notas                                                                 -->
+  <!-- ===================================================================== -->
+  <rect x="60" y="1295" width="480" height="95" fill="#f7f7f7" stroke="#999" stroke-width="1.5"/>
+  <text x="72" y="1318" fill="#111" font-weight="bold" font-size="14">Como funciona cada corte (2 y 3)</text>
+  <text x="72" y="1342" fill="#333" font-size="13">GPIO=1 -&gt; PN2222A satura -&gt; G=0V -&gt; IPP120 conduce</text>
+  <text x="72" y="1362" fill="#333" font-size="13">GPIO=0 o flotando (deep sleep) -&gt; R3/R6 cortan</text>
+  <text x="72" y="1380" fill="#333" font-size="13">el NPN, R1/R4 suben G a BAT+ -&gt; carga apagada</text>
+
+  <rect x="580" y="1295" width="520" height="95" fill="#eef7ee" stroke="#3a6" stroke-width="1.5"/>
+  <text x="592" y="1318" fill="#153" font-weight="bold" font-size="14">Orden correcto al apagar los servos</text>
+  <text x="592" y="1342" fill="#153" font-size="13">1) ESPHome deja de mandar PWM (auto_detach)</text>
+  <text x="592" y="1362" fill="#153" font-size="13">2) Despues, SERVOS_ON a 0</text>
+  <text x="592" y="1380" fill="#153" font-size="13">(no cortar con la senal PWM activa)</text>
+</svg>
