@@ -4,3 +4,7 @@
 !smart-sentry.*
 !img/
 !img/*
+!water-tower/
+!water-tower/README.md
+!water-tower/img/
+!water-tower/img/*
