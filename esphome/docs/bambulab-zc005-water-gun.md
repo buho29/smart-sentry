@@ -20,7 +20,8 @@ no la carcasa de juguete.
   USB de **5V 1-2A** por conector **PH2.0** (el cargador solo carga la
   batería; no es la alimentación del motor, que sale directo de la 18650).
 - **Prestaciones de fábrica:** alcance 7-8m, **8 ráfagas/segundo**, 133.9g,
-  ~100×135×45mm.
+  ~100×135×45mm. En banco se han medido ~4.8 disparos/s y ~7 m (ver
+  [Medidas en banco](#medidas-en-banco)).
 - **Incluye:** el módulo motor+mecanismo, la batería 18650, el cargador y el
   pulsador de disparo. **No incluye bomba de autollenado** (eso es exclusivo
   del "Kit 01"): el depósito se rellena a mano.
@@ -94,6 +95,21 @@ Esquemas de las dos variantes del interruptor:
 ![Esquema: disparo de la pistola por el positivo con IPP120P04P4L-03 y PN2222A](img/water-gun-switch-pmosfet.svg)
 
 *Esquema generado con IA; no verificado en banco.*
+
+## Medidas en banco
+
+Tomadas con la pistola montada de fábrica (carcasa FMG9 impresa), antes de
+desmontar el mecanismo, como referencia para comparar una vez integrado en
+la torreta.
+
+| Medida | Valor | Notas |
+|---|---|---|
+| Consumo (batería a medias) | **67 ml en 35 s ≈ 1.9 ml/s** | Disparo continuo, batería de serie |
+| Consumo (batería cargada) | **66 ml en 31 s ≈ 2.1 ml/s (~128 ml/min)** | Disparo continuo, batería de serie |
+| Cadencia | **~4.8 disparos/s** | Batería cargada. Audio del vídeo a 60 fps a velocidad normal: un golpe cada 0.207 s. El vídeo a cámara lenta 1/4× da un golpe y un chorro cada 0.84 s, que es lo mismo. La ficha de fábrica dice 8/s |
+| Agua por disparo | **~0.45 ml** | 2.1 ml/s ÷ 4.8 disparos/s |
+| Alcance | **~7 m (el grueso a ~6.5 m)** | Pistola a 1.3 m de altura, más o menos nivelada. La ficha de fábrica dice 7-8 m |
+| Velocidad de salida | **≥ ~13 m/s** | Estimada con un tiro horizontal: caída de 1.3 m en 0.52 s, 7 m / 0.52 s. Sin contar el rozamiento con el aire, así que la real es algo mayor |
 
 ---
 
