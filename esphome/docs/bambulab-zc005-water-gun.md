@@ -110,9 +110,10 @@ la torreta.
 | Consumo (batería cargada) | **66 ml en 31 s ≈ 2.1 ml/s (~128 ml/min)** | Disparo continuo, batería de serie |
 | Cadencia | **~4.8 disparos/s** | Batería cargada. Audio del vídeo a 60 fps a velocidad normal: un golpe cada 0.207 s. El vídeo a cámara lenta 1/4× da un golpe y un chorro cada 0.84 s, que es lo mismo. La ficha de fábrica dice 8/s |
 | Agua por disparo | **~0.45 ml** | 2.1 ml/s ÷ 4.8 disparos/s |
-| Alcance a 0° | **~5 m** | Donde cae el grueso del agua, con la pistola a 1.3 m de altura y nivelada con inclinómetro. Una primera medida "más o menos nivelada" dio ~7 m |
-| Alcance a 20° hacia arriba | **~7 m** | Con la pistola a 1.3 m de altura. A 30° el chorro tocaba el techo |
-| Velocidad de salida | **~13 m/s** | Ajustada con un tiro parabólico con rozamiento cuadrático (k ≈ 0.15 /m) a las dos medidas de alcance. Con ese ajuste, el mejor ángulo es 30-35° y da ~7.3 m desde 1.3 m, en línea con los 7-8 m de la ficha |
+| Alcance a 0° | **~5.5 m** | Donde cae el grueso del agua, con la pistola a 1.2 m de altura y sin apenas viento. Otro día dio ~5 m |
+| Alcance a 20° hacia arriba | **~6.5 m** | Misma prueba. Otro día dio ~7 m |
+| Alcance a 30° hacia arriba | **~7.5 m** | Misma prueba |
+| Modelo del chorro | **~18 m/s, k ≈ 0.24 /m** | Tiro parabólico con rozamiento cuadrático ajustado a las tres medidas sin viento (error ~0.4 m). Velocidad y rozamiento salen poco definidos por separado, pero el alcance sí: el mejor ángulo es ~30° y da ~7.1-7.5 m desde 1.2 m, en línea con los 7-8 m de la ficha |
 
 ---
 
