@@ -17,7 +17,7 @@ El poste va desplazado a la derecha para que la pistola llegue a la esquina de l
 
 ## Cómo está montado
 
-Es una columna de Ø116 × 217 mm colgada del brazo: arriba el **cuerpo** con la electrónica y debajo el **tambor** con la pistola, del mismo diámetro. El cuerpo hace de techo de la pistola.
+Es una columna de Ø116 × 227 mm colgada del brazo: arriba el **cuerpo** con la electrónica y debajo el **tambor** con la pistola, del mismo diámetro. El cuerpo hace de techo de la pistola.
 
 - **Soporte fijo (farola):**
   - Poste Ø48 y brazo de tubo cuadrado de 30.
@@ -29,16 +29,18 @@ Es una columna de Ø116 × 217 mm colgada del brazo: arriba el **cuerpo** con la
   - El DM996 del pan va detrás de la torreta, colgado de la tapa. Su piñón (z20) rueda alrededor del engranaje fijo (z30) del sombrero. Con 180° de servo da ±60°, y para que la cámara vea toda la huerta hace falta de −31° a +57° (ver [Qué ve la cámara](#qué-ve-la-cámara-a-3-m)).
   - Como el servo gira con el cuerpo, no hace falta anillo rozante.
   - Por debajo del suelo, la pared del cuerpo baja 8 mm más como faldón y tapa los engranajes del pan de la pistola.
-- **Tambor de la pistola (pan de la pistola):** Ø116 × 90 mm, abierto por abajo.
+- **Tambor de la pistola (pan de la pistola):** Ø116 × 100 mm, abierto por abajo.
   - Cuelga del suelo del cuerpo por un M8 y gira sobre el mismo eje que el conjunto.
   - El DM996 del pan de la pistola va en el cuerpo, boca abajo sobre el suelo, y saca el eje por una ventana del suelo. Su piñón (z21) mueve el engranaje z48 que el tambor lleva sobre su plato. Da ±39°.
-  - Delante tiene una ranura por la que asoma la boquilla y que deja subir y bajar la pistola.
+  - Va girado de modo que el cuerpo del servo queda hacia atrás, a lo largo de la pared, y no hacia el eje: así queda a 12,6 mm del axial y a 12,8 del 22-8-7 (con el servo recto quedaba a 1 mm).
+  - Delante tiene una ranura de 39 mm de ancho (`pist_ranura`) por la que asoma la boquilla y que deja subir y bajar la pistola. Llega hasta 45 mm por encima del eje de tilt y deja unos 7 mm a cada lado de la pistola, para un envoltorio.
   - Hay un pasacables en arco en el plato (±48°) para la manguera y los cables.
 - **Pistola (tilt):**
   - Va en una cuna que gira en dos 17-6-6 en los brazos del tambor. Está centrada con la cámara: la boquilla queda en el mismo plano vertical que la lente.
   - El DM996 de tilt va tumbado encima de la pistola, entre los dos brazos, con el eje sobre el eje de tilt. Cuelga del plato por un soporte con ventana, como en el brazo de smart-sentry.
-  - Mueve un sector z54 de la cuna con un piñón z18 (3:1), como el sector de tilt de smart-sentry. Da 60° de recorrido: de 15° hacia arriba a 45° hacia abajo.
-  - El servo va 36 mm por encima del eje (`a_tilt`) para que no lo toque la pistola: al bajar la boquilla, la cuna y el bloque del motor suben hasta 20 mm por encima del eje.
+  - Mueve un sector z72 de la cuna con un piñón z24 (3:1), como el sector de tilt de smart-sentry. Da 60° de recorrido: de 15° hacia arriba a 45° hacia abajo.
+  - El servo va 48 mm por encima del eje (`a_tilt`) para dejar sitio a un envoltorio de la pistola. En todo el recorrido, la pistola queda como mínimo a 13,8 mm del servo (en los dos extremos) y a 24 mm con la pistola horizontal.
+  - Sin contar el servo, la pistola podría girar de unos 27° hacia arriba (toca el borde de arriba de la ranura) a 72° hacia abajo (toca el servo).
   - El eje de tilt pasa por el bloque del motor, así la parte de atrás apenas sube al bajar la boquilla.
 
 Los engranajes son cilindros con el **diámetro primitivo** (m·z), de modo que los de cada pareja se tocan justo en la línea de engrane.
@@ -64,7 +66,7 @@ En smart-sentry el axial está entre la base y la parte que gira porque el peso 
 | --- | --- | --- | --- |
 | Pan del conjunto | 30 / 20 | 1,5:1 | ±60° |
 | Pan de la pistola | 48 / 21 | 2,29:1 | ±39° |
-| Tilt de la pistola | 54 / 18 (sector) | 3:1 | 60° (−15° / +45°) |
+| Tilt de la pistola | 72 / 24 (sector) | 3:1 | 60° (−15° / +45°) |
 
 La pistola apunta a la suma de los dos pan: ±99° respecto al brazo. La huerta queda entre −67° y +84°, así que el giro sobra. Lo que limita es el alcance del chorro (ver [Hasta dónde llega la pistola](#hasta-dónde-llega-la-pistola)).
 
@@ -77,10 +79,11 @@ Todo está en *Modificar → Cambiar parámetros*:
 | `modulo` | 1 mm | Diámetro de todos los engranajes y distancias entre ejes |
 | `z_fijo`, `z_pinon` | 30, 20 | Pan del conjunto (`a_pan` se recalcula sola) |
 | `z_eng_pist`, `z_pin_pist` | 48, 21 | Pan de la pistola (`a_pist`) |
-| `z_eng_tilt`, `z_pin_tilt` | 54, 18 | Tilt de la pistola (`a_tilt`) |
+| `z_eng_tilt`, `z_pin_tilt` | 72, 24 | Tilt de la pistola (`a_tilt`) |
 | `casquillo_d`, `buje_rod_d` | 12, 28 mm | Casquillos de los 22-8-7 y buje del 22-8-7 bajo el suelo |
 | `plato_esp` | 8 mm | Grosor del plato del tambor |
-| `pist_caida` | 68 mm | Del plato del tambor al eje de tilt |
+| `pist_caida` | 78 mm | Del plato del tambor al eje de tilt |
+| `pist_ranura` | 39 mm | Ancho de la ranura del tambor por la que asoma la pistola |
 | `pist_y` | 0 mm | Desplazamiento de la pistola hacia un lado (0: centrada con la cámara) |
 | `pist_eng_y` | 22.5 mm | Cara interior del sector de tilt; deja sitio al DM996 de tilt entre los brazos |
 | `pist_mejilla`, `pist_brazo_esp` | 13.5, 8 mm | Anchura de la cuna y grosor de los brazos |
@@ -94,9 +97,9 @@ Hay cosas que no siguen a los parámetros:
 
 Las tres articulaciones (`Pan conjunto` ±60°, `Pan pistola` ±39°, `Tilt pistola` −15°/+45°, positivo hacia abajo) se pueden arrastrar para comprobar los barridos.
 
-Se comprobaron las colisiones en el centro, en los dos extremos y en dos poses cruzadas, sin la Freenove. Solo se solapan los ejes de los servos con sus piñones (es lo esperado) y los cables del DM996 de pan con la pared: en el modelo salen rectos 15 mm y en la realidad se doblan.
+Se comprobaron las colisiones en el centro, en los dos extremos y en dos poses cruzadas, sin la Freenove. Solo se solapan los ejes de los servos con sus piñones, que es lo esperado.
 
-Lo que más se acerca a la pared del cuerpo o del tambor (radio interior 55 mm): la torreta a 54 mm, el DM996 del pan de la pistola a 53,4, la cola de la pistola a 46,1 y el DM996 de tilt a 42,3.
+Lo que más se acerca a la pared del cuerpo o del tambor (radio interior 55 mm): la torreta a 54 mm, el DM996 del pan de la pistola a 50,3, la cola de la pistola a 46,1 y el DM996 de tilt a 42,3.
 
 El componente oculto **Campo de visión cámara** dibuja los rayos de la cámara hacia el suelo.
 
@@ -164,17 +167,17 @@ En las vistas de esta sección están apagadas las capas de la cámara.
 **Cómo se ha calculado:**
 
 - El chorro se trata como un tiro con rozamiento cuadrático, ajustado a las [medidas en banco](../../esphome/docs/bambulab-zc005-water-gun.md#medidas-en-banco): desde 1,3 m cae a ~5 m a 0° y a ~7 m a 20° hacia arriba. Eso da 13 m/s de salida y k ≈ 0,15 /m.
-- La boquilla está a 2,86 m del suelo y 113 mm por delante del eje de tilt.
+- La boquilla está a 2,85 m del suelo y 113 mm por delante del eje de tilt.
 
 Las medidas se hicieron con la pistola en su carcasa de fábrica. Montada en la torreta, con otra manguera y otra alimentación, hay que volver a medirla.
 
 | Tilt | Cae a | Altura máxima del chorro |
 | --- | --- | --- |
 | −15° (arriba) | 7,8 m | 3,3 m |
-| 0° | 6,7 m | 2,86 m |
-| +15° | 5,1 m | 2,83 m |
-| +30° | 3,6 m | 2,80 m |
-| +45° (abajo) | 2,4 m | 2,78 m |
+| 0° | 6,7 m | 2,85 m |
+| +15° | 5,1 m | 2,82 m |
+| +30° | 3,6 m | 2,79 m |
+| +45° (abajo) | 2,4 m | 2,77 m |
 
 El chorro alcanza de **2,4 a 7,8 m** del eje en todo el giro:
 
@@ -209,6 +212,6 @@ Vista desde la cámara, la zona de tiro (morado) llega hasta unos 8 m. Mirando a
   - Entran por el pasacables de la tapa, bajan por el del suelo y pasan al tambor por el arco del plato.
   - Fuera del sombrero necesitan un bucle de holgura, porque el conjunto gira ±60°. Entre el suelo y el plato no hace falta: el arco del plato abarca ±48° y el tambor gira ±39°.
   - La pistola no aspira 3 m, así que el depósito tiene que ir arriba, junto al brazo.
-- Engranajes de módulo 1 con DM996: con el servo bloqueado, el par puede romper los dientes impresos del piñón de tilt (z18). En uso normal la carga es pequeña.
+- Engranajes de módulo 1 con DM996: con el servo bloqueado, el par puede romper los dientes impresos del piñón de tilt (z24). En uso normal la carga es pequeña.
 - El casquillo de la tapa (Ø12 con paso de 8,5) tiene paredes de 1,75 mm. Solo trabaja a compresión, pero conviene imprimirlo macizo.
 - Exterior: el sombrero tapa los engranajes del pan del conjunto, el faldón del cuerpo los de la pistola y el cuerpo hace de tejado del tambor. La ranura de delante del tambor y su fondo quedan abiertos.
