@@ -8,3 +8,5 @@ __pycache__/
 esphome/docs/diagrams/
 # config.ini que mcp-kicad guarda en la carpeta desde la que se lanza
 /config.ini
+# Config local del MCP de Fusion 360
+/.mcp.json

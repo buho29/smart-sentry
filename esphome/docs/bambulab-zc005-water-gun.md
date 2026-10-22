@@ -3,10 +3,12 @@
 Ficha de referencia del kit que hará de "pistola de agua eléctrica" del nodo
 final del proyecto (ver README, sección "water-tower-defense"). No es una
 pieza genérica de bazar sino un **kit oficial de Bambu Lab** pensado para
-montar réplicas de juguete imprimibles en 3D (modelo MakerWorld
-["FMG9"](https://makerworld.com/en/models/770810-fmg9-water-spray-electric-water-spray-kit-02),
-carcasa estilo TEC-9/T-15) — aquí se reaprovecha solo el mecanismo eléctrico,
-no la carcasa de juguete.
+montar réplicas de juguete imprimibles en 3D. La carcasa que se imprimió aquí
+es la **T-15** del modelo MakerWorld
+["TEC-9 / T-15 water toy gun"](https://makerworld.com/en/models/689632), el
+modelo oficial para este kit. Hay otros modelos que usan el mismo kit, como
+["FMG9"](https://makerworld.com/en/models/770810-fmg9-water-spray-electric-water-spray-kit-02).
+Aquí se reaprovecha solo el mecanismo eléctrico, no la carcasa de juguete.
 
 ![Contenido del Electric Water Spray Kit 02 (ZC005): módulo bomba S05, microswitch, batería 18650, cargador USB, tubo y tornillería](img/ZC005.webp)
 
@@ -98,7 +100,7 @@ Esquemas de las dos variantes del interruptor:
 
 ## Medidas en banco
 
-Tomadas con la pistola montada de fábrica (carcasa FMG9 impresa), antes de
+Tomadas con la pistola montada de fábrica (carcasa T-15 impresa), antes de
 desmontar el mecanismo, como referencia para comparar una vez integrado en
 la torreta.
 
@@ -108,14 +110,15 @@ la torreta.
 | Consumo (batería cargada) | **66 ml en 31 s ≈ 2.1 ml/s (~128 ml/min)** | Disparo continuo, batería de serie |
 | Cadencia | **~4.8 disparos/s** | Batería cargada. Audio del vídeo a 60 fps a velocidad normal: un golpe cada 0.207 s. El vídeo a cámara lenta 1/4× da un golpe y un chorro cada 0.84 s, que es lo mismo. La ficha de fábrica dice 8/s |
 | Agua por disparo | **~0.45 ml** | 2.1 ml/s ÷ 4.8 disparos/s |
-| Alcance | **~7 m (el grueso a ~6.5 m)** | Pistola a 1.3 m de altura, más o menos nivelada. La ficha de fábrica dice 7-8 m |
-| Velocidad de salida | **≥ ~13 m/s** | Estimada con un tiro horizontal: caída de 1.3 m en 0.52 s, 7 m / 0.52 s. Sin contar el rozamiento con el aire, así que la real es algo mayor |
+| Alcance a 0° | **~5 m** | Donde cae el grueso del agua, con la pistola a 1.3 m de altura y nivelada con inclinómetro. Una primera medida "más o menos nivelada" dio ~7 m |
+| Alcance a 20° hacia arriba | **~7 m** | Con la pistola a 1.3 m de altura. A 30° el chorro tocaba el techo |
+| Velocidad de salida | **~13 m/s** | Ajustada con un tiro parabólico con rozamiento cuadrático (k ≈ 0.15 /m) a las dos medidas de alcance. Con ese ajuste, el mejor ángulo es 30-35° y da ~7.3 m desde 1.3 m, en línea con los 7-8 m de la ficha |
 
 ---
 
 *Documento de referencia de hardware, sin foto propia adjunta en este
 proyecto — datos recopilados de la ficha oficial de Bambu Lab, Alibaba y el
-modelo MakerWorld FMG9 que usa este mismo kit. Componente aún no integrado
+modelo MakerWorld TEC-9 / T-15 que usa este mismo kit. Componente aún no integrado
 en ningún YAML del proyecto.*
 
 *Documento generado con IA; revisar los valores antes de montar.*
