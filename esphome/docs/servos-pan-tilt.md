@@ -305,7 +305,7 @@ Python lee los tres number para mostrarlos en `/status`.
 
 ## MG996R: candidato para la torreta con pistola
 
-Para la torreta con la [pistola de agua](bambulab-zc005-water-gun.md) el MF90
+Para la torreta con la [pistola de agua](bambulab-water-spray-kits.md) el MF90
 se queda corto, y el DS3218MG cuesta el doble que el **TowerPro MG996R**.
 Datasheet de TowerPro
 ([copia en Cornell](https://people.ece.cornell.edu/land/courses/ece4760/FinalProjects/f2017/kmv48_rp625/kmv48_rp625/kmv48_rp625/MG996RTowerPro.pdf),

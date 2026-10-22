@@ -2,7 +2,7 @@
 
 Ficha de referencia del MOSFET usado como interruptor de bajo lado (corta
 la GND) para disparar el motor de la
-[pistola de agua ZC005](bambulab-zc005-water-gun.md) en el montaje del
+[pistola de agua ZC005](bambulab-water-spray-kits.md) en el montaje del
 autor. **No se usa para los servos**: cortarles la GND hace que busquen masa
 por la señal PWM. Los servos se cortan por el positivo con un
 [IPP120P04P4L-03](ipp120p04p4l-p-mosfet.md), y ese mismo P-MOSFET es la

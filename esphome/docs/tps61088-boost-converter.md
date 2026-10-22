@@ -107,6 +107,12 @@ alimenta.
   no se pueden combinar. Aquí se deja vacío. **Medir VOUT con el
   multímetro antes de conectar los servos**, por si la placa viniera con
   otro puente hecho de fábrica.
+- **Riel a 7V si se pasa al Kit 01 de la pistola:** el
+  [Kit 01](bambulab-water-spray-kits.md#kit-01-zc004) va a 7.4V y puede
+  colgar de este riel subido a 7V por ADJ. El límite de 10A es de entrada,
+  así que con la celda a 3.3V la salida disponible baja de ~5.9A a 5V a
+  **~4.2A a 7V**, y los DM996 quedan por encima de los 6V de su ficha (ver
+  la ficha de los kits).
 - **No puentear el pad "PWM"**: de fábrica queda en PFM, que es el modo de
   bajo consumo en vacío.
 - Poner un condensador electrolítico de **1000-2200µF** en la salida, lo más

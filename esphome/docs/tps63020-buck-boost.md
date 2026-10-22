@@ -117,7 +117,7 @@ opción deseada antes de usar el módulo; de fábrica puede no venir puenteado.
   lógica si compartieran regulador. Detalle en
   [`servos-pan-tilt.md`](servos-pan-tilt.md#el-pico-de-consumo-real-por-qué-los-servos-no-comparten-regulador-con-la-cámara)
   y en [`step-up-boost-comparativa.md`](step-up-boost-comparativa.md).
-- **El motor de la [pistola de agua ZC005](bambulab-zc005-water-gun.md)
+- **El motor de la [pistola de agua ZC005](bambulab-water-spray-kits.md)
   tampoco cuelga de aquí**: corre de fábrica a 3.7V, así que sale más simple
   alimentarlo directo desde la batería 1S, en paralelo con la entrada `VIN`
   de este mismo `TPS63020`, cortado por su [IRLZ44N](irlz44n-mosfet.md) o

@@ -3,7 +3,7 @@
 Ficha de referencia del interruptor que corta **por el positivo** la
 alimentación de los [servos](servos-pan-tilt.md) (boost
 [TPS61088](tps61088-boost-converter.md) incluido) y, opcionalmente, el motor
-de la [pistola de agua ZC005](bambulab-zc005-water-gun.md). Con el mismo
+de la [pistola de agua ZC005](bambulab-water-spray-kits.md). Con el mismo
 circuito para las dos cargas, quien replique el proyecto solo tiene que
 comprar **un tipo de MOSFET**. El autor dispara la pistola con un
 [IRLZ44N](irlz44n-mosfet.md) que ya tenía; las dos variantes funcionan igual.
