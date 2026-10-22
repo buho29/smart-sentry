@@ -115,6 +115,35 @@ la torreta.
 | Alcance a 30° hacia arriba | **~7.5 m** | Misma prueba |
 | Modelo del chorro | **~18 m/s, k ≈ 0.24 /m** | Tiro parabólico con rozamiento cuadrático ajustado a las tres medidas sin viento (error ~0.4 m). Velocidad y rozamiento salen poco definidos por separado, pero el alcance sí: el mejor ángulo es ~30° y da ~7.1-7.5 m desde 1.2 m, en línea con los 7-8 m de la ficha |
 
+### Viento
+
+En las pruebas se ha visto que **el viento afecta bastante a la distancia y
+desvía mucho el chorro**. Tiene sentido: el chorro sale a pulsos de ~0.45 ml
+que se rompen en gotas, y las gotas pequeñas se dejan arrastrar por el aire
+con facilidad (es el mismo rozamiento alto que limita el alcance).
+
+Para hacerse una idea, con el modelo del chorro ajustado arriba, desde la
+boquilla de la torreta (1.86 m) y metiendo el viento en el rozamiento:
+
+| Tilt hacia arriba | Sin viento | Viento lateral 2 m/s | Viento lateral 4 m/s | De cara 4 m/s | A favor 4 m/s |
+|---|---|---|---|---|---|
+| 0° | 6.0 m | se desvía 0.9 m | se desvía 1.7 m | 3.7 m | 8.2 m |
+| 15° | 7.1 m | se desvía 1.4 m | se desvía 2.9 m | 3.4 m | 10.9 m |
+| 30° | 7.3 m | se desvía 2.0 m | se desvía 4.0 m | 2.5 m | 12.5 m |
+
+Son estimaciones del modelo, no medidas, pero cuadran con lo observado. Lo
+que se saca de ellas:
+
+- Una brisa de 2 m/s (apenas se nota) ya desvía el chorro un metro o más.
+- Cuanto más alto se apunta, más tiempo pasa el agua en el aire (0.8 s a 0°,
+  1.5 s a 30°) y más la arrastra el viento.
+- Con viento de cara el alcance cae a la mitad; a favor puede llegar más
+  lejos de lo normal.
+
+Si el disparo tiene que ser preciso, conviene tener en cuenta el viento: no
+disparar con viento fuerte, o corregir el apuntado con la velocidad y la
+dirección del viento.
+
 ---
 
 *Documento de referencia de hardware, sin foto propia adjunta en este
