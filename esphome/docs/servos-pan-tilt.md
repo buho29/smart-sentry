@@ -461,9 +461,12 @@ solo se distinguen por el anuncio:
 | Anuncio | "Upgraded version, All Copper Gear, Double Ball Bearing" ([Amazon.es](https://www.amazon.es/dp/B09WQSX9KC), [Amazon UK](https://www.amazon.co.uk/dp/B09WQSX9KC)) | "DM996 Servo, Metal Gear" ([Amazon.es](https://www.amazon.es/dp/B09V5B6SB6); en UK, packs de [2](https://www.amazon.co.uk/dp/B09KZ8VTNB), [4](https://www.amazon.co.uk/dp/B09V5B6SB6) y [6](https://www.amazon.co.uk/dp/B09KZRPJ41)) |
 | Engranajes | Todos de latón | Salida de latón, intermedios de acero |
 | Rodamientos | 2 de bolas | No se anuncian; en la foto de la carcasa no se ven |
+| Tensión (ficha) | 4.8-6V | 4.8-6V |
 | Par (ficha) | 13 kg·cm a 4.8V, 15 a 6V | 9 kg·cm a 4.8V, 13-15 a 6V según el anuncio |
 | Precio (Amazon.es, oct. 2026) | 23.98 € el pack de 4 | 24.99 € el pack de 4 |
 | Opiniones | 4.4-4.5★ (368 en UK) | 4.4-4.5★ (122-341 por anuncio) |
+
+![DM996 con un MF90 y un Arced D531BB (4 g) encima para comparar el tamaño](img/dm996-micro-servos.webp)
 
 Opiniones de la versión de latón y rodamientos (Amazon UK):
 
