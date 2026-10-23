@@ -1,5 +1,7 @@
 # Servos de la torreta pan/tilt
 
+![DM996 con un MF90 y un Arced D531BB (4 g) encima para comparar el tamaño](img/dm996-micro-servos.webp)
+
 Ficha de referencia de los servos de la torreta de `esp32-s3-cam-servo.yaml`
 (ver [`esp32-s3-cam-board.md`](esp32-s3-cam-board.md)). La torreta usa servos
 de **clase 9 g como mínimo**: los servos "pico" de 3-5 g se descartaron tras
@@ -466,8 +468,6 @@ solo se distinguen por el anuncio:
 | Precio (Amazon.es, oct. 2026) | 23.98 € el pack de 4 | 24.99 € el pack de 4 |
 | Opiniones | 4.4-4.5★ (368 en UK) | 4.4-4.5★ (122-341 por anuncio) |
 
-![DM996 con un MF90 y un Arced D531BB (4 g) encima para comparar el tamaño](img/dm996-micro-servos.webp)
-
 Opiniones de la versión de latón y rodamientos (Amazon UK):
 
 - Un usuario que monta unos 80 servos al año abrió varios: bien
@@ -479,6 +479,12 @@ Opiniones de la versión de latón y rodamientos (Amazon UK):
   at all*).
 - En contra: "no mucho par" en un brazo robótico, y ~4 mm más altos de lo
   que da a entender la foto de medidas.
+
+![DM996 de latón y rodamientos abierto: engranajes de latón, piñón del motor de acero y un rodamiento de bolas en la tapa](img/dm996-abierto-cliente.webp)
+
+*Foto de un cliente en las opiniones de Amazon, no nuestra.* Se ven los
+engranajes de latón y un rodamiento de bolas en la tapa; el único piñón
+plateado es el del motor.
 
 En la versión de cobre y hierro hay fallos graves en las opiniones: uno que
 había tenido MG996R originales dice que suenan ásperos y que se queman tras
