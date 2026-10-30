@@ -4,6 +4,14 @@ Genera un tornillo sin fin y su rueda dentada, paramétricos y pensados para imp
 
 Está en **SÓLIDO > CREAR > Sinfín y rueda** (diseños de pieza e híbridos) y en **ENSAMBLAJE > CREAR** (diseños de ensamblaje).
 
+![Sinfín y rueda girando](img/engrane.gif)
+
+Las imágenes son de un juego generado con el add-in: módulo 1.5, 60 dientes, sinfín de 3 entradas (relación 20:1) y flanco de 30°. En la animación, una vuelta del sinfín hace girar la rueda 3 dientes.
+
+| Conjunto | Dientes de la rueda (lisos, de la solevación) |
+|---|---|
+| ![Conjunto](img/conjunto.jpg) | ![Dientes de la rueda](img/dientes.jpg) |
+
 ## Instalación
 
 ### Sin el repo (zip)
@@ -34,6 +42,8 @@ Después, en Fusion: **Utilidades > Complementos** (Mayús+S) > *WormGear* > **E
 Si cambias el código, para el complemento y vuelve a ejecutarlo.
 
 ## Parámetros
+
+<img src="img/dialogo.png" alt="Diálogo del add-in" width="360">
 
 | Grupo | Parámetro | Por defecto |
 |---|---|---|
@@ -97,6 +107,10 @@ La casilla **Comprobar engrane** usa cuerpos temporales:
 
 Con los valores por defecto da 0 mm³ y ±3.8°, que son 0.100 mm axiales. Es justo la holgura pedida.
 
+Al terminar, el resultado sale en un mensaje. Este es el del juego de las imágenes:
+
+![Resultado de la comprobación](img/resultado.png)
+
 ## Archivos
 
 - `WormGear.py`: el add-in (botón, diálogo y eventos).
@@ -104,5 +118,6 @@ Con los valores por defecto da 0 mm³ y ±3.8°, que son 0.100 mm axiales. Es ju
 - `wormgear/build.py`: crea la geometría en el diseño activo.
 - `wormgear/check.py`: comprueba interferencias y juego.
 - `resources/`: los iconos.
+- `img/`: las imágenes de este README. El GIF se hizo desde el MCP de Fusion: los cuerpos se copian como gráficos personalizados, se giran con la relación y se guarda un fotograma por posición.
 - `install.ps1`: crea el enlace en la carpeta AddIns.
 - `installer/`: `instalar.bat`, `desinstalar.bat` y `LEEME.txt`, que van en el zip, y `make_release.ps1`, que lo genera.
