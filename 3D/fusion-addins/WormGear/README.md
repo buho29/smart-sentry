@@ -129,6 +129,20 @@ Al terminar, el resultado sale en un mensaje. Este es el del juego de las imáge
 
 ![Resultado de la comprobación](img/resultado.png)
 
+### De dónde sale el método
+
+No está copiado de ningún programa ni documento concreto. Se desarrolló para este add-in, a partir de la teoría clásica de engranajes. Esto es lo que viene de la teoría y lo que se dedujo aquí:
+
+- **Cortar con planos paralelos al eje del sinfín** (que son los paralelos al plano medio de la rueda) es un método clásico. En cada uno de esos planos, la sección del filete es una cremallera y la rueda engrana con ella como un piñón recto. Así lo plantean Earle Buckingham y Henry H. Ryffel en *Design of Worm and Spiral Gears* (Industrial Press, 1960; reeditado por Buckingham Associates). Lo resumen Stadtfeld y Errichello en [*Conjugate Gears*](https://www.geartechnology.com/conjugate-gears) (Gear Technology, 2023).
+- **Que el resultado sea exacto también lejos del centro** se razonó aquí: girar un helicoide alrededor de su eje equivale a desplazarlo a lo largo de ese eje. Un plano z = c contiene la dirección del eje del sinfín, así que la sección no cambia de forma, solo se desliza en X. La rueda gira alrededor de Z, perpendicular al plano, y el movimiento queda entero dentro del plano. Por eso la envolvente 2D de cada plano es la del engrane 3D real.
+- **La fórmula θ = (x + (y − R2)/x′)/R2** es la ecuación de engrane de cremallera y piñón: toca el punto del flanco cuya normal pasa por el punto primitivo. En la teoría general se escribe como "la normal es perpendicular a la velocidad relativa" (la ecuación de engrane de F. L. Litvin, en *Gear Geometry and Applied Theory*). La forma cerrada para este flanco se dedujo aquí.
+- **La construcción en Fusion** (splines por plano, solevación, patrón, corte y chaflán) es propia del add-in.
+
+Lo que de verdad lo respalda no es una cita, sino la comprobación con los cuerpos reales de Fusion. Da 0 mm³ de interferencia en 8 posiciones y un juego medido igual a la holgura pedida (0.100 mm). Salió así con:
+- los valores por defecto (m1.5, 30 dientes, 1 entrada, 45°);
+- m2, 2 entradas, 30°;
+- m1.5, 60 dientes, 3 entradas, 30°.
+
 ## Archivos
 
 - `WormGear.py`: el add-in (botón, diálogo y eventos).
