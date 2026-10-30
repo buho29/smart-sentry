@@ -86,13 +86,31 @@ Todo queda en un grupo de la línea de tiempo y se deshace con un solo Ctrl+Z.
 
 ## Cómo se calcula la rueda
 
-La rueda no se dibuja a ojo, ni se mecaniza con cientos de restas, que dejarían cientos de caras por diente. Se calcula así:
+La rueda no se dibuja a ojo, ni se mecaniza con cientos de restas, que dejarían cientos de caras por diente. Se calcula así.
 
-1. Para cada plano z = c paralelo al plano medio de la rueda, se corta el "cortador" (el sinfín con cada flanco engordado media holgura y la cabeza más alta) con ese plano.
-2. Al girar, el filete del sinfín, que es un helicoide, solo se desplaza a lo largo de su eje sin salir del plano. La rueda gira alrededor de Z, así que el plano tampoco se mueve. Por eso la envolvente 2D de cada plano es la del engrane 3D real, también lejos del centro.
-3. La envolvente sale de la ecuación de engrane en forma cerrada (`wormgear/geometry.py`): la normal del flanco pasa por el punto primitivo.
-4. Cada plano da el perfil cerrado del hueco de un diente: dos splines, el arco de fondo y el arco exterior.
-5. Una **solevación** une los perfiles. Después se hace un patrón circular y se corta el disco en bruto, que lleva la garganta toroidal.
+Los diagramas son del juego por defecto (m1.5, 30 dientes, 1 entrada, flanco de 45°) y salen de la misma matemática del add-in: `python img/diagramas.py`.
+
+**1. Se corta con planos.** Para cada plano z = c paralelo al plano medio de la rueda, se corta con ese plano el "cortador": el sinfín con cada flanco engordado media holgura y la cabeza un poco más alta.
+
+![Planos paralelos al plano medio](img/calc_1_planos.png)
+
+**2. En cada plano, el sinfín es una cremallera.** Al girar, el filete del sinfín, que es un helicoide, solo se desplaza a lo largo de su eje sin salir del plano. La rueda gira alrededor de Z, así que el plano tampoco se mueve. Por eso lo que pasa en cada plano es un engrane 2D de cremallera y piñón, y su envolvente es la del engrane 3D real, también lejos del centro.
+
+![Sección del sinfín en dos planos](img/calc_2_seccion.png)
+
+**3. El hueco del diente es lo que barre el sinfín.** Si miras desde la rueda, como si estuviera quieta, el sinfín pasa rodando por delante. El hueco del diente es la envolvente de todas sus posiciones: la forma justa para que el filete entre sin tocar.
+
+<img src="img/calc_envolvente.gif" alt="El sinfín tallando el hueco" width="400">
+
+![Envolvente en dos planos](img/calc_3_envolvente.png)
+
+**4. La envolvente se calcula sin simular.** No hace falta probar posiciones. Para cada punto del flanco del sinfín, hay un único giro de la rueda en el que ese punto es el de contacto: aquel en el que la normal al flanco pasa por el punto primitivo P. Despejando sale una fórmula cerrada (`wormgear/geometry.py`), y con ella cada punto del flanco da un punto del hueco.
+
+![La normal pasa por el punto primitivo](img/calc_4_normal.png)
+
+**5. Solevación, patrón y corte.** Cada plano da el perfil cerrado del hueco de un diente: dos splines, el arco de fondo y el arco exterior. Una **solevación** une los perfiles en un sólido. Después se hace un patrón circular y se corta el disco en bruto, que lleva la garganta toroidal.
+
+![Perfiles apilados](img/calc_5_perfiles.png)
 
 Cerca de las caras, el sinfín llega cada vez menos y los dientes salen bajos y débiles. Por eso el disco lleva un **chaflán de 45° en las dos caras**:
 - empieza donde el diente baja de la mitad de su altura del centro;
@@ -118,6 +136,6 @@ Al terminar, el resultado sale en un mensaje. Este es el del juego de las imáge
 - `wormgear/build.py`: crea la geometría en el diseño activo.
 - `wormgear/check.py`: comprueba interferencias y juego.
 - `resources/`: los iconos.
-- `img/`: las imágenes de este README. El GIF se hizo desde el MCP de Fusion: los cuerpos se copian como gráficos personalizados, se giran con la relación y se guarda un fotograma por posición.
+- `img/`: las imágenes de este README. `img/diagramas.py` dibuja los diagramas del cálculo con matplotlib. El GIF se hizo desde el MCP de Fusion: los cuerpos se copian como gráficos personalizados, se giran con la relación y se guarda un fotograma por posición.
 - `install.ps1`: crea el enlace en la carpeta AddIns.
 - `installer/`: `instalar.bat`, `desinstalar.bat` y `LEEME.txt`, que van en el zip, y `make_release.ps1`, que lo genera.
