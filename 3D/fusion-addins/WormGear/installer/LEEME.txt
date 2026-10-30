@@ -1,0 +1,33 @@
+Sinfín y rueda (WormGear) - complemento de Fusion 360
+=====================================================
+
+Genera un tornillo sin fin y su rueda dentada, paramétricos y pensados
+para imprimir en 3D sin soportes.
+
+Instalar (Windows)
+------------------
+1. Descomprime el zip entero en cualquier carpeta.
+2. Haz doble clic en instalar.bat.
+3. En Fusion 360: Utilidades > Complementos (Mayús+S) > WormGear > Ejecutar,
+   y marca "Al iniciar" para que arranque siempre.
+
+El botón queda en SÓLIDO > CREAR > Sinfín y rueda, y en ENSAMBLAJE > CREAR
+en los diseños de ensamblaje.
+
+Para actualizar a una versión nueva, ejecuta su instalar.bat: se conservan
+los últimos valores del diálogo. Si Fusion está abierto, detén el
+complemento y vuelve a ejecutarlo.
+
+Desinstalar
+-----------
+Detén el complemento en Fusion y haz doble clic en desinstalar.bat.
+
+Mac
+---
+Copia la carpeta WormGear a
+~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/
+
+Más información
+---------------
+WormGear/README.md, o el repositorio:
+https://github.com/buho29/smart-sentry/tree/main/3D/fusion-addins/WormGear

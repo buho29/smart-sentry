@@ -6,6 +6,23 @@ Está en **SÓLIDO > CREAR > Sinfín y rueda** (diseños de pieza e híbridos) y
 
 ## Instalación
 
+### Sin el repo (zip)
+
+1. Descarga `WormGear-<versión>.zip` de las [Releases](https://github.com/buho29/smart-sentry/releases) y descomprímelo entero.
+2. Haz doble clic en `instalar.bat`. Copia la carpeta `WormGear` en la carpeta de complementos de Fusion y no pide permisos de administrador.
+3. En Fusion: **Utilidades > Complementos** (Mayús+S) > *WormGear* > **Ejecutar**, y marca *Al iniciar*.
+
+Para actualizar, ejecuta el `instalar.bat` de la versión nueva: se conservan los últimos valores del diálogo. Para quitarlo, usa `desinstalar.bat`. Ninguno de los dos toca una instalación de desarrollo hecha con `install.ps1` (un enlace).
+
+En Mac, copia a mano la carpeta `WormGear` del zip a `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/`.
+
+**Para sacar una versión nueva:**
+1. Sube `version` en `WormGear.manifest`.
+2. Ejecuta `powershell -ExecutionPolicy Bypass -File installer\make_release.ps1`. Deja el zip en `dist/`, que no va en git.
+3. Sube el zip a una Release de GitHub.
+
+### Con el repo (desarrollo)
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File 3D\fusion-addins\WormGear\install.ps1
 ```
@@ -88,3 +105,4 @@ Con los valores por defecto da 0 mm³ y ±3.8°, que son 0.100 mm axiales. Es ju
 - `wormgear/check.py`: comprueba interferencias y juego.
 - `resources/`: los iconos.
 - `install.ps1`: crea el enlace en la carpeta AddIns.
+- `installer/`: `instalar.bat`, `desinstalar.bat` y `LEEME.txt`, que van en el zip, y `make_release.ps1`, que lo genera.
