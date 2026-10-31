@@ -126,6 +126,8 @@ placa lo expone. Con eso se cierra el bucle:
 el hilo de proceso calcula el centro del objetivo detectado y manda al ESP32 la
 corrección de pan/tilt para que la **cámara persiga** a lo que se mueve por la
 huerta. La torreta pan/tilt está impresa en 3D; las piezas están en [`3D/`](3D/).
+Los sinfines y sus ruedas se generan con [WormGear](https://github.com/buho29/wormgear),
+un complemento para Fusion 360 y FreeCAD que tiene su propio repo.
 
 - [▶ Vídeo: la torreta en control manual](detect/docs/esp32-s3-cam-servo_20261007-193016_man.mp4)
 - [▶ Vídeo: la torreta siguiendo lo que detecta YOLO](detect/docs/esp32-s3-cam-servo_20261010-195751_det.mp4)
